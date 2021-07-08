@@ -21,7 +21,17 @@ from matplotlib.colors import PowerNorm, LinearSegmentedColormap, Normalize
 import localize
 import fit
 import rois
-import psfmodels as psfm # https://pypi.org/project/psfmodels/
+
+# most of the functions don't require this module, and it does not easily pip install,
+# so don't require it. Probably should enforce some reasonable behavior on the functions
+# that require it...
+
+try:
+    import psfmodels as psfm # https://pypi.org/project/psfmodels/
+    psfmodels_available = True
+except ImportError:
+    psfmodels_available = False
+
 
 def blur_img_otf(ground_truth, otf):
     """
@@ -573,14 +583,20 @@ def model_psf(nx, dxy, z, p, wavelength, ni, sf=1, model='vectorial', **kwargs):
     model_params.update(kwargs)
 
     if model == 'vectorial':
+        if not psfmodels_available:
+            raise NotImplementedError("vectorial model selected but psfmodels is not installed")
         if sf != 1:
             raise NotImplementedError('vectorial model not implemented for sf=/=1')
+
         psf_norm = psfm.vectorial_psf(0, 1, dxy, wvl=wavelength, params=model_params, normalize=False)
         val = psfm.vectorial_psf(z - p[3], nx, dxy, wvl=wavelength, params=model_params, normalize=False)
         val = p[0] / psf_norm * ndi.shift(val, [0, p[2] / dxy, p[1] / dxy], mode='nearest') + p[5]
     elif model == 'gibson-lanni':
+        if not psfmodels_available:
+            raise NotImplementedError("gibson-lanni model selected but psfmodels is not installed")
         if sf != 1:
             raise NotImplementedError('gibson-lanni model not implemented for sf=/=1')
+
         psf_norm = psfm.scalar_psf(0, 1, dxy, wvl=wavelength, params=model_params, normalize=False)
         val = psfm.scalar_psf(z - p[3], nx, dxy, wvl=wavelength, params=model_params, normalize=False)
         val = p[0] / psf_norm * ndi.shift(val, [0, p[2] / dxy, p[1] / dxy], mode='nearest') + p[5]
