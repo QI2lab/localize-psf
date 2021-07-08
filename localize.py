@@ -526,7 +526,7 @@ def fit_gauss_roi(img_roi, coords, init_params=None, fixed_params=None, bounds=N
 
 
 def fit_gauss_rois(img_rois, coords_rois, init_params, max_number_iterations=100,
-                   sf=1, dc=None, angles=None, estimator="LSE", use_gpu=GPUFIT_AVAILABLE):
+                   sf=1, dc=None, angles=None, estimator="LSE", model="gaussian", use_gpu=GPUFIT_AVAILABLE):
     """
     Fit rois. Can use either CPU parallelization with joblib or GPU parallelization using gpufit
 
@@ -538,6 +538,7 @@ def fit_gauss_rois(img_rois, coords_rois, init_params, max_number_iterations=100
     :param float dc: pixel size, only used for oversampling
     :param (float, float, float) angles: euler angles describing pixel orientation. Only used for oversampling.
     :param estimator: "LSE" or "MLE"
+    :param model: "gaussian" or "gaussian-lorentzian"
     :param bool use_gpu:
     :return:
     """
@@ -545,6 +546,9 @@ def fit_gauss_rois(img_rois, coords_rois, init_params, max_number_iterations=100
     zrois, yrois, xrois = coords_rois
 
     if not use_gpu:
+        if model != "gaussian":
+            raise NotImplementedError("only gaussian implemented for non gpu")
+
         results = joblib.Parallel(n_jobs=-1, verbose=1, timeout=None)(
             joblib.delayed(fit_gauss_roi)(img_rois[ii], (zrois[ii], yrois[ii], xrois[ii]), init_params=init_params[ii],
                                           sf=sf, dc=dc, angles=angles)
@@ -601,15 +605,22 @@ def fit_gauss_rois(img_rois, coords_rois, init_params, max_number_iterations=100
             raise ValueError
 
         if estimator == "MLE":
-            est = gf.EstimatorID.MLE
+            est_id = gf.EstimatorID.MLE
         elif estimator == "LSE":
-            est = gf.EstimatorID.LSE
+            est_id = gf.EstimatorID.LSE
         else:
             raise ValueError("'estimator' must be 'MLE' or 'LSE' but was '%s'" % estimator)
 
-        fit_params, fit_states, chi_sqrs, niters, fit_t = gf.fit(data, None, gf.ModelID.GAUSS_3D_ARB, init_params,
+        if model == "gaussian":
+            model_id = gf.ModelID.GAUSS_3D_ARB
+        elif model == "gaussian-lorentzian":
+            model_id = gf.ModelID.GAUSS_LOR_3D_ARB
+        else:
+            raise ValueError("'model' must be 'gaussian' or 'gaussian-lorentzian' but was '%s'" % model)
+
+        fit_params, fit_states, chi_sqrs, niters, fit_t = gf.fit(data, None, model_id, init_params,
                                                                  max_number_iterations=max_number_iterations,
-                                                                 estimator_id=est,
+                                                                 estimator_id=est_id,
                                                                  user_info=user_info)
 
         # correct sigmas in case negative
@@ -641,7 +652,7 @@ def plot_gauss_roi(fit_params, roi, imgs, coords, init_params=None, same_color_s
     center_fit = np.array([fit_params[3], fit_params[2], fit_params[1]])
 
     # get ROI and coordinates
-    img_roi = imgs[roi[0]:roi[1], roi[2]:roi[3], roi[4]:roi[5]]
+    img_roi = rois.cut_roi(roi, imgs)
     x_roi = x[:, :, roi[4]:roi[5]]
     y_roi = y[:, roi[2]:roi[3], :]
     z_roi = z[roi[0]:roi[1], :, :]

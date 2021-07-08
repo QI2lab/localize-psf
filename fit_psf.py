@@ -13,14 +13,15 @@ import scipy.ndimage as ndi
 import scipy.special as sp
 import scipy.integrate
 import scipy.interpolate
+import scipy.signal
 from scipy import fft
 import matplotlib.pyplot as plt
 from matplotlib.colors import PowerNorm, LinearSegmentedColormap, Normalize
-import psfmodels as psfm # https://pypi.org/project/psfmodels/
+
 import localize
 import fit
-import analysis_tools as tools
-
+import rois
+import psfmodels as psfm # https://pypi.org/project/psfmodels/
 
 def blur_img_otf(ground_truth, otf):
     """
@@ -69,7 +70,7 @@ def otf2psf(otf, dfs=1):
 
     shape = otf.shape
     drs = np.array([1 / (df * n) for df, n in zip(shape, dfs)])
-    coords = [tools.get_fft_pos(n, dt=dr) for n, dr in zip(shape, drs)]
+    coords = [fft.fftshift(fft.fftfreq(n, dr)) for n, dr in zip(shape, drs)]
 
     psf = fft.fftshift(fft.ifftn(fft.ifftshift(otf))).real
 
@@ -94,7 +95,7 @@ def psf2otf(psf, drs=1):
         raise ValueError("drs length must be psf.ndim")
 
     shape = psf.shape
-    coords = [tools.get_fft_frqs(n, dt=dr) for n, dr in zip(shape, drs)]
+    coords = [fft.fftshift(fft.fftfreq(n, dr)) for n, dr in zip(shape, drs)]
 
     otf = fft.fftshift(fft.fftn(fft.ifftshift(psf)))
 
@@ -107,8 +108,9 @@ def symm_fn_1d_to_2d(arr, fs, fmax, npts):
     Useful helper function when computing PSFs from 2D OTFs
     :param arr:
     :param fs:
-    :param df:
-    :return:
+    :param fmax:
+    :param npts:
+    :return arr_out, fxs, fys:
     """
 
     ny = 2 * npts + 1
@@ -119,8 +121,8 @@ def symm_fn_1d_to_2d(arr, fs, fmax, npts):
 
     not_nan = np.logical_not(np.isnan(arr))
 
-    fxs = tools.get_fft_frqs(nx, dx)
-    fys = tools.get_fft_frqs(ny, dy)
+    fxs = fft.fftshift(fft.fftfreq(nx, dx))
+    fys = fft.fftshift(fft.fftfreq(ny, dy))
     fmag = np.sqrt(fxs[None, :]**2 + fys[:, None]**2)
     to_interp = np.logical_and(fmag >= fs[not_nan].min(), fmag <= fs[not_nan].max())
 
@@ -145,9 +147,9 @@ def otf_coherent2incoherent(otf_c, dx=None, wavelength=0.5, ni=1.5, defocus_um=0
     ny, nx = otf_c.shape
 
     if fx is None:
-        fx = tools.get_fft_frqs(nx, dt=dx)
+        fx = fft.fftshift(fft.fftfreq(nx, dx))
     if fy is None:
-        fy = tools.get_fft_frqs(ny, dt=dx)
+        fy = fft.fftshift(fft.fftfreq(ny, dx))
 
     if defocus_um != 0:
         if dx is None or wavelength is None or ni is None:
@@ -285,7 +287,7 @@ def gaussian3d_psf(x, y, z, dc, p, sf=1, angles=(0., 0., 0.)):
     :param p: [A, cx, cy, cz, sxy, sz, bg]
     :param sf: factor to oversample pixels. The value of each pixel is determined by averaging sf**2 equally spaced
     points in the pixel.
-    :param angle: orientation of pixel to resample
+    :param angles: orientation of pixel to resample
     :return:
     """
 
@@ -781,8 +783,8 @@ def get_exp_psf(imgs, coords, centers, roi_sizes, backgrounds=None):
         zc_pix = np.argmin(np.abs(z - centers[ii, 0]))
 
         # cut roi from image
-        roi_unc = tools.get_centered_roi((zc_pix, yc_pix, xc_pix), roi_sizes)
-        roi = tools.get_centered_roi((zc_pix, yc_pix, xc_pix), roi_sizes, min_vals=[0, 0, 0], max_vals=imgs.shape)
+        roi_unc = rois.get_centered_roi((zc_pix, yc_pix, xc_pix), roi_sizes)
+        roi = rois.get_centered_roi((zc_pix, yc_pix, xc_pix), roi_sizes, min_vals=[0, 0, 0], max_vals=imgs.shape)
         img_roi = imgs[roi[0]:roi[1], roi[2]:roi[3], roi[4]:roi[5]]
 
         zroi = z[roi[0]:roi[1], :, :]

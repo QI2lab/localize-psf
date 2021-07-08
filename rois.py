@@ -53,8 +53,8 @@ def get_centered_roi(centers, sizes, min_vals=None, max_vals=None):
 
     :param centers: list of centers [c1, c2, ..., cn]
     :param sizes: list of sizes [s1, s2, ..., sn]
-    :param min_values: list of minimimum allowed index values for each dimension
-    :param max_values: list of maximum allowed index values for each dimension
+    :param min_vals: list of minimimum allowed index values for each dimension
+    :param max_vals: list of maximum allowed index values for each dimension
     :return roi: [start_0, end_0, start_1, end_1, ..., start_n, end_n]
     """
     roi = []
