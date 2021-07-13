@@ -1129,7 +1129,7 @@ def autofit_psfs(imgs, psf_roi_size, dx, dz, wavelength, ni=1.5, model='vectoria
     # ###################################
     # do localization
     # ###################################
-    x, y, z = localize.get_coords(imgs.shape, dx, dz)
+    z, y, x = localize.get_coords(imgs.shape, (dz, dx, dx))
 
     coords, fit_params, init_params, rois, to_keep, conditions, condition_names, filter_settings = localize.localize_beads(
         imgs, dx, dz, threshold, roi_size_loc, filter_sigma_small, filter_sigma_large,

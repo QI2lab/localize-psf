@@ -31,18 +31,18 @@ try:
 except ImportError:
     GPUFIT_AVAILABLE = False
 
-def get_coords(sizes, dc, dz):
+def get_coords(sizes, drs):
     """
     Regularly spaced coordinates which can be broadcast to full size
-    :param sizes: (sz, sy, sx)
-    :param dc:
-    :param dz:
-    :return:
+    :param sizes: (s0, s1, ..., sn)
+    :param drs: (dr0, dr1, ..., drn)
+    :return coords: (coords0, coords1, ..., coordsn)
     """
-    x = np.expand_dims(np.arange(sizes[2]) * dc, axis=(0, 1))
-    y = np.expand_dims(np.arange(sizes[1]) * dc, axis=(0, 2))
-    z = np.expand_dims(np.arange(sizes[0]) * dz, axis=(1, 2))
-    return x, y, z
+    ndims = len(drs)
+    coords = [np.expand_dims(np.arange(sz) * dr, axis=list(range(ii)) + list(range(ii + 1, ndims)))
+              for ii, (sz, dr) in enumerate(zip(sizes, drs))]
+
+    return coords
 
 
 def get_roi_size(sizes, dc, dz, ensure_odd=True):
@@ -66,56 +66,57 @@ def get_roi_size(sizes, dc, dz, ensure_odd=True):
     return [n0, n1, n2]
 
 
-def get_roi(center, img, x, y, z, sizes):
+def get_roi(center, img, coords, sizes):
     """
 
-    :param center: [cz, cy, cx] in same units as x, y, z.
-    :param x:
-    :param y:
-    :param z:
-    :param sizes: [i0, i1, i2] integers
+    :param center: [c_0, c_1, ..., c_n] in same units as x, y, z.
+    :param img:
+    :param coords:
+    :param sizes: [i0, i1, ... in] integers
     :return:
     """
-    i0 = np.argmin(np.abs(z.ravel() - center[0]))
-    i1 = np.argmin(np.abs(y.ravel() - center[1]))
-    i2 = np.argmin(np.abs(x.ravel() - center[2]))
+    ndims = img.ndim
+    # get closest coordinates to desired center of roi
+    ics = [np.argmin(np.abs(r.ravel() - c)) for r, c in zip(coords, center)]
 
-    roi = np.array(rois.get_centered_roi([i0, i1, i2], sizes, min_vals=[0, 0, 0], max_vals=img.shape))
+    roi = np.array(rois.get_centered_roi(ics, sizes, min_vals=[0]*ndims, max_vals=img.shape))
 
-    z_roi = z[roi[0]:roi[1]]
-    y_roi = y[:, roi[2]:roi[3], :]
-    x_roi = x[:, :, roi[4]:roi[5]]
-    z_roi, y_roi, x_roi = np.broadcast_arrays(z_roi, y_roi, x_roi)
+    # get coordinates as arrays which only have nonunit size along one direction
+    coords_roi = [c[tuple([slice(None)] * ii + [slice(roi[2*ii], roi[2*ii + 1])] + [slice(None)] * (ndims - 1 - ii))]
+                  for ii, c in enumerate(coords)]
+    # broadcast to full arrays, essentially meshgrid
+    coords_roi = np.broadcast_arrays(*coords_roi)
 
-    img_roi = img[roi[0]:roi[1], roi[2]:roi[3], roi[4]:roi[5]]
+    img_roi = rois.cut_roi(roi, img)
 
-    return roi, img_roi, x_roi, y_roi, z_roi
+    return roi, img_roi, coords_roi
 
 
-def get_filter_kernel(sigmas, dc, dz, sigma_cutoff=2):
+def get_filter_kernel(sigmas, drs, sigma_cutoff=2):
     """
-    Gaussian filter kernel
-    :param sigmas:
-    :param dc:
-    :param dz:
-    :param sigma_cutoff:
-    :return:
+    Gaussian filter kernel for arbitrary dimensions
+
+    :param sigmas: (sigma_0, sigma_1, ..., sigma_n)
+    :param drs: (dr_1, dr_2, ..., dr_n) pixel sizes along each dimension
+    :param sigma_cutoff: single number or list [s0, s1, ..., sn] giving after how many sigmas we cutoff the kernel
+    :return kernel:
     """
+
+    ndims = len(drs)
+
+    if isinstance(sigma_cutoff, (int, float)):
+        sigma_cutoff = [sigma_cutoff] * ndims
+
+
     # compute kernel size
-    nk_x = 2 * int(np.round(sigmas[2] / dc * sigma_cutoff)) + 1
-    nk_y = 2 * int(np.round(sigmas[1] / dc * sigma_cutoff)) + 1
-    nk_z = 2 * int(np.round(sigmas[0] / dz * sigma_cutoff)) + 1
+    nks = [2 * int(np.round(sig / dr * sig_cut)) + 1 for sig, dr, sig_cut in zip(sigmas, drs, sigma_cutoff)]
 
     # get coordinates to evaluate kernel at
-    xk = np.expand_dims(np.arange(nk_x) * dc, axis=(0, 1))
-    yk = np.expand_dims(np.arange(nk_y) * dc, axis=(0, 2))
-    zk = np.expand_dims(np.arange(nk_z) * dz, axis=(1, 2))
+    coords = [np.expand_dims(np.arange(nk) * dr, axis=list(range(ii)) + list(range(ii + 1, ndims))) for ii, (nk, dr) in enumerate(zip(nks, drs))]
 
-    xk = xk - np.mean(xk)
-    yk = yk - np.mean(yk)
-    zk = zk - np.mean(zk)
+    coords = [c - np.mean(c) for c in coords]
 
-    kernel = np.exp(-xk ** 2 / 2 / sigmas[2] ** 2 - yk ** 2 / 2 / sigmas[1] ** 2 - zk ** 2 / 2 / sigmas[0] ** 2)
+    kernel = np.exp(sum([-rk ** 2 / 2 / sig ** 2 for rk, sig in zip(coords, sigmas)]))
     kernel = kernel / np.sum(kernel)
 
     return kernel
@@ -164,30 +165,19 @@ def filter_convolve(imgs, kernel, use_gpu=CUPY_AVAILABLE):
     return imgs_filtered
 
 
-def get_max_filter_footprint(min_sep_allowed, dc, dz):
+def get_max_filter_footprint(min_sep_allowed, drs):
     """
     Get footprint for maximum filter
-    :param min_sep_allowed: (sz, sy, sx)
-    :param dc:
-    :param dz:
-    :return:
+    :param min_sep_allowed: (size_0, size_1, ..., size_n)
+    :param drs: (dr_0, ..., dr_n
+    :return footprint: square matrix, boolean mask
     """
 
-    sz, sy, sx = min_sep_allowed
+    ns = [int(np.ceil(sz / dr)) for sz, dr in zip(min_sep_allowed, drs)]
+    # ensure odd
+    ns = [n if np.mod(n, 2) == 0 else n + 1 for n in ns]
 
-    nz = int(np.ceil(sz / dz))
-    if np.mod(nz, 2) == 0:
-        nz += 1
-
-    ny = int(np.ceil(sy / dc))
-    if np.mod(ny, 2) == 0:
-        ny += 1
-
-    nx = int(np.ceil(sx / dc))
-    if np.mod(nx, 2) == 0:
-        nx += 1
-
-    footprint = np.ones((nz, ny, nx), dtype=np.bool)
+    footprint = np.ones(ns, dtype=np.bool)
 
     return footprint
 
@@ -196,10 +186,11 @@ def find_peak_candidates(imgs, footprint, threshold, use_gpu_filter=CUPY_AVAILAB
     """
     Find peak candidates using maximum filter
 
-    :param imgs:
-    :param footprint: footprint to use for maximum filter
+    :param imgs: 2D or 3D array
+    :param footprint: footprint to use for maximum filter. Array should have same number of dimensions as imgs
     :param threshold: only pixels with values greater than or equal to the threshold will be considered
     :param use_gpu_filter:
+
     :return centers_guess_inds: np.array([[i0, i1, i2], ...]) array indices of local maxima
     """
 
@@ -218,18 +209,29 @@ def find_peak_candidates(imgs, footprint, threshold, use_gpu_filter=CUPY_AVAILAB
     return centers_guess_inds, amps
 
 
-def combine_nearby_peaks(centers, min_xy_dist, min_z_dist, mode="average", weights=None):
+def filter_nearby_peaks(centers, min_xy_dist, min_z_dist, mode="average", weights=None):
     """
-    Combine multiple peaks above threshold into reduced set, where assume all peaks separated by no more than
+    Combine multiple center positions into a reduced set, where assume all centers separated by no more than
     min_xy_dist and min_z_dist come from the same feature.
-    :param centers:
+
+    This function treats xy and z directions separately. Centers must be close in both to be filtered.
+
+    :param centers: N x 3 array [cz, cy, cx]
     :param min_xy_dist:
     :param min_z_dist:
-    :param mode:
-    :param weights:
-    :return:
+    :param mode: "average", "keep-one", or "remove"
+    :param weights: only used in "average" mode. If weights are provided, a weighted average between nearby
+     points is computed
+
+    :return centers_unique: array of unique centers
+    :return inds: index into the initial array to produce centers_unique. In mode is "keep-one" or "remove"
+    then centers_unique = centers[inds]. If mode is "average", this will not be true as centers_unique will
+    not be elements of centers. However, centers[inds] will correspond to one point which was averaged to produce
+    the corresponding element of centers_unique
     """
-    # todo: looks like this might be easier if use some tools from scipy.spatial, scipy.spatial.cKDTree
+
+    if centers.ndim != 2 or centers.shape[1] != 3:
+        raise ValueError("centers should be a nx3 array where columns are cz, cy, cx")
 
     centers_unique = np.array(centers, copy=True)
     inds = np.arange(len(centers), dtype=np.int)
@@ -237,8 +239,13 @@ def combine_nearby_peaks(centers, min_xy_dist, min_z_dist, mode="average", weigh
     if weights is None:
         weights = np.ones(len(centers_unique))
 
+    # loop through points, at each step removing any duplicates and shrinking our list
+    # after looping through a point, it cannot be subsequently removed because the relations we are checking
+    # are symmetric.
+    # todo: is it possible this can fail in "average" mode?
+    # todo: looks like this might be easier if use some tools from scipy.spatial, scipy.spatial.cKDTree
     counter = 0
-    while 1:
+    while counter < len(centers_unique):
         # compute distances to all other beads
         z_dists = np.abs(centers_unique[counter][0] - centers_unique[:, 0])
         xy_dists = np.sqrt((centers_unique[counter][1] - centers_unique[:, 1]) ** 2 +
@@ -248,23 +255,24 @@ def combine_nearby_peaks(centers, min_xy_dist, min_z_dist, mode="average", weigh
         combine = np.logical_and(z_dists < min_z_dist, xy_dists < min_xy_dist)
         if mode == "average":
             denom = np.nansum(np.logical_not(np.isnan(np.sum(centers_unique[combine], axis=1))) * weights[combine])
+            # compute new center from average and reset that position in the list
             centers_unique[counter] = np.nansum(centers_unique[combine] * weights[combine][:, None], axis=0, dtype=np.float) / denom
             weights[counter] = denom
+            combine[counter] = False
         elif mode == "keep-one":
+            # don't want to remove the point itself
+            combine[counter] = False
+        elif mode == "remove":
             pass
         else:
-            raise ValueError("mode must be 'average' or 'keep-one', but was '%s'" % mode)
+            raise ValueError("mode must be 'average', 'keep-one', or 'remove' but was '%s'" % mode)
 
-        # remove all points from list except for one representative
-        combine[counter] = False
-
+        # remove points from lists
         inds = inds[np.logical_not(combine)]
         centers_unique = centers_unique[np.logical_not(combine)]
         weights = weights[np.logical_not(combine)]
 
         counter += 1
-        if counter >= len(centers_unique):
-            break
 
     return centers_unique, inds
 
@@ -526,7 +534,8 @@ def fit_gauss_roi(img_roi, coords, init_params=None, fixed_params=None, bounds=N
 
 
 def fit_gauss_rois(img_rois, coords_rois, init_params, max_number_iterations=100,
-                   sf=1, dc=None, angles=None, estimator="LSE", model="gaussian", use_gpu=GPUFIT_AVAILABLE):
+                   sf=1, dc=None, angles=None, estimator="LSE", model="gaussian",
+                   fixed_params=None, use_gpu=GPUFIT_AVAILABLE):
     """
     Fit rois. Can use either CPU parallelization with joblib or GPU parallelization using gpufit
 
@@ -543,6 +552,9 @@ def fit_gauss_rois(img_rois, coords_rois, init_params, max_number_iterations=100
     :return:
     """
 
+    if fixed_params is None:
+        fixed_params = [False] * 7
+
     zrois, yrois, xrois = coords_rois
 
     if not use_gpu:
@@ -551,7 +563,7 @@ def fit_gauss_rois(img_rois, coords_rois, init_params, max_number_iterations=100
 
         results = joblib.Parallel(n_jobs=-1, verbose=1, timeout=None)(
             joblib.delayed(fit_gauss_roi)(img_rois[ii], (zrois[ii], yrois[ii], xrois[ii]), init_params=init_params[ii],
-                                          sf=sf, dc=dc, angles=angles)
+                                          fixed_params=fixed_params, sf=sf, dc=dc, angles=angles)
             for ii in range(len(img_rois)))
 
         fit_params = np.asarray([r["fit_params"] for r in results])
@@ -618,9 +630,11 @@ def fit_gauss_rois(img_rois, coords_rois, init_params, max_number_iterations=100
         else:
             raise ValueError("'model' must be 'gaussian' or 'gaussian-lorentzian' but was '%s'" % model)
 
+        params_to_fit = np.array([not fp for fp in fixed_params], dtype=np.int32)
         fit_params, fit_states, chi_sqrs, niters, fit_t = gf.fit(data, None, model_id, init_params,
                                                                  max_number_iterations=max_number_iterations,
                                                                  estimator_id=est_id,
+                                                                 parameters_to_fit=params_to_fit,
                                                                  user_info=user_info)
 
         # correct sigmas in case negative
@@ -829,7 +843,7 @@ def filter_localizations(fit_params, init_params, coords, fit_dist_max_err, min_
     if np.sum(to_keep_temp) > 0:
 
         # only keep unique center if close enough
-        _, unique_inds = combine_nearby_peaks(centers_fit[to_keep_temp], dxy, dz, mode="keep-one")
+        _, unique_inds = filter_nearby_peaks(centers_fit[to_keep_temp], dxy, dz, mode="keep-one")
 
         # unique mask for those in to_keep_temp
         is_unique = np.zeros(np.sum(to_keep_temp), dtype=np.bool)
@@ -854,12 +868,12 @@ def filter_localizations(fit_params, init_params, coords, fit_dist_max_err, min_
 def localize_beads(imgs, dx, dz, threshold, roi_size, filter_sigma_small, filter_sigma_large,
                    min_spot_sep, sigma_bounds, fit_amp_min, fit_dist_max_err=(np.inf, np.inf), dist_boundary_min=(0, 0),
                    use_gpu_fit=GPUFIT_AVAILABLE, use_gpu_filter=CUPY_AVAILABLE):
-    # todo: need to ensure can also do 2D ...
+    # todo: need to ensure can also do 2D ... see e.g. 2021_07_09_localize_zhang_data.py
 
     if imgs.ndim == 2:
         imgs = np.expand_dims(imgs, axis=0)
 
-    x, y, z = get_coords(imgs.shape, dx, dz)
+    z, y, x = get_coords(imgs.shape, (dz, dx, dx))
     dz_min, dxy_min = min_spot_sep
     roi_size_pix = get_roi_size(roi_size, dx, dz, ensure_odd=True)
 
@@ -868,8 +882,8 @@ def localize_beads(imgs, dx, dz, threshold, roi_size, filter_sigma_small, filter
     # ###################################
     tstart = time.perf_counter()
 
-    ks = get_filter_kernel(filter_sigma_small, dx, dz)
-    kl = get_filter_kernel(filter_sigma_large, dx, dz)
+    ks = get_filter_kernel(filter_sigma_small, (dz, dx, dx))
+    kl = get_filter_kernel(filter_sigma_large, (dz, dx, dx))
     imgs_hp = filter_convolve(imgs, ks, use_gpu=use_gpu_filter)
     imgs_lp = filter_convolve(imgs, kl, use_gpu=use_gpu_filter)
     imgs_filtered = imgs_hp - imgs_lp
@@ -881,7 +895,7 @@ def localize_beads(imgs, dx, dz, threshold, roi_size, filter_sigma_small, filter
     # ###################################
     tstart = time.perf_counter()
 
-    footprint = get_max_filter_footprint((dz_min, dxy_min, dxy_min), dx, dz)
+    footprint = get_max_filter_footprint((dz_min, dxy_min, dxy_min), (dz, dx, dx))
     centers_guess_inds, amps = find_peak_candidates(imgs_filtered, footprint, threshold)
 
     # real coordinates
@@ -905,7 +919,7 @@ def localize_beads(imgs, dx, dz, threshold, roi_size, filter_sigma_small, filter
 
         inds = np.ravel_multi_index(centers_guess_inds.transpose(), imgs_filtered.shape)
         weights = imgs_filtered.ravel()[inds]
-        centers_guess, inds_comb = combine_nearby_peaks(centers_guess, dxy_min, dz_min, weights=weights, mode="average")
+        centers_guess, inds_comb = filter_nearby_peaks(centers_guess, dxy_min, dz_min, weights=weights, mode="average")
 
         amps = amps[inds_comb]
         print("Found %d points separated by dxy > %0.5g and dz > %0.5g in %0.1fs" %
@@ -916,8 +930,8 @@ def localize_beads(imgs, dx, dz, threshold, roi_size, filter_sigma_small, filter
         # ###################################################
         tstart = time.perf_counter()
 
-        rois, img_rois, xrois, yrois, zrois = zip(
-            *[get_roi(c, imgs, x, y, z, roi_size_pix) for c in centers_guess])
+        rois, img_rois, coords = zip(*[get_roi(c, imgs, (z, y, x), roi_size_pix) for c in centers_guess])
+        zrois, yrois, xrois = zip(*coords)
         rois = np.asarray(rois)
         nsizes = (rois[:, 1] - rois[:, 0]) * (rois[:, 3] - rois[:, 2]) * (rois[:, 5] - rois[:, 4])
         nfits = len(rois)
