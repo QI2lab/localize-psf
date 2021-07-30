@@ -1040,6 +1040,8 @@ def plot_bead_locations(imgs, center_lists, title="", color_lists=None, legend_l
     vmax = np.percentile(img_max_proj, vlims_percentile[1])
 
     plt.imshow(img_max_proj, vmin=vmin, vmax=vmax, cmap=plt.cm.get_cmap("bone"))
+    xlim = plt.xlim()
+    ylim = plt.ylim()
 
     cbar = plt.colorbar()
     cbar.ax.set_ylabel("Image intensity (counts)")
@@ -1053,6 +1055,9 @@ def plot_bead_locations(imgs, center_lists, title="", color_lists=None, legend_l
         cbar = plt.colorbar(plt.cm.ScalarMappable(norm=Normalize(vmin=0, vmax=np.nanmax(weights[ii])), cmap=cmap_color))
         cbar.ax.set_ylabel(cbar_labels[ii])
 
+    plt.xlim(xlim)
+    plt.ylim(ylim)
+
     plt.legend(legend_labels)
 
     return figh
@@ -1063,6 +1068,7 @@ def autofit_psfs(imgs, psf_roi_size, dx, dz, wavelength, ni=1.5, model='vectoria
                  threshold=100, min_spot_sep=(3, 3),
                  filter_sigma_small=(1, 0.5, 0.5), filter_sigma_large=(3, 5, 5),
                  sigma_bounds=((1, 1), (10, 10)), roi_size_loc=(13, 21, 21), fit_amp_thresh=100,
+                 dist_boundary_min=(0, 0), fit_dist_max_err=(np.inf, np.inf),
                  num_localizations_to_plot=5, psf_percentiles=(20, 5), plot=True, gamma=0.5, save_dir=None,
                  figsize=(18, 10), **kwargs):
 
@@ -1070,24 +1076,38 @@ def autofit_psfs(imgs, psf_roi_size, dx, dz, wavelength, ni=1.5, model='vectoria
     Find isolated points, fit PSFs, and report data. This is the main function of this module
 
     :param imgs: nz x nx x ny image
-    :param psf_roi_size: [nz, ny, nx]
+    :param psf_roi_size: [nz, ny, nx] ROI to determine PSFs on. This is not necessarily the same as the size of the
+    ROI's used during localization
     :param float dx: pixel size in um
     :param float dz: z-plane spacing in um
     :param float wavelength: wavelength in um
     :param float ni: index of refraction of medium
-    :param str model: "vectorial", "gibson-lanni", "born-wolf", or "gaussian"
-    :param int sf: sampling factor for oversampling
+    :param str model: "vectorial", "gibson-lanni", "born-wolf", or "gaussian". This model is used to fit the
+    averaged PSF's, but a gaussian model is always used for localization
+    :param int sf: sampling factor for oversampling along each dimension
     :param float threshold: threshold pixel value to identify peaks. Note: this is applied to the filtered image,
-    and is not directly compraable to the values in imgs
+    and is not directly comparable to the values in the raw image array
     :param min_spot_sep: (sz, sxy) minimum spot separation between different beads, in pixels
     :param filter_sigma_small: (sz, sy, sx) sigmas of Gaussian filter used to smooth image, in pixels
     :param filter_sigma_large: (sz, sy, sx) sigmas of Gaussian filter used to removed background, in pixels
     :param roi_size_loc: (sz, sy, sx) size of ROI to used in localization, in pixels
     :param float fit_amp_thresh: only consider spots which have fit values larger tha this amplitude
+    :param dist_boundary_min:
+    :param fit_dist_max_err:
+    :param int num_localization_to_plot: number of ROI's to plot
+    :param tuple psf_percentiles: calculate the averaged PSF from the smallest supplied percentage of spots. When
+    a tuple is given, compute PSF's corresponding to each supplied percentage.
+    :param bool plot: whether or not to plot
+    :param float gamma: gamma to use when plotting
+    :param save_dir:
+    :param fig_size:
     :param **kwargs: passed through to figures
 
     :return:
     """
+
+    if isinstance(psf_percentiles, (int, float)):
+        psf_percentiles = [psf_percentiles]
 
     saving = False
     if save_dir is not None:
@@ -1133,7 +1153,7 @@ def autofit_psfs(imgs, psf_roi_size, dx, dz, wavelength, ni=1.5, model='vectoria
 
     coords, fit_params, init_params, rois, to_keep, conditions, condition_names, filter_settings = localize.localize_beads(
         imgs, dx, dz, threshold, roi_size_loc, filter_sigma_small, filter_sigma_large,
-        min_spot_sep, sigma_bounds, fit_amp_thresh, fit_dist_max_err=(np.inf, np.inf), dist_boundary_min=(0, 0),
+        min_spot_sep, sigma_bounds, fit_amp_thresh, fit_dist_max_err=fit_dist_max_err, dist_boundary_min=dist_boundary_min,
         use_gpu_filter=False)
 
     # ###################################
