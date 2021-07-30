@@ -98,7 +98,7 @@ def cut_roi(roi, arr):
     @return:
     """
     if not np.mod(len(roi), 2) == 0:
-        raise ValueError("roi length must be even")
+        raise ValueError("roi array length must be even")
 
     if not len(roi) // 2 <= arr.ndim:
         raise ValueError("roi was too large for given array")
