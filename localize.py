@@ -762,7 +762,7 @@ def plot_gauss_roi(fit_params, roi, imgs, coords, init_params=None, same_color_s
     plt.xlabel("Y (um)")
     plt.ylabel("Z (um)")
 
-    plt.show(figh_interp)
+    # plt.show(figh_interp)
     if save_dir is not None:
         figh_interp.savefig(os.path.join(save_dir, "%s.png" % prefix))
         plt.close(figh_interp)
