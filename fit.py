@@ -1,5 +1,5 @@
 """
-Tools for fitting data using non-linear least squares, and other approaches.
+Tools for fitting data using non-linear least squares
 """
 import copy
 import numpy as np
@@ -188,7 +188,7 @@ def get_moments(img, order=1, coords=None, dims=None):
 
 
 # fit data to gaussians
-def fit_gauss1d(y, init_params=None, fixed_params=None, sd=None, x=None, bounds=None):
+def fit_gauss1d(y, init_params=None, fixed_params=None, sd=None, x=None, bounds=None, **kwargs):
     """
     Fit 1D Gaussian
 
@@ -237,7 +237,7 @@ def fit_gauss1d(y, init_params=None, fixed_params=None, sd=None, x=None, bounds=
     jacob_fn = lambda p: gauss2d_jacobian(x, np.zeros(x.shape), [p[0], p[1], 0, p[2], 1, p[3], 0])
 
     result = fit_model(y, fn, init_params, fixed_params=fixed_params,
-                       sd=sd, bounds=bounds, model_jacobian=jacob_fn)
+                       sd=sd, bounds=bounds, model_jacobian=jacob_fn, **kwargs)
 
     pfit = result['fit_params']
     fit_fn = lambda x: gauss2d(x, np.zeros(x.shape), [pfit[0], pfit[1], 0, pfit[2], 1, pfit[3], 0])
@@ -245,7 +245,7 @@ def fit_gauss1d(y, init_params=None, fixed_params=None, sd=None, x=None, bounds=
     return result, fit_fn
 
 
-def fit_gauss2d(img, init_params=None, fixed_params=None, sd=None, xx=None, yy=None, bounds=None):
+def fit_gauss2d(img, init_params=None, fixed_params=None, sd=None, xx=None, yy=None, bounds=None, **kwargs):
     """
     Fit 2D gaussian function. The angle theta is defined clockwise from the x- (or y-) axis. NOTE: be careful
     with this when looking at results using e.g. matplotlib.imshow, as this will display the negative y-axis on top.
@@ -306,7 +306,7 @@ def fit_gauss2d(img, init_params=None, fixed_params=None, sd=None, xx=None, yy=N
 
     # do fitting
     result = fit_model(img, lambda p: gauss2d(xx, yy, p), init_params, fixed_params=fixed_params,
-                       sd=sd, bounds=bounds, model_jacobian=lambda p: gauss2d_jacobian(xx, yy, p))
+                       sd=sd, bounds=bounds, model_jacobian=lambda p: gauss2d_jacobian(xx, yy, p), **kwargs)
 
     # model function
     def fit_fn(x, y): return gauss2d(x, y, result['fit_params'])
@@ -314,7 +314,7 @@ def fit_gauss2d(img, init_params=None, fixed_params=None, sd=None, xx=None, yy=N
     return result, fit_fn
 
 
-def fit_sum_gauss2d(img, ngaussians, init_params, fixed_params=None, sd=None, xx=None, yy=None, bounds=None):
+def fit_sum_gauss2d(img, ngaussians, init_params, fixed_params=None, sd=None, xx=None, yy=None, bounds=None, **kwargs):
     """
     Fit 2D gaussian function. The angle theta is defined clockwise from the x- (or y-) axis. NOTE: be careful
     with this when looking at results using e.g. matplotlib.imshow, as this will display the negative y-axis on top.
@@ -347,7 +347,7 @@ def fit_sum_gauss2d(img, ngaussians, init_params, fixed_params=None, sd=None, xx
                   [ np.inf, xx.max(), yy.max(), xx.max() - xx.min(), yy.max() - yy.min(), np.inf] * ngaussians + [np.inf]]
 
     result = fit_model(img, lambda p: sum_gauss2d(xx, yy, p), init_params, fixed_params=fixed_params,
-                       sd=sd, bounds=bounds, model_jacobian=lambda p: sum_gauss2d_jacobian(xx, yy, p))
+                       sd=sd, bounds=bounds, model_jacobian=lambda p: sum_gauss2d_jacobian(xx, yy, p), **kwargs)
 
     pfit = result['fit_params']
 
@@ -357,7 +357,7 @@ def fit_sum_gauss2d(img, ngaussians, init_params, fixed_params=None, sd=None, xx
     return result, fn
 
 
-def fit_half_gauss1d(y, init_params=None, fixed_params=None, sd=None, x=None, bounds=None):
+def fit_half_gauss1d(y, init_params=None, fixed_params=None, sd=None, x=None, bounds=None, **kwargs):
     """
     Fit function that has two Gaussian halves with different sigmas and offsets but match smoothly at cx
 
@@ -406,7 +406,7 @@ def fit_half_gauss1d(y, init_params=None, fixed_params=None, sd=None, x=None, bo
     hg_fn = lambda x, p: (p[0] * np.exp(-(x - p[1])**2 / (2*p[2]**2)) + p[3]) * (x < p[1]) + \
                          ((p[0] + p[3] - p[5]) * np.exp(-(x - p[1])**2 / (2*p[4]**2)) + p[5]) * (x >= p[1])
 
-    result = fit_model(y, lambda p: hg_fn(x, p), init_params, fixed_params=fixed_params, sd=sd, bounds=bounds)
+    result = fit_model(y, lambda p: hg_fn(x, p), init_params, fixed_params=fixed_params, sd=sd, bounds=bounds, **kwargs)
 
     pfit = result['fit_params']
     fit_fn = lambda x: hg_fn(x, pfit)
@@ -591,7 +591,7 @@ def gauss3d(x, y, z, p):
 
     return val
 
-
+# 3D rotation functions
 def gauss3d_jacobian(x, y, z, p):
     bcast_shape = (x + y + z).shape
 
