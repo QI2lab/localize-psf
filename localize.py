@@ -9,7 +9,7 @@ import scipy.signal
 import joblib
 import matplotlib.pyplot as plt
 #
-import rois
+import rois as roi_fns
 import fit
 import fit_psf as psf
 
@@ -45,41 +45,22 @@ def get_coords(sizes, drs):
     return coords
 
 
-def get_roi_size(sizes, dc, dz, ensure_odd=True):
-    """
-    Compute ROI size in pixels given ROI size in real coordinates
-    @param sizes:
-    @param dc:
-    @param dz:
-    @param ensure_odd:
-    @return:
-    """
-    n0 = int(np.ceil(sizes[0] / dz))
-    n1 = int(np.ceil(sizes[1] / dc))
-    n2 = int(np.ceil(sizes[2] / dc))
-
-    if ensure_odd:
-        n0 += (1 - np.mod(n0, 2))
-        n1 += (1 - np.mod(n1, 2))
-        n2 += (1 - np.mod(n2, 2))
-
-    return [n0, n1, n2]
-
-
 def get_roi(center, img, coords, sizes):
     """
+    Find ROI which is nearly centered on center. Since center may not correspond to a pixel location, and the
+    size of the ROI may not be odd, center will not be the exact center of the ROI
 
     :param center: [c_0, c_1, ..., c_n] in same units as x, y, z.
-    :param img:
-    :param coords:
+    :param img: array of arbitrary size, m0 x m1 x ... x mn
+    :param coords: (coords0, coords1, ..., coordsN)
     :param sizes: [i0, i1, ... in] integers
-    :return:
+    :return roi, img_roi, coords_roi:
     """
     ndims = img.ndim
     # get closest coordinates to desired center of roi
     ics = [np.argmin(np.abs(r.ravel() - c)) for r, c in zip(coords, center)]
 
-    roi = np.array(rois.get_centered_roi(ics, sizes, min_vals=[0]*ndims, max_vals=img.shape))
+    roi = np.array(roi_fns.get_centered_roi(ics, sizes, min_vals=[0]*ndims, max_vals=img.shape))
 
     # get coordinates as arrays which only have nonunit size along one direction
     coords_roi = [c[tuple([slice(None)] * ii + [slice(roi[2*ii], roi[2*ii + 1])] + [slice(None)] * (ndims - 1 - ii))]
@@ -87,7 +68,7 @@ def get_roi(center, img, coords, sizes):
     # broadcast to full arrays, essentially meshgrid
     coords_roi = np.broadcast_arrays(*coords_roi)
 
-    img_roi = rois.cut_roi(roi, img)
+    img_roi = roi_fns.cut_roi(roi, img)
 
     return roi, img_roi, coords_roi
 
@@ -520,6 +501,13 @@ def fit_gauss_roi(img_roi, coords, init_params=None, fixed_params=None, bounds=N
                   [np.inf, x_roi_full[to_use].max(), y_roi_full[to_use].max(), z_roi_full[to_use].max(), np.inf, np.inf,
                    np.inf]]
 
+        # ensure guesses were not already outside bounds. If they were, reset bounds
+        for ii in range(len(init_params)):
+            if init_params[ii] < bounds[0][ii]:
+                bounds[0][ii] = -np.inf
+            if init_params[ii] > bounds[1][ii]:
+                bounds[1][ii] = np.inf
+
     # gaussian fitting localization
     def model_fn(p):
         return psf.gaussian3d_psf(x_roi, y_roi, z_roi, dc, p, sf=sf, angles=angles)
@@ -666,7 +654,7 @@ def plot_gauss_roi(fit_params, roi, imgs, coords, init_params=None, same_color_s
     center_fit = np.array([fit_params[3], fit_params[2], fit_params[1]])
 
     # get ROI and coordinates
-    img_roi = rois.cut_roi(roi, imgs)
+    img_roi = roi_fns.cut_roi(roi, imgs)
     x_roi = x[:, :, roi[4]:roi[5]]
     y_roi = y[:, roi[2]:roi[3], :]
     z_roi = z[roi[0]:roi[1], :, :]
@@ -774,6 +762,7 @@ def plot_gauss_roi(fit_params, roi, imgs, coords, init_params=None, same_color_s
     plt.xlabel("Y (um)")
     plt.ylabel("Z (um)")
 
+    # plt.show(figh_interp)
     if save_dir is not None:
         figh_interp.savefig(os.path.join(save_dir, "%s.png" % prefix))
         plt.close(figh_interp)
@@ -875,7 +864,7 @@ def localize_beads(imgs, dx, dz, threshold, roi_size, filter_sigma_small, filter
 
     z, y, x = get_coords(imgs.shape, (dz, dx, dx))
     dz_min, dxy_min = min_spot_sep
-    roi_size_pix = get_roi_size(roi_size, dx, dz, ensure_odd=True)
+    roi_size_pix = roi_fns.get_roi_size(roi_size, dx, dz, ensure_odd=True)
 
     # ###################################
     # filter images
