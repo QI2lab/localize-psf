@@ -7,6 +7,7 @@ The primary functions that will be called by an external script are, find_beads(
 """
 import os
 import copy
+import pickle
 import joblib
 import numpy as np
 import scipy.ndimage as ndi
@@ -771,8 +772,8 @@ def get_exp_psf(imgs, coords, centers, roi_sizes, backgrounds=None):
     :return psf_mean, psf_coords, otf_mean, otf_coords:
     """
 
-    if np.any(np.mod(np.array(roi_sizes), 2) == 0):
-        raise ValueError("roi_sizes must be odd")
+    # if np.any(np.mod(np.array(roi_sizes), 2) == 0):
+    #     raise ValueError("roi_sizes must be odd")
 
     z, y, x, = coords
     dz = z[1, 0, 0] - z[0, 0, 0]
@@ -990,7 +991,7 @@ def plot_fit_stats(fit_params, figsize=(18, 10), **kwargs):
     return figh
 
 
-def plot_bead_locations(imgs, center_lists, title="", color_lists=None, legend_labels=None, weights=None,
+def plot_bead_locations(imgs, center_lists, title="", color_lists=None, color_limits=None, legend_labels=None, weights=None,
                         cbar_labels=None, vlims_percentile=(0.01, 99.99), **kwargs):
     """
     Plot center locations on 2D image or max projection of 3D image
@@ -1002,6 +1003,7 @@ def plot_bead_locations(imgs, center_lists, title="", color_lists=None, legend_l
     :param center_lists: [center_array_1, center_array_2, ...] where each center_array is a numpy array of size N_i x 3
     consisting of triples of center values giving cz, cy, cx
     :param color_lists: list of colors for each series to be plotted in
+    :param color_limits: [[vmin_1, vmax_1], ...]
     :param legend_labels: labels for each series
     :param weights: list of arrays [w_1, ..., w_n], with w_i the same size as center_array_i, giving the intensity of
     the color to be plotted
@@ -1018,14 +1020,24 @@ def plot_bead_locations(imgs, center_lists, title="", color_lists=None, legend_l
         for ii in range(nlists):
             color_lists.append(cmap(ii / nlists))
 
+    if not isinstance(color_lists, (list, tuple)):
+        color_lists = [color_lists]
+
+
     if legend_labels is None:
         legend_labels = list(map(lambda x: "series #" + str(x) + " %d pts" % len(center_lists[x]), range(nlists)))
 
     if weights is None:
         weights = [np.ones(len(cs)) for cs in center_lists]
 
+    if not isinstance(weights, (list, tuple)):
+        weights = [weights]
+
     if cbar_labels is None:
         cbar_labels = ["" for cs in center_lists]
+
+    if not isinstance(cbar_labels, (list, tuple)):
+        cbar_labels = [cbar_labels]
 
     if imgs.ndim == 3:
         img_max_proj = np.nanmax(imgs, axis=0)
@@ -1048,11 +1060,19 @@ def plot_bead_locations(imgs, center_lists, title="", color_lists=None, legend_l
 
     # plot centers
     for ii in range(nlists):
-        cmap_color = LinearSegmentedColormap.from_list("test", [[0., 0., 0.], color_lists[ii]])
-        plt.scatter(center_lists[ii][:, 2], center_lists[ii][:, 1], facecolor='none', marker='o',
-                    edgecolor=cmap_color(weights[ii] / np.nanmax(weights[ii])))
+        if color_limits is None:
+            vmin = 0
+            vmax = np.nanmax(weights[ii])
+        else:
+            vmin = color_limits[ii][0]
+            vmax = color_limits[ii][1]
 
-        cbar = plt.colorbar(plt.cm.ScalarMappable(norm=Normalize(vmin=0, vmax=np.nanmax(weights[ii])), cmap=cmap_color))
+        cmap_color = LinearSegmentedColormap.from_list("test", [[0.5, 0.5, 0.5], color_lists[ii]])
+        cs = cmap_color((weights[ii] - vmin) / (vmax - vmin))
+
+        plt.scatter(center_lists[ii][:, 2], center_lists[ii][:, 1], facecolor='none', edgecolor=cs, marker='o')
+
+        cbar = plt.colorbar(plt.cm.ScalarMappable(norm=Normalize(vmin=vmin, vmax=vmax), cmap=cmap_color))
         cbar.ax.set_ylabel(cbar_labels[ii])
 
     plt.xlim(xlim)
@@ -1090,6 +1110,8 @@ def autofit_psfs(imgs, psf_roi_size, dx, dz, wavelength, ni=1.5, model='vectoria
     :param min_spot_sep: (sz, sxy) minimum spot separation between different beads, in pixels
     :param filter_sigma_small: (sz, sy, sx) sigmas of Gaussian filter used to smooth image, in pixels
     :param filter_sigma_large: (sz, sy, sx) sigmas of Gaussian filter used to removed background, in pixels
+     :param sigma_bounds: ((sz_min, sxy_min), (sz_max, sxy_max)) in pixels. exclude fits with sigmas that fall outside
+    these ranges
     :param roi_size_loc: (sz, sy, sx) size of ROI to used in localization, in pixels
     :param float fit_amp_thresh: only consider spots which have fit values larger tha this amplitude
     :param dist_boundary_min:
@@ -1225,6 +1247,17 @@ def autofit_psfs(imgs, psf_roi_size, dx, dz, wavelength, ni=1.5, model='vectoria
             fname = os.path.join(save_dir, "sigma_versus_position.png")
             figh.savefig(fname)
             plt.close(figh)
+
+    if saving:
+        data = {"coords": coords, "fit_params": fit_params, "init_params": init_params,
+                "rois": rois, "to_keep": to_keep, "conditions": conditions,
+                "condition_names": condition_names, "filter_settings": filter_settings,
+                "psfs_real": psfs_real, "psf_coords": psf_coords, "otfs_real": otfs_real, "otf_coords": otf_coords,
+                "psf_percentiles": psf_percentiles, "fit_params_real": fit_params_real}
+
+        fname = os.path.join(save_dir, "localization_results.pkl")
+        with open(fname, "wb") as f:
+            pickle.dump(data, f)
 
 
     return coords, fit_params, init_params, rois, to_keep, conditions, condition_names, filter_settings,\

@@ -857,10 +857,33 @@ def filter_localizations(fit_params, init_params, coords, fit_dist_max_err, min_
 def localize_beads(imgs, dx, dz, threshold, roi_size, filter_sigma_small, filter_sigma_large,
                    min_spot_sep, sigma_bounds, fit_amp_min, fit_dist_max_err=(np.inf, np.inf), dist_boundary_min=(0, 0),
                    use_gpu_fit=GPUFIT_AVAILABLE, use_gpu_filter=CUPY_AVAILABLE):
+    """
+
+    @param imgs:
+    @param dx:
+    @param dz:
+    @param threshold:
+    @param roi_size:
+    @param filter_sigma_small: (sz, sy, sx)
+    @param filter_sigma_large: ()
+    @param min_spot_sep: (dz, dxy)
+    @param sigma_bounds: ((sz_min, sxy_min), (sz_max, sxy_max))
+    @param fit_amp_min:
+    @param fit_dist_max_err:
+    @param dist_boundary_min:
+    @param use_gpu_fit:
+    @param use_gpu_filter:
+    @return (z, y, x), fit_params, init_params, rois, to_keep, conditions, condition_names, filter_settings:
+    """
     # todo: need to ensure can also do 2D ... see e.g. 2021_07_09_localize_zhang_data.py
 
     if imgs.ndim == 2:
         imgs = np.expand_dims(imgs, axis=0)
+
+    if imgs.shape[0] == 1:
+        data_is_2d = True
+    else:
+        data_is_2d = False
 
     z, y, x = get_coords(imgs.shape, (dz, dx, dx))
     dz_min, dxy_min = min_spot_sep
@@ -932,12 +955,18 @@ def localize_beads(imgs, dx, dz, threshold, roi_size, filter_sigma_small, filter
         sys = np.array([np.sqrt(np.sum(ir * (yr - cg[1]) ** 2) / np.sum(ir)) for ir, yr, cg in
                         zip(img_rois, yrois, centers_guess)])
         sxys = 0.5 * (sxs + sys)
-        szs = np.array([np.sqrt(np.sum(ir * (zr - cg[0]) ** 2) / np.sum(ir)) for ir, zr, cg in
-                        zip(img_rois, zrois, centers_guess)])
+
+        if data_is_2d:
+            cz_guess = np.zeros(len(img_rois))
+            szs = np.ones(len(img_rois))
+        else:
+            cz_guess = centers_guess[:, 0]
+            szs = np.array([np.sqrt(np.sum(ir * (zr - cg[0]) ** 2) / np.sum(ir)) for ir, zr, cg in
+                            zip(img_rois, zrois, centers_guess)])
 
         # get initial parameter guesses
         init_params = np.stack((amps,
-                                centers_guess[:, 2], centers_guess[:, 1], centers_guess[:, 0],
+                                centers_guess[:, 2], centers_guess[:, 1], cz_guess,
                                 sxys, szs, bgs), axis=1)
 
         print("Prepared %d rois and estimated initial parameters in %0.2fs" % (len(rois), time.perf_counter() - tstart))
@@ -948,9 +977,17 @@ def localize_beads(imgs, dx, dz, threshold, roi_size, filter_sigma_small, filter
         print("starting fitting for %d rois" % centers_guess.shape[0])
         tstart = time.perf_counter()
 
+        fixed_params = [False] * 7
+
+        # if 2D, don't want to fit cz or sz
+        if data_is_2d:
+            fixed_params[5] = True
+            fixed_params[3] = True
+
         fit_params, fit_states, chi_sqrs, niters, fit_t = fit_gauss_rois(img_rois, (zrois, yrois, xrois),
                                                                          init_params, estimator="LSE",
                                                                          sf=1, dc=dx, angles=(0., 0., 0.),
+                                                                         fixed_params=fixed_params,
                                                                          use_gpu=use_gpu_fit)
 
         tend = time.perf_counter()
