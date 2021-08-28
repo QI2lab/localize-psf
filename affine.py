@@ -40,7 +40,7 @@ def xform2params(affine_mat):
     theta_y = np.angle(affine_mat[1, 1] - 1j * affine_mat[0, 1])
     my = np.nanmean([affine_mat[1, 1] / np.cos(theta_y), -affine_mat[0, 1] / np.sin(theta_y)])
 
-    return [mx, theta_x, vx, my, theta_y, vy]
+    return np.array([mx, theta_x, vx, my, theta_y, vy])
 
 
 def inv_xform2params(affine_mat_inv):
@@ -84,7 +84,7 @@ def inv_xform2params(affine_mat_inv):
     vx = -shift_mat[0, 2]
     vy = -shift_mat[1, 2]
 
-    return [mx, theta_x, vx, my, theta_y, vy]
+    return np.array([mx, theta_x, vx, my, theta_y, vy])
 
 
 def params2xform(params):
@@ -116,7 +116,7 @@ def params2xform(params):
 
 
 # transform functions/matrices under action of affine transformation
-def affine_xform_mat(mat, xform, img_coords, mode='nearest'):
+def xform_mat(mat, xform, img_coords, mode='nearest'):
     """
     Given roi_size matrix defined on object space coordinates, i.e. M[yo, xo], calculate corresponding matrix at image
     space coordinates, M'[yi, xi] = M[ T^{-1} * [xi, yi] ]
@@ -215,37 +215,19 @@ def xform_fn(fn, xform, out_coords):
     return img
 
 
-def xform_points(xs, ys, xform):
-    """
-    Transform a set of coordinates under the action of the affine transformation.
-    :param xs: array of x-coordinates of arbitrary shape
-    :param ys: array of y-coordinates, same shape as xs
-    :param xform: affine transformation, 3x3 matrix
-
-    :return xs_out: x-coordinates after affine transformation. Same shape as xs
-    :return ys_out: y-coordinates after affine transformation. Same shape as xs.
-    """
-    coord_vec_in = np.concatenate((xs.ravel()[None, :], ys.ravel()[None, :], np.ones((1, xs.size))), axis=0)
-    coord_vec_out = xform.dot(coord_vec_in)
-    xs_out = coord_vec_out[0, :].reshape(xs.shape)
-    ys_out = coord_vec_out[1, :].reshape(ys.shape)
-
-    return xs_out, ys_out
-
-
-def xform_points2(coords, xform):
+def xform_points(coords, xform):
     """
     Transform coordinates of arbitrary dimension under the action of an affine transformation
 
-    # TODO: replace xform_points() with this function
-
-    :param coords: given as an N x Ndim matrix
+    :param coords: given as an N x ndim matrix
     :param xform: affine transform matrix
+    :return coords_out: N x ndim
     """
-    coord_vec_in = np.concatenate((coords.transpose(), np.ones((1, coords.shape[0]))), axis=0)
-    coord_vec_out = xform.dot(coord_vec_in)[:-1].transpose()
+    coords_in = np.concatenate((coords.transpose(), np.ones((1, coords.shape[0]))), axis=0)
+    # clip off extra dimension and return
+    coords_out = xform.dot(coords_in)[:-1].transpose()
 
-    return coord_vec_out
+    return coords_out
 
 
 # modify affine xform
@@ -510,6 +492,7 @@ def fit_affine_xform_points(from_pts, to_pts):
     ones_row = np.ones((1, q.shape[1]))
     q_aug = np.concatenate((q, ones_row), axis=0)
 
+    # todo: think these two approaches are equivalent. Verify and remove the code in the "if False" statement
     if False:
         # convert to a full rank matrix equation
         # solve using gaussian elimination. soln = [A, b]
@@ -545,9 +528,7 @@ def fit_affine_xform_points(from_pts, to_pts):
             row_temp, res, rank, s = np.linalg.lstsq(q_aug.transpose(), p[ii], rcond=None)
             affine_mat[ii] = row_temp
         affine_mat[-1, -1] = 1
-        soln = 0
 
-    # todo: remove soln from here...
     return affine_mat
 
 
@@ -574,8 +555,8 @@ def fit_affine_xform_mask(img, mask, init_params=None):
     img_sum = np.sum(img)
 
     img_coords = np.meshgrid(range(img.shape[1], img.shape[0]))
-    min_fn = lambda p: -np.sum(img.ravel() * affine_xform_mat(mask, xform_fn(p), img_coords, mode='interp').ravel()) / \
-                       img_sum / np.sum(affine_xform_mat(mask, xform_fn(p), img_coords, mode='interp'))
+    min_fn = lambda p: -np.sum(img.ravel() * xform_mat(mask, xform_fn(p), img_coords, mode='interp').ravel()) / \
+                       img_sum / np.sum(xform_mat(mask, xform_fn(p), img_coords, mode='interp'))
 
     fit_dict = optimize.minimize(min_fn, init_params)
     pfit = fit_dict['x']
