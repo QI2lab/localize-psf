@@ -143,26 +143,27 @@ def symm_fn_1d_to_2d(arr, fs, fmax, npts):
     return arr_out, fxs, fys
 
 
-def otf_coherent2incoherent(otf_c, dx=None, wavelength=0.5, ni=1.5, defocus_um=0, fx=None, fy=None):
+def atf2otf(atf, dx=None, wavelength=0.5, ni=1.5, defocus_um=0, fx=None, fy=None):
     """
-    Get incoherent transfer function from autocorrelation of coherent transfer function
-    :param otf_c:
+    Get incoherent transfer function (OTF) from autocorrelation of coherent transfer function (ATF)
+
+    :param atf:
     :param dx:
     :param wavelength:
     :param ni:
     :param defocus_um:
     :param fx:
     :param fy:
-    :return:
+    :return otf, atf_defocus:
     """
-    ny, nx = otf_c.shape
-
-    if fx is None:
-        fx = fft.fftshift(fft.fftfreq(nx, dx))
-    if fy is None:
-        fy = fft.fftshift(fft.fftfreq(ny, dx))
+    ny, nx = atf.shape
 
     if defocus_um != 0:
+        if fx is None:
+            fx = fft.fftshift(fft.fftfreq(nx, dx))
+        if fy is None:
+            fy = fft.fftshift(fft.fftfreq(ny, dx))
+
         if dx is None or wavelength is None or ni is None:
             raise TypeError("if defocus != 0, dx, wavelength, ni must be provided")
 
@@ -171,26 +172,34 @@ def otf_coherent2incoherent(otf_c, dx=None, wavelength=0.5, ni=1.5, defocus_um=0
     else:
         defocus_fn = 1
 
-    otf_c_defocus = otf_c * defocus_fn
+    atf_defocus = atf * defocus_fn
     # if even number of frequencies, we must translate otf_c by one so that f and -f match up
-    otf_c_minus_conj = np.roll(np.roll(np.flip(otf_c_defocus, axis=(0, 1)), np.mod(ny + 1, 2), axis=0), np.mod(nx + 1, 2), axis=1).conj()
+    otf_c_minus_conj = np.roll(np.roll(np.flip(atf_defocus, axis=(0, 1)), np.mod(ny + 1, 2), axis=0), np.mod(nx + 1, 2), axis=1).conj()
 
-    otf_inc = scipy.signal.fftconvolve(otf_c_defocus, otf_c_minus_conj, mode='same') / np.sum(np.abs(otf_c) ** 2)
-    return otf_inc, otf_c_defocus
+    otf = scipy.signal.fftconvolve(atf_defocus, otf_c_minus_conj, mode='same') / np.sum(np.abs(atf) ** 2)
+    return otf, atf_defocus
 
 
 # circular aperture functions
-def circ_aperture_pupil(fx, fy, na, wavelength):
+def circ_aperture_atf(fx, fy, na, wavelength):
+    """
+    Amplitude transfer function for circular aperture
+
+    @param fx:
+    @param fy:
+    @param na:
+    @param wavelength:
+    @return:
+    """
     fmax = 0.5 / (0.5 * wavelength / na)
 
-    nx = len(fx)
-    ny = len(fy)
-    ff = np.sqrt(fx[None, :]**2 + fy[:, None]**2)
+    # ff = np.sqrt(fx[None, :]**2 + fy[:, None]**2)
+    ff = np.sqrt(fx**2 + fy**2)
 
-    pupil = np.ones((ny, nx))
-    pupil[ff > fmax] = 0
+    atf = np.ones(ff.shape)
+    atf[ff > fmax] = 0
 
-    return pupil
+    return atf
 
 
 def circ_aperture_otf(fx, fy, na, wavelength):
