@@ -81,7 +81,7 @@ def otf2psf(otf, dfs=1):
 
     shape = otf.shape
     drs = np.array([1 / (df * n) for df, n in zip(shape, dfs)])
-    coords = [fft.fftshift(fft.fftfreq(n, dr)) for n, dr in zip(shape, drs)]
+    coords = [fft.fftshift(fft.fftfreq(n, 1 / (dr * n))) for n, dr in zip(shape, drs)]
 
     psf = fft.fftshift(fft.ifftn(fft.ifftshift(otf))).real
 
