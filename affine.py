@@ -300,9 +300,10 @@ def xform_phase_translation(fx, fy, phase, shifted_center):
 def xform_sinusoid_params(fx_obj, fy_obj, phi_obj, affine_mat):
     """
     Given a sinusoid function of object space,
-    cos[2pi f_x * x_o + 2pi f_y * y_o + phi],
+    cos[2pi f_x * xo + 2pi f_y * yo + phi_o],
+    and an affine transformation mapping object space to image space, [xi, yi] = A * [xo, yo]
     find the frequency and phase parameters for the corresponding function on image space,
-    cos[2pi f_xi * x_i + 2pi f_yi * yi + phi_i]
+    cos[2pi f_xi * xi + 2pi f_yi * yi + phi_i]
 
     :param float fx_obj: x-component of frequency in object space
     :param float fy_obj: y-component of frequency in object space
