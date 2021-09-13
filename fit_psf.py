@@ -233,6 +233,8 @@ def na2fwhm(na, wavelength):
     """
     Convert numerical aperture to full-width at half-maximum, assuming an Airy-function PSF
 
+    FWHM ~ 0.51 * wavelength / na
+
     :param na: numerical aperture
     :param wavelength:
     :return fwhm: in same units as wavelength
@@ -243,6 +245,7 @@ def na2fwhm(na, wavelength):
 
 def fwhm2na(wavelength, fwhm):
     """
+    Convert full-width half-maximum PSF value to the equivalent numerical aperture. Inverse function of na2fwhm
 
     @param wavelength:
     @param fwhm:
@@ -256,6 +259,7 @@ def na2sxy(na, wavelength):
     """
     Convert numerical aperture to standard deviation, assuming the numerical aperture and the sigma
     are related as in the Airy function PSF
+
     :param na:
     :param wavelength:
     :return:
@@ -267,18 +271,43 @@ def na2sxy(na, wavelength):
     return sigma
 
 
-def sxy2na(wavelength, sigma):
+def sxy2na(wavelength, sigma_xy):
     """
-
+    Convert sigma xy value to equivalent numerical aperture, assuming these are related as in the Airy function PSF
     @param wavelength:
-    @param sigma:
+    @param sigma_xy:
     @return:
     """
-    fwhm = 2 * 1.6163399561827614 / 1.49686886 * sigma
+    fwhm = 2 * 1.6163399561827614 / 1.49686886 * sigma_xy
     # fwhm = na2fwhm(na, wavelength)
     # fwhm = sigma * (2*np.sqrt(2 * np.log(2)))
     return fwhm2na(wavelength, fwhm)
 
+
+def na2sz(na, wavelength, ni):
+    """
+    Convert numerical aperture to equivalent sigma-z value,
+
+    todo: believe this is a gaussian approx. Find reference
+    @param wavelength:
+    @param sigma_xy:
+    @param ni: index of refraction
+    @return:
+    """
+    return np.sqrt(6) / np.pi * ni * wavelength / na ** 2
+
+
+def sz2na(sigma_z, wavelength, ni):
+    """
+    Convert sigma-z value to equivalent numerical aperture
+
+    todo: believe this is a gaussian approx. Find reference
+    @param wavelength:
+    @param sigma_z:
+    @param ni: index of refraction
+    @ return:
+    """
+    return np.sqrt(np.sqrt(6) / np.pi * ni * wavelength / sigma_z)
 
 # different PSF model functions
 def gaussian2d_psf(x, y, p, sf=1):
