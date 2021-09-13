@@ -158,7 +158,7 @@ def get_max_filter_footprint(min_sep_allowed, drs):
     # ensure odd
     ns = [n if np.mod(n, 2) == 0 else n + 1 for n in ns]
 
-    footprint = np.ones(ns, dtype=np.bool)
+    footprint = np.ones(ns, dtype=bool)
 
     return footprint
 
@@ -215,7 +215,7 @@ def filter_nearby_peaks(centers, min_xy_dist, min_z_dist, mode="average", weight
         raise ValueError("centers should be a nx3 array where columns are cz, cy, cx")
 
     centers_unique = np.array(centers, copy=True)
-    inds = np.arange(len(centers), dtype=np.int)
+    inds = np.arange(len(centers), dtype=int)
 
     if weights is None:
         weights = np.ones(len(centers_unique))
@@ -237,7 +237,7 @@ def filter_nearby_peaks(centers, min_xy_dist, min_z_dist, mode="average", weight
         if mode == "average":
             denom = np.nansum(np.logical_not(np.isnan(np.sum(centers_unique[combine], axis=1))) * weights[combine])
             # compute new center from average and reset that position in the list
-            centers_unique[counter] = np.nansum(centers_unique[combine] * weights[combine][:, None], axis=0, dtype=np.float) / denom
+            centers_unique[counter] = np.nansum(centers_unique[combine] * weights[combine][:, None], axis=0, dtype=float) / denom
             weights[counter] = denom
             combine[counter] = False
         elif mode == "keep-one":
@@ -835,17 +835,17 @@ def filter_localizations(fit_params, init_params, coords, fit_dist_max_err, min_
         _, unique_inds = filter_nearby_peaks(centers_fit[to_keep_temp], dxy, dz, mode="keep-one")
 
         # unique mask for those in to_keep_temp
-        is_unique = np.zeros(np.sum(to_keep_temp), dtype=np.bool)
+        is_unique = np.zeros(np.sum(to_keep_temp), dtype=bool)
         is_unique[unique_inds] = True
 
         # get indices of non-unique points among all points
-        not_unique_inds_full = np.arange(len(to_keep_temp), dtype=np.int)[to_keep_temp][np.logical_not(is_unique)]
+        not_unique_inds_full = np.arange(len(to_keep_temp), dtype=int)[to_keep_temp][np.logical_not(is_unique)]
 
         # get mask in full space
-        unique = np.ones(len(fit_params), dtype=np.bool)
+        unique = np.ones(len(fit_params), dtype=bool)
         unique[not_unique_inds_full] = False
     else:
-        unique = np.ones(len(fit_params), dtype=np.bool)
+        unique = np.ones(len(fit_params), dtype=bool)
 
     conditions = np.concatenate((conditions, np.expand_dims(unique, axis=1)), axis=1)
     condition_names += ["unique"]
