@@ -3,8 +3,8 @@ Tools for fitting data using non-linear least squares
 """
 import copy
 import numpy as np
-import scipy
 import scipy.optimize
+import affine
 
 
 def fit_model(img, model_fn, init_params, fixed_params=None, sd=None, bounds=None, model_jacobian=None, **kwargs):
@@ -583,7 +583,7 @@ def gauss3d(x, y, z, p):
     phi = p[8]
     theta = p[9]
     psi = p[10]
-    rot_mat = euler_mat_inv(phi, theta, psi)
+    rot_mat = affine.euler_mat_inv(phi, theta, psi)
     xrot = (x - p[1]) * rot_mat[0, 0] + (y - p[2]) * rot_mat[0, 1] + (z - p[3]) * rot_mat[0, 2]
     yrot = (x - p[1]) * rot_mat[1, 0] + (y - p[2]) * rot_mat[1, 1] + (z - p[3]) * rot_mat[1, 2]
     zrot = (x - p[1]) * rot_mat[2, 0] + (y - p[2]) * rot_mat[2, 1] + (z - p[3]) * rot_mat[2, 2]
@@ -599,8 +599,8 @@ def gauss3d_jacobian(x, y, z, p):
     theta = p[9]
     psi = p[10]
 
-    rot_mat = euler_mat_inv(phi, theta, psi)
-    dphi, dtheta, dpsi = euler_mat_inv_derivatives(phi, theta, psi)
+    rot_mat = affine.euler_mat_inv(phi, theta, psi)
+    dphi, dtheta, dpsi = affine.euler_mat_inv_derivatives(phi, theta, psi)
 
     xrot = (x - p[1]) * rot_mat[0, 0] + (y - p[2]) * rot_mat[0, 1] + (z - p[3]) * rot_mat[0, 2]
     yrot = (x - p[1]) * rot_mat[1, 0] + (y - p[2]) * rot_mat[1, 1] + (z - p[3]) * rot_mat[1, 2]
@@ -630,70 +630,3 @@ def gauss3d_jacobian(x, y, z, p):
            ]
 
     return jac
-
-
-def euler_mat(phi, theta, psi):
-    """
-    Define our euler angles connecting the body frame to the space/lab frame by
-
-    r_lab = U_z(phi) * U_y(theta) * U_z(psi) * r_body
-
-    Consider the z-axis in the body frame. This axis is then orientated at [cos(phi)*sin(theta), sin(phi)*sin(theta), cos(theta)]
-    in the space frame. i.e. phi, theta are the usual polar angles. psi represents a rotation of the object about its own axis.
-
-    U_z(phi) = [[cos(phi), -sin(phi), 0], [sin(phi), cos(phi), 0], [0, 0, 1]]
-    U_y(theta) = [[cos(theta), 0, sin(theta)], [0, 1, 0], [-sin(theta), 0, cos(theta)]]
-    """
-    euler_mat = np.array([[np.cos(phi) * np.cos(theta) * np.cos(psi) - np.sin(phi) * np.sin(psi),
-                          -np.cos(phi) * np.cos(theta) * np.sin(psi) - np.sin(phi) * np.cos(psi),
-                           np.cos(phi) * np.sin(theta)],
-                          [np.sin(phi) * np.cos(theta) * np.cos(psi) + np.cos(phi) * np.sin(psi),
-                          -np.sin(phi) * np.cos(theta) * np.sin(psi) + np.cos(phi) * np.cos(psi),
-                           np.sin(phi) * np.sin(theta)],
-                          [-np.sin(theta) * np.cos(psi), np.sin(theta) * np.sin(psi), np.cos(theta)]])
-
-    return euler_mat
-
-
-def euler_mat_inv(phi, theta, psi):
-    """
-    r_body = U_z(-psi) * U_y(-theta) * U_z(-phi) * r_lab
-    """
-
-    inv = euler_mat(-psi, -theta, -phi)
-    return inv
-
-
-def euler_mat_derivatives(phi, theta, psi):
-    dphi = np.array([[-np.sin(phi) * np.cos(theta) * np.cos(psi) - np.cos(phi) * np.sin(psi),
-                       np.sin(phi) * np.cos(theta) * np.sin(psi) - np.cos(phi) * np.cos(psi),
-                      -np.sin(phi) * np.sin(theta)],
-                     [ np.cos(phi) * np.cos(theta) * np.cos(psi) - np.sin(phi) * np.sin(psi),
-                      -np.cos(phi) * np.cos(theta) * np.sin(psi) - np.sin(phi) * np.cos(psi),
-                       np.cos(phi) * np.sin(theta)],
-                     [0, 0, 0]])
-    dtheta = np.array([[-np.cos(phi) * np.sin(theta) * np.cos(psi),
-                         np.cos(phi) * np.sin(theta) * np.sin(psi),
-                         np.cos(phi) * np.cos(theta)],
-                       [-np.sin(phi) * np.sin(theta) * np.cos(psi),
-                         np.sin(phi) * np.sin(theta) * np.sin(psi),
-                         np.sin(phi) * np.cos(theta)],
-                       [-np.cos(theta) * np.cos(psi), np.cos(theta) * np.sin(psi), -np.sin(theta)]])
-    dpsi = np.array([[-np.cos(phi) * np.cos(theta) * np.sin(psi) - np.sin(phi) * np.cos(psi),
-                      -np.cos(phi) * np.cos(theta) * np.cos(psi) + np.sin(phi) * np.sin(psi),
-                      0],
-                     [-np.sin(phi) * np.cos(theta) * np.sin(psi) + np.cos(phi) * np.cos(psi),
-                      -np.sin(phi) * np.cos(theta) * np.cos(psi) - np.cos(phi) * np.sin(psi),
-                      0],
-                     [np.sin(theta) * np.sin(psi), np.sin(theta) * np.cos(psi), 0]])
-
-    return dphi, dtheta, dpsi
-
-
-def euler_mat_inv_derivatives(phi, theta, psi):
-    d1, d2, d3 = euler_mat_derivatives(-psi, -theta, -phi)
-    dphi = -d3
-    dtheta = -d2
-    dpsi = -d1
-
-    return dphi, dtheta, dpsi

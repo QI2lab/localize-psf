@@ -21,6 +21,7 @@ from matplotlib.colors import PowerNorm, LinearSegmentedColormap, Normalize
 
 import localize
 import fit
+import affine
 import rois
 
 # most of the functions don't require this module, and it does not easily pip install,
@@ -557,7 +558,7 @@ def oversample_pixel(x, y, z, ds, sf, euler_angles=(0., 0., 0.)):
 
         # rotate points to correct position using normal vector
         # for now we will fix x, but lose generality
-        mat = fit.euler_mat(*euler_angles)
+        mat = affine.euler_mat(*euler_angles)
         result = mat.dot(np.concatenate((xp.ravel()[None, :], yp.ravel()[None, :], zp.ravel()[None, :]), axis=0))
         xs, ys, zs = result
 
