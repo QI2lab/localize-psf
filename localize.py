@@ -8,6 +8,7 @@ import numpy as np
 import scipy.signal
 import joblib
 import matplotlib.pyplot as plt
+#import gc
 #
 import rois as roi_fns
 import fit
@@ -132,9 +133,17 @@ def filter_convolve(imgs, kernel, use_gpu=CUPY_AVAILABLE):
 
         # todo: unclear if this matters, or if these should be immediately after each variable is consummed
         del kernel_cp
+        kernel_cp = None
         del imgs_cp
+        imgs_cp = None
         del norm_cp
+        norm_cp = None
         del imgs_filtered_cp
+        imgs_filtered_cp = None
+        mempool = cp.get_default_memory_pool()
+        mempool.free_all_blocks()
+        
+        #gc.collect()
     else:
         imgs_filtered = scipy.signal.fftconvolve(imgs, kernel, mode="same") / \
                         scipy.signal.fftconvolve(np.ones(imgs.shape), kernel, mode="same")
