@@ -1220,7 +1220,7 @@ def autofit_psfs(imgs, psf_roi_size, dx, dz, wavelength, ni=1.5, model='vectoria
     # ###################################
     # plot individual localizations
     # ###################################
-    ind_to_plot = np.arange(len(to_keep), dtype=np.int)[to_keep][:num_localizations_to_plot]
+    ind_to_plot = np.arange(len(to_keep), dtype=int)[to_keep][:num_localizations_to_plot]
     results = joblib.Parallel(n_jobs=-1, verbose=10, timeout=None)(
         joblib.delayed(localize.plot_gauss_roi)(fit_params[ind], rois[ind], imgs, coords, init_params[ind], figsize=figsize,
                                                 prefix="localization_roi_%d" % ind, save_dir=save_dir)
@@ -1243,7 +1243,7 @@ def autofit_psfs(imgs, psf_roi_size, dx, dz, wavelength, ni=1.5, model='vectoria
     # ###################################
     nps = len(psf_percentiles)
     psfs_real = np.zeros((nps,) + tuple(psf_roi_size))
-    otfs_real = np.zeros(psfs_real.shape, dtype=np.complex)
+    otfs_real = np.zeros(psfs_real.shape, dtype=complex)
     fit_params_real = np.zeros((nps, 6))
     for ii in range(len(psf_percentiles)):
         # only keep smallest so many percent of spots
