@@ -8,8 +8,6 @@ import numpy as np
 import scipy.signal
 import joblib
 import matplotlib.pyplot as plt
-#import gc
-#
 import rois as roi_fns
 import fit
 import fit_psf as psf
@@ -106,17 +104,14 @@ def get_filter_kernel(sigmas, drs, sigma_cutoff=2):
 
 def filter_convolve(imgs, kernel, use_gpu=CUPY_AVAILABLE):
     """
-    Convolution fitler using kernel with GPU support
+    Convolution filter using kernel with GPU support
 
     # todo: how much memory does convolution require? Much more than I expect...
 
-    :param imgs:
-    :param sigmas: (sigma_z, sigma_y, sigma_x)
-    :param dc:
-    :param theta:
-    :param dstage:
-    :param sigma_cutoff: number of sigmas to cutoff the kernel at # todo: allow different in different directions...
-    :return:
+    :param imgs: images to be convolved
+    :param kernel: kernel to be convolved
+    :param bool use_gpu:
+    :return imgs_filtered:
     """
 
     # convolve, and deal with edges by normalizing
@@ -126,24 +121,27 @@ def filter_convolve(imgs, kernel, use_gpu=CUPY_AVAILABLE):
         imgs_filtered_cp = cupyx.scipy.signal.fftconvolve(imgs_cp, kernel_cp, mode="same")
         imgs_filtered = cp.asnumpy(imgs_filtered_cp)
 
+        imgs_cp = None
+        del imgs_cp
+
+        imgs_filtered_cp = None
+        del imgs_filtered_cp
+
         norm_cp = cupyx.scipy.signal.fftconvolve(cp.ones(imgs.shape), kernel_cp, mode="same")
         norm = cp.asnumpy(norm_cp)
 
         imgs_filtered = imgs_filtered / norm
 
-        # todo: unclear if this matters, or if these should be immediately after each variable is consummed
-        del kernel_cp
         kernel_cp = None
-        del imgs_cp
-        imgs_cp = None
-        del norm_cp
+        del kernel_cp
+
         norm_cp = None
-        del imgs_filtered_cp
-        imgs_filtered_cp = None
+        del norm_cp
+
         mempool = cp.get_default_memory_pool()
         mempool.free_all_blocks()
-        
-        #gc.collect()
+        # pinned_mempool = cp.get_default_pinned_memory_pool()
+
     else:
         imgs_filtered = scipy.signal.fftconvolve(imgs, kernel, mode="same") / \
                         scipy.signal.fftconvolve(np.ones(imgs.shape), kernel, mode="same")
