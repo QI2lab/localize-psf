@@ -189,5 +189,47 @@ class Test_affine(unittest.TestCase):
         # probably limited by peak height finding routine
         self.assertAlmostEqual(phase_roi_ft, phase_fit_roi_ft, 2)
 
+    def test_euler(self):
+        em = affine.euler_mat(15 * np.pi / 180, 17.2346346 * np.pi / 180, 67 * np.pi/180)
+        np.testing.assert_allclose(np.identity(3), em.dot(em.transpose()), atol=1e-10)
+
+    def test_euler_inv(self):
+        params = [15 * np.pi / 180, 17.2346346 * np.pi / 180, 67 * np.pi / 180]
+        em = affine.euler_mat(*params)
+        em_inv = affine.euler_mat_inv(*params)
+        np.testing.assert_allclose(np.identity(3), em.dot(em_inv), atol=1e-10)
+
+    def test_euler_derivative(self):
+        ps = np.array([15 * np.pi / 180, 17.2346346 * np.pi / 180, 67 * np.pi / 180])
+        num_p = len(ps)
+
+        dp = 1e-7
+
+        jac = affine.euler_mat_derivatives(*ps)
+        jac_est = [[]] * num_p
+        for ii in range(num_p):
+            ps_dp = np.array(ps, copy=True)
+            ps_dp[ii] -= dp
+
+            jac_est[ii] = 1 / dp * (affine.euler_mat(*ps) - affine.euler_mat(*ps_dp))
+            # print(np.max(np.abs(jac_est[ii] - jac[ii])))
+            np.testing.assert_allclose(jac[ii], jac_est[ii], atol=1e-6)
+
+    def test_euler_inv_derivative(self):
+        ps = np.array([15 * np.pi / 180, 17.2346346 * np.pi / 180, 67 * np.pi / 180])
+        num_p = len(ps)
+
+        dp = 1e-7
+
+        jac = affine.euler_mat_inv_derivatives(*ps)
+        jac_est = [[]] * num_p
+        for ii in range(num_p):
+            ps_dp = np.array(ps, copy=True)
+            ps_dp[ii] -= dp
+
+            jac_est[ii] = 1 / dp * (affine.euler_mat_inv(*ps) - affine.euler_mat_inv(*ps_dp))
+            # print(np.max(np.abs(jac_est[ii] - jac[ii])))
+            np.testing.assert_allclose(jac[ii], jac_est[ii], atol=1e-6)
+
 if __name__ == "__main__":
     unittest.main()

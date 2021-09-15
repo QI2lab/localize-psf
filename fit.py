@@ -1,5 +1,8 @@
 """
-Tools for fitting data using non-linear least squares
+Tools for fitting data using non-linear least squares. The primary fitting functions fit_model() and
+fit_least_squares() are wrappers for scipy.optimize.least_squares() which additionally handle fixing
+parameters and calculating standard uncertainties. In addition, various commonly used fit functions are collected here,
+primarily 1D, 2D, and 3D gaussians allowing for arbitrary rotations.
 """
 import copy
 import numpy as np
@@ -9,7 +12,9 @@ import affine
 
 def fit_model(img, model_fn, init_params, fixed_params=None, sd=None, bounds=None, model_jacobian=None, **kwargs):
     """
-    Fit 2D model function to an image. Any Nan values in the image will be ignored. Wrapper for fit_least_squares
+    Fit 2D model function to an image. Any Nan values in the image will be ignored. This function is a wrapper for
+    for the non-linear least squares fit function scipy.optimize.least_squares() which additionally handles fixing
+    parameters and calculating fit uncertainty.
 
     :param np.array img: nd array
     :param model_fn: function f(p)
@@ -153,12 +158,13 @@ def fit_least_squares(model_fn, init_params, fixed_params=None, bounds=None, mod
 def get_moments(img, order=1, coords=None, dims=None):
     """
     Calculate moments of distribution of arbitrary size
-    :param img:
+
+    :param img: distribution from which moments are calculated
     :param order: order of moments to be calculated
     :param coords: list of coordinate arrays for each dimension e.g. [y, x], where y, x etc. are 1D arrays
     :param dims: dimensions to be summed over. For example, given roi_size 3D array of size Nz x Ny x Nz, calculate the 2D
     moments of each slice by setting dims = [1, 2]
-    :return:
+    :return moments:
     """
 
     # todo: does not compute any cross moments, e.g. X*Y
@@ -190,7 +196,8 @@ def get_moments(img, order=1, coords=None, dims=None):
 # fit data to gaussians
 def fit_gauss1d(y, init_params=None, fixed_params=None, sd=None, x=None, bounds=None, **kwargs):
     """
-    Fit 1D Gaussian
+    Fit 1D Gaussian. This is a wrapper for fit_model() which additionally computes reasonably parameter guess values
+    from the input data y.
 
     :param y:
     :param init_params: [A, cx, sx, bg]
@@ -249,6 +256,9 @@ def fit_gauss2d(img, init_params=None, fixed_params=None, sd=None, xx=None, yy=N
     """
     Fit 2D gaussian function. The angle theta is defined clockwise from the x- (or y-) axis. NOTE: be careful
     with this when looking at results using e.g. matplotlib.imshow, as this will display the negative y-axis on top.
+
+    This is a wrapper for fit_model() which additionally computes reasonably parameter guess values
+    from the input data img.
 
     :param img: 2D image to fit
     :param init_params: [A, cx, cy, sx, sy, bg, theta]
@@ -435,7 +445,7 @@ def gauss2d(x, y, p):
 
 def gauss2d_jacobian(x, y, p):
     """
-    Jacobian of gauss_fn
+    Jacobian of gauss2d()
 
     :param x:
     :param y:
@@ -564,7 +574,7 @@ def sum_gauss2d_jacobian(x, y, p):
 
 def gauss3d(x, y, z, p):
     """
-    3D gaussian, with rotation parameterized by Euler angles
+    3D gaussian, with arbitrary rotation parameterized by Euler angles
 
     r_body = U_z(psi)^-1 U_y(theta)^-1 U_z(phi)^-1 * r_lab
     U_z(phi)^-1 = [[cos(phi), -sin(phi), 0], [sin(phi), cos(phi), 0], [0, 0, 1]]
@@ -573,11 +583,11 @@ def gauss3d(x, y, z, p):
     Take the z-axis in the frame of the object, and consider the z-axis in the lab frame. phi and theta describe
     how the transformation to overlap these two. psi gives the gives the angle the object is rotated about its own axis
 
-    :param x: x-coordinates to evaluate function at.
-    :param y: y-coordinates to evaluate function at. Either same size as x, or broadcastable with x.
-    :param p: [A, cx, cy, cz, sxrot, syrot, szrot, bg, phi, theta, psi]
+    :param x: x-coordinates to evaluate function at. x, y, z must be the same size, or broadcastable to the same size
+    :param y: y-coordinates to evaluate function at.
+    :param z: z-coordinates to evaluate function at.
+    :param p: [A, cx, cy, cz, sigma x_rot, sigma y_rot, sigma z_rot, bg, phi, theta, psi]
     :return value:
-
     """
 
     phi = p[8]
@@ -593,6 +603,14 @@ def gauss3d(x, y, z, p):
 
 # 3D rotation functions
 def gauss3d_jacobian(x, y, z, p):
+    """
+    Calculate Jacobian matrix of gauss3d
+
+    :param x: x-coordinates to evaluate function at.
+    :param y: y-coordinates to evaluate function at. Either same size as x, or broadcastable with x.
+    :param p: [A, cx, cy, cz, sxrot, syrot, szrot, bg, phi, theta, psi]
+    :return value:
+    """
     bcast_shape = (x + y + z).shape
 
     phi = p[8]
@@ -609,7 +627,7 @@ def gauss3d_jacobian(x, y, z, p):
 
     jac = [exp,
            p[0] * exp * (xrot / p[4]**2 * rot_mat[0, 0] + yrot / p[5]**2 * rot_mat[1, 0] + zrot / p[6]**2 * rot_mat[2, 0]),
-           p[0] * exp * (xrot / p[4]**2 * rot_mat[0, 1] + yrot / p[5]**2 * rot_mat[1, 1] + zrot / p[6]**2 * rot_mat[1, 2]),
+           p[0] * exp * (xrot / p[4]**2 * rot_mat[0, 1] + yrot / p[5]**2 * rot_mat[1, 1] + zrot / p[6]**2 * rot_mat[2, 1]),
            p[0] * exp * (xrot / p[4]**2 * rot_mat[0, 2] + yrot / p[5]**2 * rot_mat[1, 2] + zrot / p[6]**2 * rot_mat[2, 2]),
            p[0] * exp * xrot ** 2 / p[4] ** 3,
            p[0] * exp * yrot ** 2 / p[5] ** 3,

@@ -558,10 +558,13 @@ def euler_mat(phi, theta, psi):
 def euler_mat_inv(phi, theta, psi):
     """
     r_body = U_z(-psi) * U_y(-theta) * U_z(-phi) * r_lab
-    """
 
-    inv = euler_mat(-psi, -theta, -phi)
-    return inv
+    @param phi:
+    @param theta:
+    @param psi:
+    @return dphi, dtheta, dsi:
+    """
+    return euler_mat(-psi, -theta, -phi)
 
 
 def euler_mat_derivatives(phi, theta, psi):
@@ -571,7 +574,7 @@ def euler_mat_derivatives(phi, theta, psi):
     @param phi:
     @param theta:
     @param psi:
-    @return:
+    @return dphi, dtheta, dsi:
     """
     dphi = np.array([[-np.sin(phi) * np.cos(theta) * np.cos(psi) - np.cos(phi) * np.sin(psi),
                        np.sin(phi) * np.cos(theta) * np.sin(psi) - np.cos(phi) * np.cos(psi),
@@ -605,7 +608,7 @@ def euler_mat_inv_derivatives(phi, theta, psi):
     @param phi:
     @param theta:
     @param psi:
-    @return:
+    @return dphi, dtheta, dpsi:
     """
     d1, d2, d3 = euler_mat_derivatives(-psi, -theta, -phi)
     dphi = -d3
