@@ -497,6 +497,44 @@ def fit_xform_points(from_pts, to_pts):
     return affine_mat
 
 
+def fit_xform_points_ransac(from_pts, to_pts, dist_err_max=0.3, niterations=20):
+    """
+    Determine affine transformation using RANSAC
+    """
+
+    ninit_pts = from_pts.shape[1] * 3
+    npts = from_pts.shape[0]
+
+    error_best = np.inf
+    xform_best = None
+    inliers_best = None
+    for ii in range(niterations):
+        # get initial proposed points and determine transformation
+        is_inlier_prop = np.zeros(npts, dtype=bool)
+        is_inlier_prop[np.sort(np.random.choice(np.arange(npts), size=ninit_pts, replace=False))] = True
+        not_inlier_prop = np.logical_not(is_inlier_prop)
+
+        xform_prop = fit_xform_points(from_pts[is_inlier_prop], to_pts[is_inlier_prop])
+
+        # get distance errors of other points to determine if inliers or outliers
+        dist_errs = np.sqrt(np.linalg.norm(to_pts[not_inlier_prop] -
+                            xform_points(from_pts[not_inlier_prop], xform_prop), axis=1))
+
+        is_inlier_prop[not_inlier_prop] = dist_errs < dist_err_max
+
+        # compute final distance error
+        dist_errs = np.sqrt(np.linalg.norm(to_pts[is_inlier_prop] -
+                                          xform_points(from_pts[is_inlier_prop], xform_prop), axis=1))
+        model_err = np.mean(dist_errs)
+
+        if model_err < error_best:
+            error_best = model_err
+            xform_best = np.array(xform_prop, copy=True)
+            inliers_best = np.array(is_inlier_prop, copy=True)
+
+    return xform_best, inliers_best, error_best
+
+
 def fit_xform_img(img, img_xformed, init_params=None):
     """
     Fit affine transformation by comparing img with transformed images of mask
@@ -526,6 +564,7 @@ def fit_xform_img(img, img_xformed, init_params=None):
     pfit = fit_dict['x']
 
     return pfit
+
 
 def euler_mat(phi, theta, psi):
     """
