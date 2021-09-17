@@ -161,7 +161,8 @@ def get_moments(img, order=1, coords=None, dims=None):
 
     :param img: distribution from which moments are calculated
     :param order: order of moments to be calculated
-    :param coords: list of coordinate arrays for each dimension e.g. [y, x], where y, x etc. are 1D arrays
+    :param coords: list of coordinate arrays for each dimension e.g. (y, x), where y, x etc. are broadcastable to the
+    same size as img
     :param dims: dimensions to be summed over. For example, given roi_size 3D array of size Nz x Ny x Nz, calculate the 2D
     moments of each slice by setting dims = [1, 2]
     :return moments:
@@ -174,6 +175,7 @@ def get_moments(img, order=1, coords=None, dims=None):
 
     if coords is None:
         coords = [np.arange(s) for ii, s in enumerate(img.shape) if ii in dims]
+
     # ensure coords are float arrays to avoid overflow issues
     coords = [np.array(c, dtype=float) for c in coords]
 
@@ -186,9 +188,10 @@ def get_moments(img, order=1, coords=None, dims=None):
     # as trick to avoid having to meshgrid any of the coordinates, we can use NumPy's array broadcasting. Because this
     # looks at the trailing array dimensions, we need to swap our desired axis to be the last dimension, multiply by the
     # coordinates to do the broadcasting, and then swap back
-    moments = [np.nansum(np.swapaxes(np.swapaxes(img, ii, img.ndim-1) * c**order, ii, img.ndim-1),
-               axis=tuple(dims), dtype=float) / w
-               for ii, c in zip(dims, coords)]
+    # moments = [np.nansum(np.swapaxes(np.swapaxes(img, ii, img.ndim-1) * c**order, ii, img.ndim-1),
+    #            axis=tuple(dims), dtype=float) / w
+    #            for ii, c in zip(dims, coords)]
+    moments = [np.nansum(img * c ** order, axis=tuple(dims), dtype=float) / w for c in coords]
 
     return moments
 
@@ -290,8 +293,8 @@ def fit_gauss2d(img, init_params=None, fixed_params=None, sd=None, xx=None, yy=N
         bg = np.nanmean(img.ravel())
         A = np.max(img[to_use].ravel()) - bg
 
-        cy, cx = get_moments(img, order=1, coords=[yy[:, 0], xx[0, :]])
-        m2y, m2x = get_moments(img, order=2, coords=[yy[:, 0], xx[0, :]])
+        cy, cx = get_moments(img, order=1, coords=(yy, xx))
+        m2y, m2x = get_moments(img, order=2, coords=(yy, xx))
         with np.errstate(invalid='ignore'):
             sx = np.sqrt(m2x - cx ** 2)
             sy = np.sqrt(m2y - cy ** 2)
@@ -601,7 +604,7 @@ def gauss3d(x, y, z, p):
 
     return val
 
-# 3D rotation functions
+
 def gauss3d_jacobian(x, y, z, p):
     """
     Calculate Jacobian matrix of gauss3d
