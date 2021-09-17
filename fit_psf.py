@@ -397,7 +397,7 @@ def gaussian3d_psf_jac(x, y, z, dc, p, sf, angles=(0., 0., 0.)):
     return jac
 
 
-def gaussian_lorentzian_psf(x, y, z, p, sf=1, dc=None, angles=(0., 0., 0.)):
+def gaussian_lorentzian_psf(x, y, z, dc, p, sf=1, angles=(0., 0., 0.)):
     """
     Gaussian-Lorentzian PSF model. One difficulty with the Gaussian PSF is the weight is not the same in every z-plane,
     as we expect it should be. The Gaussian-Lorentzian form remedies this, but the functional form is no longer separable
@@ -428,7 +428,7 @@ def gaussian_lorentzian_psf(x, y, z, p, sf=1, dc=None, angles=(0., 0., 0.)):
     return psf
 
 
-def gaussian_lorentzian_psf_jac(x, y, z, p, sf=1, dc=None, angles=(0., 0., 0.)):
+def gaussian_lorentzian_psf_jac(x, y, z, dc, p, sf=1, angles=(0., 0., 0.)):
     if not isinstance(sf, int):
         raise ValueError("sf must be an integer")
 
@@ -724,7 +724,9 @@ def fit_psfmodel(img, dxy, dz, wavelength, ni, sf=1, model='vectorial',
         bg = np.mean(img[to_use].ravel())
         A = np.max(img[to_use].ravel()) - bg
 
-        cz, cy, cx = fit.get_moments(img, order=1, coords=[z, y, x])
+        cz, cy, cx = fit.get_moments(img, order=1, coords=(np.expand_dims(z, axis=(1, 2)),
+                                                           np.expand_dims(y, axis=(0, 2)),
+                                                           np.expand_dims(x, axis=(0, 1))))
 
         # iz = np.argmin(np.abs(z - cz))
         # m2y, m2x = tools.get_moments(img[iz], order=2, coords=[y, x])
