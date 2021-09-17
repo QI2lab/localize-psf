@@ -197,7 +197,7 @@ def find_peak_candidates(imgs, footprint, threshold, use_gpu_filter=CUPY_AVAILAB
     return centers_guess_inds, amps
 
 
-def filter_nearby_peaks(centers, min_xy_dist, min_z_dist, mode="average", weights=None):
+def filter_nearby_peaks(centers, min_xy_dist, min_z_dist, mode="average", weights=None, nmax=10000):
     """
     Combine multiple center positions into a reduced set, where assume all centers separated by no more than
     min_xy_dist and min_z_dist come from the same feature.
@@ -227,40 +227,123 @@ def filter_nearby_peaks(centers, min_xy_dist, min_z_dist, mode="average", weight
     if weights is None:
         weights = np.ones(len(centers_unique))
 
-    # loop through points, at each step removing any duplicates and shrinking our list
-    # after looping through a point, it cannot be subsequently removed because the relations we are checking
-    # are symmetric.
-    # todo: is it possible this can fail in "average" mode?
-    # todo: looks like this might be easier if use some tools from scipy.spatial, scipy.spatial.cKDTree
-    counter = 0
-    while counter < len(centers_unique):
-        # compute distances to all other beads
-        z_dists = np.abs(centers_unique[counter][0] - centers_unique[:, 0])
-        xy_dists = np.sqrt((centers_unique[counter][1] - centers_unique[:, 1]) ** 2 +
-                           (centers_unique[counter][2] - centers_unique[:, 2]) ** 2)
-
-        # beads which are close enough we will combine
-        combine = np.logical_and(z_dists < min_z_dist, xy_dists < min_xy_dist)
+    if len(centers_unique) > nmax:
         if mode == "average":
-            denom = np.nansum(np.logical_not(np.isnan(np.sum(centers_unique[combine], axis=1))) * weights[combine])
-            # compute new center from average and reset that position in the list
-            centers_unique[counter] = np.nansum(centers_unique[combine] * weights[combine][:, None], axis=0, dtype=float) / denom
-            weights[counter] = denom
-            combine[counter] = False
-        elif mode == "keep-one":
-            # don't want to remove the point itself
-            combine[counter] = False
-        elif mode == "remove":
-            pass
+            raise NotImplementedError("mode='average' is not implemented with nmax < np.inf. Set nmax to np.inf")
+
+        # todo: maybe I should check that dimension sizes are similar before dividing. If have very asymmetric
+        # todo: area it might be better to e.g. make more divisions along one dimension only
+
+        # if number of inputs is large, divide problem into subproblems, solve each of these, and combine results.
+        xlims = [np.min(centers[:, 2]), np.max(centers[:, 2])]
+        ylims = [np.min(centers[:, 1]), np.max(centers[:, 1])]
+        zlims = [np.min(centers[:, 0]), np.max(centers[:, 0])]
+
+        full_inds = np.arange(len(centers_unique), dtype=int)
+        centers_unique_sectors = []
+        inds_sectors = []
+
+        # divide space into octants, if each direction is large enough
+        if (zlims[1] - zlims[0]) > 2 * min_z_dist:
+            zedges = [zlims[0], 0.5 * (zlims[0] + zlims[1]), zlims[1] + min_z_dist]
         else:
-            raise ValueError("mode must be 'average', 'keep-one', or 'remove' but was '%s'" % mode)
+            zedges = [zlims[0], zlims[1] + min_z_dist]
 
-        # remove points from lists
-        inds = inds[np.logical_not(combine)]
-        centers_unique = centers_unique[np.logical_not(combine)]
-        weights = weights[np.logical_not(combine)]
+        if (ylims[1] - ylims[0]) > 2 * min_xy_dist:
+            yedges = [ylims[0], 0.5 * (ylims[0] + ylims[1]), ylims[1] + min_xy_dist]
+        else:
+            yedges = [ylims[0], ylims[1] + min_xy_dist]
 
-        counter += 1
+        if (xlims[1] - xlims[0]) > 2 * min_xy_dist:
+            xedges = [xlims[0], 0.5 * (xlims[0] + xlims[1]), xlims[1] + min_xy_dist]
+        else:
+            xedges = [xlims[0], xlims[1] + min_xy_dist]
+
+        # solve sectors independently
+        for ii in range(len(xedges) - 1):
+            for jj in range(len(yedges) - 1):
+                for kk in range(len(zedges) - 1):
+                    to_use = np.logical_and.reduce((centers_unique[:, 0] >= zedges[kk], centers_unique[:, 0] < zedges[kk + 1],
+                                                    centers_unique[:, 1] >= yedges[jj], centers_unique[:, 1] < yedges[jj + 1],
+                                                    centers_unique[:, 2] >= xedges[ii], centers_unique[:, 2] < xedges[ii + 1]))
+
+                    if np.any(to_use):
+                        cu, i = filter_nearby_peaks(centers_unique[to_use], min_xy_dist, min_z_dist, mode=mode)
+                        centers_unique_sectors.append(cu)
+                        inds_sectors.append(full_inds[to_use][i])
+
+        centers_unique_sectors = np.concatenate(centers_unique_sectors, axis=0)
+        inds_sectors = np.concatenate(inds_sectors)
+
+        # check overlap regions between sectors
+        for ii in range(len(xedges) - 2):
+            to_use = np.logical_and(centers_unique_sectors[:, 2] >= xedges[ii + 1] - min_xy_dist,
+                                    centers_unique_sectors[:, 2] < xedges[ii + 1] + min_xy_dist)
+            if np.any(to_use):
+                centers_unique_overlap, i = filter_nearby_peaks(centers_unique_sectors[to_use], min_xy_dist, min_z_dist, mode=mode)
+
+                # get full centers by adding any that were not in the overlap region with the reduced set from the overlap region
+                centers_unique_sectors = np.concatenate((centers_unique_sectors[np.logical_not(to_use)], centers_unique_overlap))
+                inds_sectors = np.concatenate((inds_sectors[np.logical_not(to_use)], full_inds[inds_sectors][to_use][i]))
+
+        for ii in range(len(yedges) - 2):
+            to_use = np.logical_and(centers_unique_sectors[:, 1] >= yedges[ii + 1] - min_xy_dist,
+                                    centers_unique_sectors[:, 1] < yedges[ii + 1] + min_xy_dist)
+
+            if np.any(to_use):
+                centers_unique_overlap, i = filter_nearby_peaks(centers_unique_sectors[to_use], min_xy_dist, min_z_dist, mode=mode)
+
+                centers_unique_sectors = np.concatenate((centers_unique_sectors[np.logical_not(to_use)], centers_unique_overlap))
+                inds_sectors = np.concatenate((inds_sectors[np.logical_not(to_use)], full_inds[inds_sectors][to_use][i]))
+
+        for ii in range(len(zedges) - 2):
+            to_use = np.logical_and(centers_unique_sectors[:, 0] >= zedges[ii + 1] - min_z_dist,
+                                    centers_unique_sectors[:, 0] < zedges[ii + 1] + min_z_dist)
+            if np.any(to_use):
+                centers_unique_overlap, i = filter_nearby_peaks(centers_unique_sectors[to_use], min_xy_dist, min_z_dist, mode=mode)
+
+                centers_unique_sectors = np.concatenate((centers_unique_sectors[np.logical_not(to_use)], centers_unique_overlap))
+                inds_sectors = np.concatenate((inds_sectors[np.logical_not(to_use)], full_inds[inds_sectors][to_use][i]))
+
+        # full results
+        centers_unique = centers_unique_sectors
+        inds = inds_sectors
+
+    else:
+        # loop through points, at each step removing any duplicates and shrinking our list
+        # after looping through a point, it cannot be subsequently removed because the relations we are checking
+        # are symmetric.
+        # todo: is it possible this can fail in "average" mode?
+        # todo: looks like this might be easier if use some tools from scipy.spatial, scipy.spatial.cKDTree
+        counter = 0
+        while counter < len(centers_unique):
+            # compute distances to all other beads
+            z_dists = np.abs(centers_unique[counter][0] - centers_unique[:, 0])
+            xy_dists = np.sqrt((centers_unique[counter][1] - centers_unique[:, 1]) ** 2 +
+                               (centers_unique[counter][2] - centers_unique[:, 2]) ** 2)
+
+            # beads which are close enough we will combine
+            combine = np.logical_and(z_dists < min_z_dist, xy_dists < min_xy_dist)
+            if mode == "average":
+                denom = np.nansum(np.logical_not(np.isnan(np.sum(centers_unique[combine], axis=1))) * weights[combine])
+                # compute new center from average and reset that position in the list
+                centers_unique[counter] = np.nansum(centers_unique[combine] * weights[combine][:, None], axis=0, dtype=float) / denom
+                weights[counter] = denom
+                combine[counter] = False
+            elif mode == "keep-one":
+                # don't want to remove the point itself
+                combine[counter] = False
+            elif mode == "remove":
+                pass
+            else:
+                raise ValueError("mode must be 'average', 'keep-one', or 'remove' but was '%s'" % mode)
+
+            # remove points from lists
+            inds = inds[np.logical_not(combine)]
+            centers_unique = centers_unique[np.logical_not(combine)]
+            weights = weights[np.logical_not(combine)]
+
+            counter += 1
 
     return centers_unique, inds
 
@@ -542,7 +625,7 @@ def fit_gauss_rois(img_rois, coords_rois, init_params, max_number_iterations=100
     :param float dc: pixel size, only used for oversampling
     :param (float, float, float) angles: euler angles describing pixel orientation. Only used for oversampling.
     :param estimator: "LSE" or "MLE"
-    :param model: "gaussian" or "gaussian-lorentzian"
+    :param model: "gaussian", "rotated-gaussian", "gaussian-lorentzian"
     :param bool use_gpu:
     :return:
     """
@@ -622,6 +705,8 @@ def fit_gauss_rois(img_rois, coords_rois, init_params, max_number_iterations=100
             model_id = gf.ModelID.GAUSS_3D_ARB
         elif model == "gaussian-lorentzian":
             model_id = gf.ModelID.GAUSS_LOR_3D_ARB
+        elif model == "rotated-gaussian":
+            model_id = gf.ModelID.GAUSS_3D_ROT_ARB
         else:
             raise ValueError("'model' must be 'gaussian' or 'gaussian-lorentzian' but was '%s'" % model)
 
@@ -639,17 +724,26 @@ def fit_gauss_rois(img_rois, coords_rois, init_params, max_number_iterations=100
     return fit_params, fit_states, chi_sqrs, niters, fit_t
 
 
-def plot_gauss_roi(fit_params, roi, imgs, coords, init_params=None, same_color_scale=True, figsize=(16, 8),
-                   prefix="", save_dir=None):
+def plot_gauss_roi(fit_params, roi, imgs, coords, init_params=None, same_color_scale=True,
+                   fit_fn=None,
+                   figsize=(16, 8), prefix="", save_dir=None):
     """
     plot results from fit_roi()
     :param fit_params:
     :param roi: [zstart, zend, ystart, yend, xstart, xend]
     :param imgs:
     :param coords: (z, y, x) broadcastable to same size as imgs
+    :param init_params:
+    :param bool same_color_scale: whether or not to use same color scale for data and fits
+    :param fit_fn: function used for fitting. Must have arguments (x, y, z, dc, fit_params, sf=1)
     :param figsize:
+    :param prefix: prefix prepended before save name
+    :param save_dir: if None, do not save results
     :return:
     """
+    if fit_fn is None:
+        fit_fn = psf.gaussian3d_psf
+
     z, y, x = coords
     # extract useful coordinate info
     dc = x[0, 0, 1] - x[0, 0, 0]
@@ -670,37 +764,41 @@ def plot_gauss_roi(fit_params, roi, imgs, coords, init_params=None, same_color_s
     vmax_roi = np.percentile(img_roi[np.logical_not(np.isnan(img_roi))], 99.9)
 
     # git fit
-    img_fit = psf.gaussian3d_psf(x_roi, y_roi, z_roi, dc, fit_params, sf=1)
+    img_fit = fit_fn(x_roi, y_roi, z_roi, dc, fit_params, sf=1)
 
     # ################################
     # plot results interpolated on regular grid
     # ################################
     figh_interp = plt.figure(figsize=figsize)
-    st_str = "Fit, max projections, interpolated, ROI = [%d, %d, %d, %d, %d, %d]\n" \
-             "         A=%3.3f, cx=%3.5f, cy=%3.5f, cz=%3.5f, sxy=%3.5f, sz=%3.5f, bg=%3.3f" % \
-             (roi[0], roi[1], roi[2], roi[3], roi[4], roi[5],
-              fit_params[0], fit_params[1], fit_params[2], fit_params[3], fit_params[4], fit_params[5], fit_params[6])
+    st_str = "Fit, max projections, interpolated, ROI = [%d, %d, %d, %d, %d, %d]\n" % tuple(roi) + \
+             "         A=%3.3f, cx=%3.5f, cy=%3.5f, cz=%3.5f, sxy=%3.5f, sz=%3.5f, bg=%3.3f" % tuple(fit_params)
     if init_params is not None:
-        st_str += "\nguess A=%3.3f, cx=%3.5f, cy=%3.5f, cz=%3.5f, sxy=%3.5f, sz=%3.5f, bg=%3.3f" % \
-                  (init_params[0], init_params[1], init_params[2], init_params[3], init_params[4], init_params[5],
-                   init_params[6])
+        st_str += "\nguess A=%3.3f, cx=%3.5f, cy=%3.5f, cz=%3.5f, sxy=%3.5f, sz=%3.5f, bg=%3.3f" % tuple(init_params)
     plt.suptitle(st_str)
 
     grid = plt.GridSpec(2, 4)
 
+    # ################################
+    # XY, data
+    # ################################
     ax = plt.subplot(grid[0, 1])
     extent = [y_roi[0, 0, 0] - 0.5 * dc, y_roi[0, -1, 0] + 0.5 * dc, x_roi[0, 0, 0] - 0.5 * dc, x_roi[0, 0, -1] + 0.5 * dc]
     plt.imshow(np.nanmax(img_roi, axis=0).transpose(), vmin=vmin_roi, vmax=vmax_roi, origin="lower",
                extent=extent, cmap="bone")
+
     plt.plot(center_fit[1], center_fit[2], 'mx')
     if init_params is not None:
         plt.plot(center_guess[1], center_guess[2], 'gx')
+
     ax.set_ylim(extent[2:4])
     ax.set_xlim(extent[0:2])
     plt.xlabel("Y (um)")
     plt.ylabel("X (um)")
     plt.title("XY")
 
+    # ################################
+    # XZ, data
+    # ################################
     ax = plt.subplot(grid[0, 0])
     extent = [z_roi[0, 0, 0] - 0.5 * dz, z_roi[-1, 0, 0] + 0.5 * dz, x_roi[0, 0, 0] - 0.5 * dc, x_roi[0, 0, -1] + 0.5 * dc]
     plt.imshow(np.nanmax(img_roi, axis=1).transpose(), vmin=vmin_roi, vmax=vmax_roi, origin="lower",
@@ -714,15 +812,20 @@ def plot_gauss_roi(fit_params, roi, imgs, coords, init_params=None, same_color_s
     plt.ylabel("X (um)")
     plt.title("XZ")
 
+    # ################################
+    # YZ, data
+    # ################################
     ax = plt.subplot(grid[1, 1])
     extent = [y_roi[0, 0, 0] - 0.5 * dc, y_roi[0, -1, 0] + 0.5 * dc, z_roi[0, 0, 0] - 0.5 * dz, z_roi[-1, 0, 0] + 0.5 * dz]
     with warnings.catch_warnings():
         warnings.filterwarnings('ignore', r'All-NaN (slice|axis) encountered')
 
         plt.imshow(np.nanmax(img_roi, axis=2), vmin=vmin_roi, vmax=vmax_roi, origin="lower", extent=extent, cmap="bone")
+
     plt.plot(center_fit[1], center_fit[0], 'mx')
     if init_params is not None:
         plt.plot(center_guess[1], center_guess[0], 'gx')
+
     ax.set_ylim(extent[2:4])
     ax.set_xlim(extent[0:2])
     plt.xlabel("Y (um)")
@@ -736,6 +839,9 @@ def plot_gauss_roi(fit_params, roi, imgs, coords, init_params=None, same_color_s
         vmin_fit = np.percentile(img_fit, 1)
         vmax_fit = np.percentile(img_fit, 99.9)
 
+    # ################################
+    # YX, fit
+    # ################################
     ax = plt.subplot(grid[0, 3])
     extent = [y_roi[0, 0, 0] - 0.5 * dc, y_roi[0, -1, 0] + 0.5 * dc, x_roi[0, 0, 0] - 0.5 * dc, x_roi[0, 0, -1] + 0.5 * dc]
     plt.imshow(np.nanmax(img_fit, axis=0).transpose(), vmin=vmin_fit, vmax=vmax_fit, origin="lower", extent=extent, cmap="bone")
@@ -747,6 +853,9 @@ def plot_gauss_roi(fit_params, roi, imgs, coords, init_params=None, same_color_s
     plt.xlabel("Y (um)")
     plt.ylabel("X (um)")
 
+    # ################################
+    # ZX, fit
+    # ################################
     ax = plt.subplot(grid[0, 2])
     extent = [z_roi[0, 0, 0] - 0.5 * dz, z_roi[-1, 0, 0] + 0.5 * dz, x_roi[0, 0, 0] - 0.5 * dc, x_roi[0, 0, -1] + 0.5 * dc]
     plt.imshow(np.nanmax(img_fit, axis=1).transpose(), vmin=vmin_fit, vmax=vmax_fit, origin="lower", extent=extent, cmap="bone")
@@ -758,6 +867,9 @@ def plot_gauss_roi(fit_params, roi, imgs, coords, init_params=None, same_color_s
     plt.xlabel("Z (um)")
     plt.ylabel("X (um)")
 
+    # ################################
+    # YZ, fit
+    # ################################
     ax = plt.subplot(grid[1, 3])
     extent = [y_roi[0, 0, 0] - 0.5 * dc, y_roi[0, -1, 0] + 0.5 * dc, z_roi[0, 0, 0] - 0.5 * dz, z_roi[-1, 0, 0] + 0.5 * dz]
     plt.imshow(np.nanmax(img_fit, axis=2), vmin=vmin_fit, vmax=vmax_fit, origin="lower", extent=extent, cmap="bone")
@@ -769,7 +881,6 @@ def plot_gauss_roi(fit_params, roi, imgs, coords, init_params=None, same_color_s
     plt.xlabel("Y (um)")
     plt.ylabel("Z (um)")
 
-    # plt.show(figh_interp)
     if save_dir is not None:
         figh_interp.savefig(os.path.join(save_dir, "%s.png" % prefix))
         plt.close(figh_interp)
