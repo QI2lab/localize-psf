@@ -189,6 +189,38 @@ class Test_affine(unittest.TestCase):
         # probably limited by peak height finding routine
         self.assertAlmostEqual(phase_roi_ft, phase_fit_roi_ft, 2)
 
+    def test_fit_affine_points_2d(self):
+        xform = np.array([[5.346346, 3.4357347, 25.7677],
+                          [6.4747574, 2.236262, -56.777],
+                          [0, 0, 1]])
+
+        npts = 4
+        from_pts = np.stack((np.random.uniform(-1000, 1000, size=npts),
+                             np.random.uniform(-1000, 1000, size=npts)), axis=1)
+
+        to_pts = affine.xform_points(from_pts, xform)
+
+        xform_fit, _ = affine.fit_xform_points(from_pts, to_pts)
+
+        np.testing.assert_allclose(np.zeros((3, 3)), xform - xform_fit, atol=1e-10)
+
+    def test_fit_affine_points_3d(self):
+        xform = np.array([[5.346346, 3.4357347, 8.236236, 25.7677],
+                          [6.4747574, 2.236262, 0.23236236, -56.777],
+                          [1.2362, 66.23562, 140, -56.777],
+                          [0, 0, 0, 1]])
+
+        npts = 9
+        from_pts = np.stack((np.random.uniform(-1000, 1000, size=npts),
+                             np.random.uniform(-1000, 1000, size=npts),
+                             np.random.uniform(-1000, 1000, size=npts)), axis=1)
+
+        to_pts = affine.xform_points(from_pts, xform)
+
+        xform_fit, _ = affine.fit_xform_points(from_pts, to_pts)
+
+        np.testing.assert_allclose(np.zeros((4, 4)), xform - xform_fit, atol=1e-10)
+
     def test_euler(self):
         em = affine.euler_mat(15 * np.pi / 180, 17.2346346 * np.pi / 180, 67 * np.pi/180)
         np.testing.assert_allclose(np.identity(3), em.dot(em.transpose()), atol=1e-10)

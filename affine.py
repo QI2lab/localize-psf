@@ -8,7 +8,7 @@ The affine transformation (in homogeneous coordinates) is represented by a matri
 Given a function defined on object space, g(xo, yo), we can define a corresponding function on image space
 gi(xi, yi) = g(T^{-1} [[xi], [yi], [1]])
 """
-
+import joblib
 import numpy as np
 from numpy import fft
 import copy
@@ -424,115 +424,139 @@ def get_roi_sinusoid_params(roi, fs, phi, dr=None):
 
 
 # fit affine transformation
-def fit_xform_points(from_pts, to_pts):
+def fit_xform_points(from_pts, to_pts, translate_only=False):
     """
-    Solve for affine transformation T = [[A, b], [0, ..., 0, 1]], satisfying
+    Solve for an affine transformation of arbitrary dimensions, where the transformation
+    T = [[A, b], [0, ..., 0, 1]],
     to_pts = A * from_pts + b, or
-    to_pts_aug = T * from_pts_aug
-    Put this in roi_size form where Gaussian elimination is applicable by taking transpose of this,
-    from_pts_aug^t * T^t = to_pts_aug^t
-
-    This works for any dimension
-
-    Based on a`function <https://elonen.iki.fi/code/misc-notes/affine-fit/>` written by Jarno Elonen
-    <elonen@iki.fi> in 2007 (Placed in Public Domain),
-    which was in turn based on the paper "Fitting affine and orthogonal transformations between
-    two sets of points" Mathematical Communications 9 27-34 (2004) by Helmuth Späth, available
-    `here <https://hrcak.srce.hr/712>`
+    to_pts = T * [[from_pts], [1]]
+    i.e. A gives the rotational part of the affine transformation, and b gives the offset.
 
     :param from_pts: npts x ndims array, where each column gives coordinates for a different dimension, e.g. first
      column is x, second is y,...
-    :param to_pts: same format as from_pts
-    :return soln, affine_mat:
+    :param to_pts: npts x ndims array. The desired affine transformation acts on from_pts to produce to_pts
+
+    :return affine_mat: affine matrix. This is an (ndim + 1) x (ndim + 1) matrix which act on homogeneous coordinates.
+    To transform coordinates using this affine transformation use xform_points()
+    :return vars: estimated variances of the affine transformation matrix entries
     """
     # todo: could add ability to fix certain parameters, but tricky to do this for 2D/3D dims in same code
 
-    # input and output points as arrays
-    # rows are x,y points
-    q = np.asarray(from_pts).transpose()
-    p = np.asarray(to_pts).transpose()
+    # interpret as ndims x npts, i.e. rows are coord_0, coord_1, ..., coord_(n-1)
+    from_pts = np.asarray(from_pts).transpose()
+    to_pts = np.asarray(to_pts).transpose()
+    ndim, npts = to_pts.shape
 
-    # augmented points
-    # rows are x, y, 1
-    ones_row = np.ones((1, q.shape[1]))
-    q_aug = np.concatenate((q, ones_row), axis=0)
+    # augment points with a row of ones
+    # rows are coord_0, coord_1, ..., coord_(n-1), 1
+    from_pts_aug = np.concatenate((from_pts, np.ones((1, npts))), axis=0)
 
-    # todo: think these two approaches are equivalent. Verify and remove the code in the "if False" statement
-    if False:
-        # convert to a full rank matrix equation
-        # solve using gaussian elimination. soln = [A, b]
-        # c = [[xf.xt, xf.yt],
-        #      [yf.yt, yf.xt],
-        #      [xf.1, yf.1]]
-        c = q_aug.dot(p.transpose())
-        # d = [[xf.xf, xf.yf, xf.1],
-        #      [yf.xf, yf.yf, yf.1],
-        #      [1.xf, 1.yf, 1.1]]
-        d = q_aug.dot(q_aug.transpose())
-        # now we expect
-        # d.x = c, where
-        # x = [[A, D],
-        #      [B, E],
-        #      [C, F]]
-        # where the affine matrix we are interested in is
-        # [[A, B, C],
-        #  [D, E, F],
-        #  [0, 0, 1]]
-        soln = np.linalg.solve(d, c).transpose()
+    # Solve for affine matrix as a linear least squares problem or actually two separate problems:
+    # [coord_0_from, coord_1_from, 1] * M1 = coord_0_to; M1 = [[A], [B], [C]]
+    # [coord_0_from, coord_1_from, 1] * M2 = coord_1_to; M2 = [[D], [E], [F]]
+    # and this naturally generalizes to any number of dimensions
+    affine_mat = np.zeros((ndim + 1,ndim + 1))
+    affine_mat[-1, -1] = 1
 
-        # construct affine matrix in unprojected space
-        btm_row = np.concatenate((np.zeros((1, soln.shape[1] - 1)), np.ones((1, 1))), axis=1)
-        affine_mat = np.concatenate((soln, btm_row), axis=0)
+    vars = np.zeros(affine_mat.shape)
+    for ii in range(ndim):
+        if not translate_only:
+            params_temp, residuals, rank, svals = np.linalg.lstsq(from_pts_aug.transpose(), to_pts[ii], rcond=None)
+            affine_mat[ii] = params_temp
+
+            # variances of fit parameters
+            xt_x_inv = np.linalg.inv(from_pts_aug.dot(from_pts_aug.transpose()))
+            var_sample = residuals / (npts - (ndim + 1))
+            vars[ii] = np.diag(xt_x_inv) * var_sample
+        else:
+            params_temp, residuals, rank, svals = np.linalg.lstsq(np.expand_dims(from_pts_aug[-1], axis=1), to_pts[ii] - from_pts[ii], rcond=None)
+            affine_mat[ii, -1] = params_temp
+            affine_mat[ii, ii] = 1
+
+            xt_x_inv = 1 / np.sum(from_pts_aug[-1]**2)
+            var_sample = residuals / (npts - (ndim + 1))
+            vars[ii, -1] = xt_x_inv * var_sample
+
+    return affine_mat, vars
+
+
+def fit_xform_points_ransac(from_pts, to_pts, dist_err_max=0.3, niterations=1000, njobs=1,
+                            n_inliers_stop=np.inf, translate_only=False):
+    """
+    Determine affine transformation using the random sample consensus (RANSAC) algorithm. This approach
+    is more robust to false correspondences between some of the from_pts and to_pts
+
+    :param from_pts:
+    :param to_pts:
+    :param dist_err_max: maximum distance error for points to be considered "inliers"
+    :param niterations: number of iterations of RANSAC
+    :param kwargs: passed through to fit_xform_points()
+
+    :result xform_best, inliers_best, err_best, vars_best:
+    """
+
+    if njobs > 1:
+        niters_each = int(np.ceil(niterations / njobs))
+        results = joblib.Parallel(n_jobs=-1, verbose=0, timeout=None)(
+                  joblib.delayed(fit_xform_points_ransac)(from_pts, to_pts, dist_err_max=dist_err_max,
+                                                          niterations=niters_each, njobs=1,
+                                                          n_inliers_stop=n_inliers_stop,
+                                                          translate_only=translate_only)
+                  for ii in range(njobs))
+
+        xforms, inliers, errs, vars = zip(*results)
+
+        # find best result from the
+        ind_best = np.argmax([np.sum(ins) for ins in inliers])
+        xform_best = xforms[ind_best]
+        inliers_best = inliers[ind_best]
+        error_best = errs[ind_best]
+        vars_best = vars[ind_best]
 
     else:
-        # Can also solve as a least squares problem ... is this any different?
-        # actually two separate problems: [X_from, Y_from, 1] * M1 = X_to; M1 = [[A], [B], [C]]
-        #                                 [X_from, Y_from, 1] * M2 = Y_to; M2 = [[D], [E], [F]]
-        affine_mat = np.zeros((p.shape[0] + 1, p.shape[0] + 1))
-        for ii in range(p.shape[0]):
-            row_temp, res, rank, s = np.linalg.lstsq(q_aug.transpose(), p[ii], rcond=None)
-            affine_mat[ii] = row_temp
-        affine_mat[-1, -1] = 1
+        npts, ndims = from_pts.shape
+        if translate_only:
+            ninit_pts = ndims
+        else:
+            ninit_pts = 3 * ndims
 
-    return affine_mat
+        error_best = np.inf
+        xform_best = None
+        vars_best = None
+        inliers_best = np.zeros(npts, dtype=bool)
+        for ii in range(niterations):
+            # get initial proposed points and determine transformation
+            is_inlier_prop = np.zeros(npts, dtype=bool)
+            is_inlier_prop[np.sort(np.random.choice(np.arange(npts), size=ninit_pts, replace=False))] = True
+            not_inlier_prop = np.logical_not(is_inlier_prop)
 
+            xform_prop, _ = fit_xform_points(from_pts[is_inlier_prop], to_pts[is_inlier_prop], translate_only=translate_only)
 
-def fit_xform_points_ransac(from_pts, to_pts, dist_err_max=0.3, niterations=20):
-    """
-    Determine affine transformation using RANSAC
-    """
+            # get distance errors of other points to determine if inliers or outliers
+            dist_errs = np.sqrt(np.linalg.norm(to_pts[not_inlier_prop] -
+                                xform_points(from_pts[not_inlier_prop], xform_prop), axis=1))
 
-    ninit_pts = from_pts.shape[1] * 3
-    npts = from_pts.shape[0]
+            is_inlier_prop[not_inlier_prop] = dist_errs < dist_err_max
 
-    error_best = np.inf
-    xform_best = None
-    inliers_best = None
-    for ii in range(niterations):
-        # get initial proposed points and determine transformation
-        is_inlier_prop = np.zeros(npts, dtype=bool)
-        is_inlier_prop[np.sort(np.random.choice(np.arange(npts), size=ninit_pts, replace=False))] = True
-        not_inlier_prop = np.logical_not(is_inlier_prop)
+            # refit using all inliers and compute final error and inliers
+            xform_prop, vars_prop = fit_xform_points(from_pts[is_inlier_prop], to_pts[is_inlier_prop], translate_only=translate_only)
 
-        xform_prop = fit_xform_points(from_pts[is_inlier_prop], to_pts[is_inlier_prop])
+            dist_errs = np.sqrt(np.linalg.norm(to_pts - xform_points(from_pts, xform_prop), axis=1))
 
-        # get distance errors of other points to determine if inliers or outliers
-        dist_errs = np.sqrt(np.linalg.norm(to_pts[not_inlier_prop] -
-                            xform_points(from_pts[not_inlier_prop], xform_prop), axis=1))
+            is_inlier_prop = dist_errs < dist_err_max
+            model_err = np.mean(dist_errs[is_inlier_prop])
 
-        is_inlier_prop[not_inlier_prop] = dist_errs < dist_err_max
+            # if model_err < error_best:
+            if np.sum(inliers_best) < np.sum(is_inlier_prop):
+                error_best = model_err
+                xform_best = np.array(xform_prop, copy=True)
+                vars_best = vars_prop
+                inliers_best = np.array(is_inlier_prop, copy=True)
 
-        # compute final distance error
-        dist_errs = np.sqrt(np.linalg.norm(to_pts[is_inlier_prop] -
-                                          xform_points(from_pts[is_inlier_prop], xform_prop), axis=1))
-        model_err = np.mean(dist_errs)
+            if np.sum(inliers_best) >= n_inliers_stop:
+                break
 
-        if model_err < error_best:
-            error_best = model_err
-            xform_best = np.array(xform_prop, copy=True)
-            inliers_best = np.array(is_inlier_prop, copy=True)
-
-    return xform_best, inliers_best, error_best
+    return xform_best, inliers_best, error_best, vars_best
 
 
 def fit_xform_img(img, img_xformed, init_params=None):
