@@ -593,14 +593,15 @@ def fit_xform_img(img, img_xformed, init_params=None):
 def euler_mat(phi, theta, psi):
     """
     Define our Euler angles connecting the body frame to the space/lab frame by
-
     r_lab = U_z(phi) * U_y(theta) * U_z(psi) * r_body
-
-    Consider the z-axis in the body frame. This axis is then orientated at [cos(phi)*sin(theta), sin(phi)*sin(theta), cos(theta)]
-    in the space frame. i.e. phi, theta are the usual polar angles. psi represents a rotation of the object about its own axis.
-
+    The coordinates are column vectors r = [[x], [y], [z]], so
     U_z(phi) = [[cos(phi), -sin(phi), 0], [sin(phi), cos(phi), 0], [0, 0, 1]]
     U_y(theta) = [[cos(theta), 0, sin(theta)], [0, 1, 0], [-sin(theta), 0, cos(theta)]]
+
+    Consider the z-axis in the body frame. This axis is then orientated at
+    [cos(phi)*sin(theta), sin(phi)*sin(theta), cos(theta)]
+    in the space frame. i.e. phi, theta are the usual polar angles. psi represents a rotation of the object
+    about its own axis.
 
     @param phi:
     @param theta:
