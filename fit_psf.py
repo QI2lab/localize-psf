@@ -539,14 +539,15 @@ def oversample_pixel(x, y, z, ds, sf, euler_angles=(0., 0., 0.)):
     system. The pixel rotation is described by the Euler angles (psi, theta, phi), where the pixel "body" frame
     is a square with xy axis orientated along the legs of the square with z-normal to the square
 
-    :param x:
+    :param x: x-coordinate with shape such that can be broadcast with y and z. e.g. z.shape = [nz, 1, 1];
+     y.shape = [1, ny, 1]; x.shape = [1, 1, nx]
     :param y:
     :param z:
     :param ds: pixel size
     :param sf: sample factor
     :param euler_angles: [phi, theta, psi] where phi and theta are the polar angles describing the normal of the pixel,
     and psi describes the rotation of the pixel about its normal
-    :return:
+    :return xx_s, yy_s, zz_s:
 
     """
     # generate new points in pixel, each of which is centered about an equal area of the pixel, so summing them is
@@ -573,6 +574,23 @@ def oversample_pixel(x, y, z, ds, sf, euler_angles=(0., 0., 0.)):
 
     return xx_s, yy_s, zz_s
 
+
+def oversample_voxel(coords, drs, sf=3):
+    """
+    Get pointsss to oversample a voxel
+
+    :param coords: tuple of coordinates, e.g. (z, y, x)
+    :param drs: tuple giving voxel size (dz, dy, dx)
+    :param sf: sampling factor. Assumed to be same for all directions
+    :return coords_upsample: tuple of coordinates, e.g. (z_os, y_os, x_os). e.g. x_os has one more dimension than x
+    with  this extra dimension giving the oversampled coordinates
+    """
+    pts = np.arange(1 / (2 * sf), 1 - 1 / (2 * sf), 1 / sf) - 0.5
+    pts_dims = np.meshgrid(*[pts * dr for dr in drs], indexing="ij")
+
+    coords_upsample = [np.expand_dims(c, axis=-1) + np.expand_dims(np.ravel(r), axis=0) for c, r in zip(coords, pts_dims)]
+    # now must add these to each point x, y, z
+    return coords_upsample
 
 # main functions for fitting/plotting PSFs
 def get_psf_coords(ns, drs):
