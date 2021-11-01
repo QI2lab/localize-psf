@@ -651,3 +651,20 @@ def gauss3d_jacobian(x, y, z, p):
            ]
 
     return jac
+
+
+def circle(x, y, p):
+    """
+    Function which attains one value within a circle and another value outside it. These regions are continuously
+    stitched together by an exponential decay. This length should be non-zero for reliable fitting
+    @param x:
+    @param y:
+    @param p: [cx, cy, radius, in value, out value, decay_len]
+    @return:
+    """
+    dist = np.sqrt((x - p[0])**2 + (y - p[1])**2)
+    in_circ = p[3] * np.exp((p[2] - dist) / p[5]) + p[4]
+
+    in_circ[dist < p[2]] = p[3]
+
+    return in_circ
