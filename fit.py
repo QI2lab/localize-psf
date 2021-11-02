@@ -668,3 +668,19 @@ def circle(x, y, p):
     in_circ[dist < p[2]] = p[3]
 
     return in_circ
+
+def line_piecewise(x, p):
+    """
+    Two piecewise lines which connect at a point
+    @param x:
+    @param p: [slope 1, y-intercept 1, slope 2, changover point]
+    @return:
+    """
+    l1 = p[0] * x + p[1]
+    # l1(p[3]) = l2(p[3])
+    b2 = (p[0] - p[2]) * p[3] + p[1]
+    l2 = p[2] * x + b2
+
+    line = l1
+    line[x >= p[3]] = l2[x >= p[3]]
+    return line
