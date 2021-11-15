@@ -684,3 +684,27 @@ def line_piecewise(x, p):
     line = l1
     line[x >= p[3]] = l2[x >= p[3]]
     return line
+
+
+def sinc_squared2d(x, y, p):
+    """
+    Product of sinc squareds
+    @param x:
+    @param y:
+    @param p: [amp, cx, cy, wx, wy, bg, theta]
+    @return:
+    """
+
+    xrot = np.cos(p[6]) * (x - p[1]) - np.sin(p[6]) * (y - p[2])
+    argx = xrot * p[3]
+    yrot = np.cos(p[6]) * (y - p[2]) + np.sin(p[6]) * (x - p[1])
+    argy = yrot * p[4]
+
+    xpart = (np.sin(argx) / argx)**2
+    xpart[argx == 0] = 1
+    ypart = (np.sin(argy) / argy)**2
+    ypart[argy == 0] = 1
+
+    val = p[0] * xpart * ypart + p[5]
+
+    return val
