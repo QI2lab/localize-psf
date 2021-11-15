@@ -45,7 +45,7 @@ def blur_img_otf(ground_truth, otf):
     :return img_blurred:
     """
     gt_ft = fft.fftshift(fft.fft2(fft.ifftshift(ground_truth)))
-    img_blurred = fft.fftshift(fft.ifft2(fft.ifftshift(gt_ft * otf))).real
+    img_blurred = fft.fftshift(fft.ifft2(fft.ifftshift(gt_ft * otf)))
 
     return img_blurred
 
@@ -55,7 +55,7 @@ def blur_img_psf(ground_truth, psf):
     Blur image with PSF
 
     :param ground_truth:
-    :param psf: point-spread function
+    :param psf: point-spread function. this array should be centered at ny//2, nx//2
     # todo: allow PSF of different size than image
     """
     otf, _ = psf2otf(psf)
