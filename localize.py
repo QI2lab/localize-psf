@@ -1,13 +1,19 @@
 """
-Code for localizing and fitting spots
+Code for localizing and fitting (typically diffraction limited) spots/beads
+
+The fitting code can be run on a CPU using multiprocessing with joblib, or on a GPU using custom modifications
+to GPUfit which can be found at https://github.com/QI2lab/Gpufit. To use the GPU code, you must download and
+compile this repository and install the python bindings.
 """
 import os
 import time
 import warnings
 import numpy as np
 import scipy.signal
+import scipy.ndimage
 import joblib
 import matplotlib.pyplot as plt
+from matplotlib.colors import PowerNorm, LinearSegmentedColormap, Normalize
 import rois as roi_fns
 import fit
 import fit_psf as psf
@@ -21,18 +27,28 @@ try:
 except ImportError:
     CUPY_AVAILABLE = False
 
-# for fitting on GPU
-# custom code found at https://github.com/QI2lab/Gpufit
-# this must be compiled from source, and then the python package installed from there
+# custom GPUFit for fitting on GPU
 try:
     import pygpufit.gpufit as gf
     GPUFIT_AVAILABLE = True
 except ImportError:
     GPUFIT_AVAILABLE = False
 
+
 def get_coords(sizes, drs):
     """
-    Regularly spaced coordinates which can be broadcast to full size
+    Regularly spaced coordinates which can be broadcast to full size.
+
+    For example, if sizes = (nz, ny, nx) and drs = (1, 1, 1) then
+    coords0.size = (nz, 1, 1)
+    coords1.size = (1, ny, 1)
+    coords2.size = (1, 1, nx)
+    this arrays are broadcastable to size (nz, ny, nx). If the broadcast arrays are desired, they can be obtained by:
+    >>> coords_bcast = np.broadcast_arrays(coords0, coords1, coords2)
+    >>> coords0_bc, coords1_bc, coords2_bc = [np.array(c, copy=True) for c in coords_bcast]
+    note that the second line is necessary because np.broadcast_arrays() produces arrays with references to the
+    original entries, so assigning to these arrays can produce surprising results.
+
     :param sizes: (s0, s1, ..., sn)
     :param drs: (dr0, dr1, ..., drn)
     :return coords: (coords0, coords1, ..., coordsn)
@@ -74,7 +90,8 @@ def get_roi(center, img, coords, sizes):
 
 def get_filter_kernel(sigmas, drs, sigma_cutoff=2):
     """
-    Gaussian filter kernel for arbitrary dimensions
+    Gaussian filter kernel for arbitrary dimensions. If drs or sigmas are zero along one dimension, then the kernel
+    will have unit length and weight along this direction
 
     :param sigmas: (sigma_0, sigma_1, ..., sigma_n)
     :param drs: (dr_1, dr_2, ..., dr_n) pixel sizes along each dimension
@@ -87,12 +104,25 @@ def get_filter_kernel(sigmas, drs, sigma_cutoff=2):
     if isinstance(sigma_cutoff, (int, float)):
         sigma_cutoff = [sigma_cutoff] * ndims
 
+    # convert to arrays
+    drs = np.array(drs, copy=True)
+    sigmas = np.array(sigmas, copy=True)
+    sigma_cutoff = np.array(sigma_cutoff, copy=True)
 
     # compute kernel size
-    nks = [2 * int(np.round(sig / dr * sig_cut)) + 1 for sig, dr, sig_cut in zip(sigmas, drs, sigma_cutoff)]
+    with np.errstate(invalid="ignore"):
+        nks = 2 * np.round(sigmas / drs * sigma_cutoff) + 1
+        nks[np.isnan(nks)] = 1
+        nks = nks.astype(int)
+        # nks = [2 * int(np.round(sig / dr * sig_cut)) + 1 for sig, dr, sig_cut in zip(sigmas, drs, sigma_cutoff)]
+
+    # now need to correct sigma = 0, as this would result in invalid kernel. Doesn't matter what value we set because
+    # coordinates will all be zeros
+    sigmas[sigmas == 0] = 1
 
     # get coordinates to evaluate kernel at
-    coords = [np.expand_dims(np.arange(nk) * dr, axis=list(range(ii)) + list(range(ii + 1, ndims))) for ii, (nk, dr) in enumerate(zip(nks, drs))]
+    coords = [np.expand_dims(np.arange(nk) * dr, axis=list(range(ii)) + list(range(ii + 1, ndims))) for
+              ii, (nk, dr) in enumerate(zip(nks, drs))]
 
     coords = [c - np.mean(c) for c in coords]
 
@@ -104,15 +134,16 @@ def get_filter_kernel(sigmas, drs, sigma_cutoff=2):
 
 def filter_convolve(imgs, kernel, use_gpu=CUPY_AVAILABLE):
     """
-    Convolution filter using kernel with GPU support
-
-    # todo: how much memory does convolution require? Much more than I expect...
+    Convolution filter using kernel with GPU support. To avoid roll-off effects at the edge, the convolved
+    result is "normalized" by being divided by the kernel convolved with an array of ones.
 
     :param imgs: images to be convolved
-    :param kernel: kernel to be convolved
-    :param bool use_gpu:
+    :param kernel: kernel to be convolved. Does not need to be the same shape as image.
+    :param bool use_gpu: if True, do convolution on GPU. If false, do on CPU.
     :return imgs_filtered:
     """
+
+    # todo: estimate how much memory convolution requires? Much more than I expect...
 
     # convolve, and deal with edges by normalizing
     if use_gpu:
@@ -153,17 +184,29 @@ def filter_convolve(imgs, kernel, use_gpu=CUPY_AVAILABLE):
     return imgs_filtered
 
 
-def get_max_filter_footprint(min_sep_allowed, drs):
+def get_max_filter_footprint(min_separations, drs):
     """
-    Get footprint for maximum filter
-    :param min_sep_allowed: (size_0, size_1, ..., size_n)
-    :param drs: (dr_0, ..., dr_n
-    :return footprint: square matrix, boolean mask
+    Get footprint for maximum filter. This is a binary mask which is True at points included in the mask
+    and False at other points. For doing a square maximum filter can choose a footprint of only Trues, but cannot
+    do this for more complex shapes
+
+    :param min_separations: (size_0, size_1, ..., size_n)
+    :param drs: (dr_0, ..., dr_n)
+    :return footprint: boolean mask
     """
 
-    ns = [int(np.ceil(sz / dr)) for sz, dr in zip(min_sep_allowed, drs)]
+    min_sep_allowed = np.array(min_separations)
+    drs = np.array(drs)
+
+    ns = np.ceil(min_sep_allowed / drs).astype(int)
+    # ensure at least size 1
+    ns[ns == 0] = 1
     # ensure odd
-    ns = [n if np.mod(n, 2) == 0 else n + 1 for n in ns]
+    ns += (1 - np.mod(ns, 2))
+
+    # ns = [int(np.ceil(sz / dr)) for sz, dr in zip(min_sep_allowed, drs)]
+    # ensure odd
+    # ns = [n if np.mod(n, 2) == 0 else n + 1 for n in ns]
 
     footprint = np.ones(ns, dtype=bool)
 
@@ -172,13 +215,13 @@ def get_max_filter_footprint(min_sep_allowed, drs):
 
 def find_peak_candidates(imgs, footprint, threshold, use_gpu_filter=CUPY_AVAILABLE):
     """
-    Find peak candidates using maximum filter
+    Find peak candidates in image using maximum filter
 
     :param imgs: 2D or 3D array
-    :param footprint: footprint to use for maximum filter. Array should have same number of dimensions as imgs
-    :param threshold: only pixels with values greater than or equal to the threshold will be considered
-    :param use_gpu_filter:
-
+    :param footprint: footprint to use for maximum filter. Array should have same number of dimensions as imgs.
+    This can be obtained from get_max_filter_footprint()
+    :param float threshold: only pixels with values greater than or equal to the threshold will be considered
+    :param bool use_gpu_filter: whether or not to do maximum filter on GPU
     :return centers_guess_inds: np.array([[i0, i1, i2], ...]) array indices of local maxima
     """
 
@@ -233,6 +276,7 @@ def filter_nearby_peaks(centers, min_xy_dist, min_z_dist, mode="average", weight
 
         # todo: maybe I should check that dimension sizes are similar before dividing. If have very asymmetric
         # todo: area it might be better to e.g. make more divisions along one dimension only
+        # todo: on second thought, I think the right approach is in each step to only divide once, and always divide the largest dimension
 
         # if number of inputs is large, divide problem into subproblems, solve each of these, and combine results.
         xlims = [np.min(centers[:, 2]), np.max(centers[:, 2])]
@@ -323,7 +367,7 @@ def filter_nearby_peaks(centers, min_xy_dist, min_z_dist, mode="average", weight
                                (centers_unique[counter][2] - centers_unique[:, 2]) ** 2)
 
             # beads which are close enough we will combine
-            combine = np.logical_and(z_dists < min_z_dist, xy_dists < min_xy_dist)
+            combine = np.logical_and(z_dists <= min_z_dist, xy_dists <= min_xy_dist)
             if mode == "average":
                 denom = np.nansum(np.logical_not(np.isnan(np.sum(centers_unique[combine], axis=1))) * weights[combine])
                 # compute new center from average and reset that position in the list
@@ -354,7 +398,7 @@ def localize2d(img, mode="radial-symmetry"):
     Perform 2D localization using the radial symmetry approach of https://doi.org/10.1038/nmeth.2071
 
     :param img: 2D image of size ny x nx
-    :param mode: 'radial-symmetry' or 'centroid'
+    :param str mode: 'radial-symmetry' or 'centroid'
 
     :return xc:
     :return yc:
@@ -394,7 +438,6 @@ def localize2d(img, mode="radial-symmetry"):
             # weights
             wk = grad_norm**2 / dk_centroid
 
-
             # def chi_sqr(xc, yc):
             #     val = ((yk[:, None] - yc) - mk * (xk[None, :] - xc))**2 / (mk**2 + 1) * wk
             #     val[np.isinf(mk)] = (np.tile(xk[None, :], [yk.size, 1])[np.isinf(mk)] - xc)**2
@@ -426,7 +469,6 @@ def localize2d(img, mode="radial-symmetry"):
             summand_f[np.isinf(mk)] = 0
             F = np.sum(summand_f)
 
-
             xc = (D * E - B * F) / (A*D - B*C)
             yc = (-C * E + A * F) / (A*D - B*C)
     else:
@@ -440,7 +482,7 @@ def localize3d(img, mode="radial-symmetry"):
     Perform 3D localization using an extension of the radial symmetry approach of https://doi.org/10.1038/nmeth.2071
 
     :param img: 3D image of size nz x ny x nx
-    :param mode: 'radial-symmetry' or 'centroid'
+    :param str mode: 'radial-symmetry' or 'centroid'
 
     :return xc:
     :return yc:
@@ -547,14 +589,21 @@ def localize3d(img, mode="radial-symmetry"):
 # localize using Gaussian fit
 def fit_gauss_roi(img_roi, coords, init_params=None, fixed_params=None, bounds=None, sf=1, dc=None, angles=None):
     """
-    Fit single ROI
+    Fit a single ROI to a 3D gaussian function.
 
-    :param img_roi:
-    :param coords: (z_roi, y_roi, x_roi)
-    :param init_params:
-    :param fixed_params:
-    :param bounds:
-    :return:
+    :param img_roi: array of size nz x ny x nx which will be fit
+    :param coords: (z_roi, y_roi, x_roi). These coordinate arrays must be broadcastable to the same size as img_roi
+    :param init_params: array of length 7, where the parameters are
+    [amplitude, center-x, center-y, center-z, sigma-xy, sigma_z, offset]
+    :param fixed_params: boolean array of length 7. For entries which are True, the fit function will force
+    that parameter to be identical to the value in init_params. For entries which are False, the fit function
+    will determine the optimal value
+    :param bounds: ((lower_bounds), (upper_bounds)) where lower_bounds and upper_bounds are each lists/tuples/arrays
+    of length 7.
+    :param int sf: over-sampling factor
+    :param float dc: pixel size, only required if sf > 1
+    :param angles:
+    :return results: dictionary object containing information about fitting
     """
     z_roi, y_roi, x_roi = coords
 
@@ -606,7 +655,8 @@ def fit_gauss_roi(img_roi, coords, init_params=None, fixed_params=None, bounds=N
         return psf.gaussian3d_psf_jac(x_roi, y_roi, z_roi, dc, p, sf=sf, angles=angles)
 
     # do fitting
-    results = fit.fit_model(img_roi, model_fn, init_params, bounds=bounds, fixed_params=fixed_params, model_jacobian=jac_fn)
+    results = fit.fit_model(img_roi, model_fn, init_params, bounds=bounds,
+                            fixed_params=fixed_params, model_jacobian=jac_fn)
 
     return results
 
@@ -619,15 +669,17 @@ def fit_gauss_rois(img_rois, coords_rois, init_params, max_number_iterations=100
 
     :param img_rois: list of image rois
     :param coords_rois: ((z0, y0, x0), (z1, y1, x1), ....)
-    :param init_params:
-    :param max_number_iterations:
+    :param init_params: initial parameters for fits, size nfits x nparams
+    :param int max_number_iterations: maximum number of iterations to be used for each fit
     :param int sf: oversampling factor for simulating pixelation
     :param float dc: pixel size, only used for oversampling
     :param (float, float, float) angles: euler angles describing pixel orientation. Only used for oversampling.
     :param estimator: "LSE" or "MLE"
     :param model: "gaussian", "rotated-gaussian", "gaussian-lorentzian"
+    :param list[bool] fixed_params: length nparams vector of parameters to fix. only supports fixing/unfixing
+    each parameter for all fits
     :param bool use_gpu:
-    :return:
+    :return fit_params, fit_states, chi_sqrs, niters, fit_t:
     """
 
     if fixed_params is None:
@@ -637,37 +689,39 @@ def fit_gauss_rois(img_rois, coords_rois, init_params, max_number_iterations=100
 
     if not use_gpu:
         if model != "gaussian":
-            raise NotImplementedError("only gaussian implemented for non gpu")
+            raise NotImplementedError("only model = 'gaussian' implemented for non gpu")
 
+        tstart = time.perf_counter()
         results = joblib.Parallel(n_jobs=-1, verbose=1, timeout=None)(
             joblib.delayed(fit_gauss_roi)(img_rois[ii], (zrois[ii], yrois[ii], xrois[ii]), init_params=init_params[ii],
                                           fixed_params=fixed_params, sf=sf, dc=dc, angles=angles)
             for ii in range(len(img_rois)))
+        tend = time.perf_counter()
 
         fit_params = np.asarray([r["fit_params"] for r in results])
         chi_sqrs = np.asarray([r["chi_squared"] for r in results])
         fit_states = np.asarray([r["status"] for r in results])
         niters = np.asarray([r["nfev"] for r in results])
-        fit_t = np.zeros(niters.shape)  # todo: what to set this to?
+        fit_t = (tend - tstart)
 
     else:
         if sf != 1:
             raise NotImplementedError("sampling factors other than 1 are not implemented for GPU fitting")
         # todo: if requires more memory than GPU has, split into chunks
 
-        # ensure arrays row vectors
+        # ensure arrays are row vectors
         xrois, yrois, zrois, img_rois = zip(
             *[(xr.ravel()[None, :], yr.ravel()[None, :], zr.ravel()[None, :], ir.ravel()[None, :])
               for xr, yr, zr, ir in zip(xrois, yrois, zrois, img_rois)])
 
-        # setup rois
+        # get ROI sizes
         roi_sizes = np.array([ir.size for ir in img_rois])
         nmax = roi_sizes.max()
 
-        # pad ROI's to make sure all rois same size
+        # pad ROI's to make sure all ROI's same size
         img_rois = [np.pad(ir, ((0, 0), (0, nmax - ir.size)), mode="constant") for ir in img_rois]
 
-        # build roi data
+        # build ROI data
         data = np.concatenate(img_rois, axis=0)
         data = data.astype(np.float32)
         nfits, n_pts_per_fit = data.shape
@@ -710,7 +764,9 @@ def fit_gauss_rois(img_rois, coords_rois, init_params, max_number_iterations=100
         else:
             raise ValueError("'model' must be 'gaussian' or 'gaussian-lorentzian' but was '%s'" % model)
 
+        # set which parameters to fit/fix
         params_to_fit = np.array([not fp for fp in fixed_params], dtype=np.int32)
+        # do fitting
         fit_params, fit_states, chi_sqrs, niters, fit_t = gf.fit(data, None, model_id, init_params,
                                                                  max_number_iterations=max_number_iterations,
                                                                  estimator_id=est_id,
@@ -728,17 +784,18 @@ def plot_gauss_roi(fit_params, roi, imgs, coords, init_params=None, same_color_s
                    fit_fn=None,
                    figsize=(16, 8), prefix="", save_dir=None):
     """
-    plot results from fit_roi()
+    Plot results obtained from fitting functions fit_gauss_roi() or fit_gauss_rois()
     :param fit_params:
     :param roi: [zstart, zend, ystart, yend, xstart, xend]
-    :param imgs:
+    :param imgs: full image, such that imgs[zstart:zend, ystart:yend, xstart:xend] is the region that was fit
     :param coords: (z, y, x) broadcastable to same size as imgs
-    :param init_params:
+    :param init_params: initial parameters used in fit, optional
     :param bool same_color_scale: whether or not to use same color scale for data and fits
-    :param fit_fn: function used for fitting. Must have arguments (x, y, z, dc, fit_params, sf=1)
-    :param figsize:
-    :param prefix: prefix prepended before save name
-    :param save_dir: if None, do not save results
+    :param fit_fn: function used for fitting. Must have arguments (x, y, z, dc, fit_params, sf=1). Default
+     fit function is psf.gaussian3d_psf()
+    :param figsize: (sx, sz)
+    :param str prefix: prefix prepended before save name
+    :param str save_dir: if None, do not save results
     :return:
     """
     if fit_fn is None:
@@ -782,7 +839,8 @@ def plot_gauss_roi(fit_params, roi, imgs, coords, init_params=None, same_color_s
     # XY, data
     # ################################
     ax = plt.subplot(grid[0, 1])
-    extent = [y_roi[0, 0, 0] - 0.5 * dc, y_roi[0, -1, 0] + 0.5 * dc, x_roi[0, 0, 0] - 0.5 * dc, x_roi[0, 0, -1] + 0.5 * dc]
+    extent = [y_roi[0, 0, 0] - 0.5 * dc, y_roi[0, -1, 0] + 0.5 * dc,
+              x_roi[0, 0, 0] - 0.5 * dc, x_roi[0, 0, -1] + 0.5 * dc]
     plt.imshow(np.nanmax(img_roi, axis=0).transpose(), vmin=vmin_roi, vmax=vmax_roi, origin="lower",
                extent=extent, cmap="bone")
 
@@ -800,7 +858,8 @@ def plot_gauss_roi(fit_params, roi, imgs, coords, init_params=None, same_color_s
     # XZ, data
     # ################################
     ax = plt.subplot(grid[0, 0])
-    extent = [z_roi[0, 0, 0] - 0.5 * dz, z_roi[-1, 0, 0] + 0.5 * dz, x_roi[0, 0, 0] - 0.5 * dc, x_roi[0, 0, -1] + 0.5 * dc]
+    extent = [z_roi[0, 0, 0] - 0.5 * dz, z_roi[-1, 0, 0] + 0.5 * dz,
+              x_roi[0, 0, 0] - 0.5 * dc, x_roi[0, 0, -1] + 0.5 * dc]
     plt.imshow(np.nanmax(img_roi, axis=1).transpose(), vmin=vmin_roi, vmax=vmax_roi, origin="lower",
                extent=extent, cmap="bone")
     plt.plot(center_fit[0], center_fit[2], 'mx')
@@ -816,7 +875,8 @@ def plot_gauss_roi(fit_params, roi, imgs, coords, init_params=None, same_color_s
     # YZ, data
     # ################################
     ax = plt.subplot(grid[1, 1])
-    extent = [y_roi[0, 0, 0] - 0.5 * dc, y_roi[0, -1, 0] + 0.5 * dc, z_roi[0, 0, 0] - 0.5 * dz, z_roi[-1, 0, 0] + 0.5 * dz]
+    extent = [y_roi[0, 0, 0] - 0.5 * dc, y_roi[0, -1, 0] + 0.5 * dc,
+              z_roi[0, 0, 0] - 0.5 * dz, z_roi[-1, 0, 0] + 0.5 * dz]
     with warnings.catch_warnings():
         warnings.filterwarnings('ignore', r'All-NaN (slice|axis) encountered')
 
@@ -843,8 +903,10 @@ def plot_gauss_roi(fit_params, roi, imgs, coords, init_params=None, same_color_s
     # YX, fit
     # ################################
     ax = plt.subplot(grid[0, 3])
-    extent = [y_roi[0, 0, 0] - 0.5 * dc, y_roi[0, -1, 0] + 0.5 * dc, x_roi[0, 0, 0] - 0.5 * dc, x_roi[0, 0, -1] + 0.5 * dc]
-    plt.imshow(np.nanmax(img_fit, axis=0).transpose(), vmin=vmin_fit, vmax=vmax_fit, origin="lower", extent=extent, cmap="bone")
+    extent = [y_roi[0, 0, 0] - 0.5 * dc, y_roi[0, -1, 0] + 0.5 * dc,
+              x_roi[0, 0, 0] - 0.5 * dc, x_roi[0, 0, -1] + 0.5 * dc]
+    plt.imshow(np.nanmax(img_fit, axis=0).transpose(), vmin=vmin_fit, vmax=vmax_fit,
+               origin="lower", extent=extent, cmap="bone")
     plt.plot(center_fit[1], center_fit[2], 'mx')
     if init_params is not None:
         plt.plot(center_guess[1], center_guess[2], 'gx')
@@ -857,8 +919,10 @@ def plot_gauss_roi(fit_params, roi, imgs, coords, init_params=None, same_color_s
     # ZX, fit
     # ################################
     ax = plt.subplot(grid[0, 2])
-    extent = [z_roi[0, 0, 0] - 0.5 * dz, z_roi[-1, 0, 0] + 0.5 * dz, x_roi[0, 0, 0] - 0.5 * dc, x_roi[0, 0, -1] + 0.5 * dc]
-    plt.imshow(np.nanmax(img_fit, axis=1).transpose(), vmin=vmin_fit, vmax=vmax_fit, origin="lower", extent=extent, cmap="bone")
+    extent = [z_roi[0, 0, 0] - 0.5 * dz, z_roi[-1, 0, 0] + 0.5 * dz,
+              x_roi[0, 0, 0] - 0.5 * dc, x_roi[0, 0, -1] + 0.5 * dc]
+    plt.imshow(np.nanmax(img_fit, axis=1).transpose(), vmin=vmin_fit, vmax=vmax_fit,
+               origin="lower", extent=extent, cmap="bone")
     plt.plot(center_fit[0], center_fit[2], 'mx')
     if init_params is not None:
         plt.plot(center_guess[0], center_guess[2], 'gx')
@@ -871,8 +935,10 @@ def plot_gauss_roi(fit_params, roi, imgs, coords, init_params=None, same_color_s
     # YZ, fit
     # ################################
     ax = plt.subplot(grid[1, 3])
-    extent = [y_roi[0, 0, 0] - 0.5 * dc, y_roi[0, -1, 0] + 0.5 * dc, z_roi[0, 0, 0] - 0.5 * dz, z_roi[-1, 0, 0] + 0.5 * dz]
-    plt.imshow(np.nanmax(img_fit, axis=2), vmin=vmin_fit, vmax=vmax_fit, origin="lower", extent=extent, cmap="bone")
+    extent = [y_roi[0, 0, 0] - 0.5 * dc, y_roi[0, -1, 0] + 0.5 * dc,
+              z_roi[0, 0, 0] - 0.5 * dz, z_roi[-1, 0, 0] + 0.5 * dz]
+    plt.imshow(np.nanmax(img_fit, axis=2), vmin=vmin_fit, vmax=vmax_fit,
+               origin="lower", extent=extent, cmap="bone")
     plt.plot(center_fit[1], center_fit[0], 'mx')
     if init_params is not None:
         plt.plot(center_guess[1], center_guess[0], 'gx')
@@ -891,10 +957,15 @@ def plot_gauss_roi(fit_params, roi, imgs, coords, init_params=None, same_color_s
 def filter_localizations(fit_params, init_params, coords, fit_dist_max_err, min_spot_sep,
                          sigma_bounds, amp_min=0, dist_boundary_min=(0, 0)):
     """
-    :param fit_params:
-    :param init_params:
+    Given a list of fit parameters, return boolean arrays indicating which fits pass/fail given a variety
+    of tests for reasonability
+
+    :param fit_params: nfits x 7, results of fitting where the parameters are
+     [amplitude, center x, center y, center z, size xy, size z, background]. Most commonly these values come from
+     a 3D Gaussian fit. But other models can be used as well.
+    :param init_params: nfits x 7, initial guess parameters used in fits
     :param coords: (z, y, x)
-    :param fit_dist_max_err = (dz_max, dxy_max)
+    :param fit_dist_max_err = (dz_max, dxy_max) maximum distance between guess value and fit value
     :param min_spot_sep: (dz, dxy) assume points separated by less than this distance come from one spot
     :param sigma_bounds: ((sz_min, sxy_min), (sz_max, sxy_max)) exclude fits with sigmas that fall outside
     these ranges
@@ -907,8 +978,10 @@ def filter_localizations(fit_params, init_params, coords, fit_dist_max_err, min_
                        "sigma_bounds": sigma_bounds, "amp_min": amp_min, "dist_boundary_min": dist_boundary_min}
 
     z, y, x = coords
-    centers_guess = np.concatenate((init_params[:, 3][:, None], init_params[:, 2][:, None], init_params[:, 1][:, None]), axis=1)
-    centers_fit = np.concatenate((fit_params[:, 3][:, None], fit_params[:, 2][:, None], fit_params[:, 1][:, None]), axis=1)
+    centers_guess = np.concatenate((init_params[:, 3][:, None], init_params[:, 2][:, None],
+                                    init_params[:, 1][:, None]), axis=1)
+    centers_fit = np.concatenate((fit_params[:, 3][:, None], fit_params[:, 2][:, None],
+                                  fit_params[:, 1][:, None]), axis=1)
 
     # ###################################################
     # only keep points if size and position were reasonable
@@ -934,7 +1007,6 @@ def filter_localizations(fit_params, init_params, coords, fit_dist_max_err, min_
                             fit_params[:, 4] <= sxy_max, fit_params[:, 4] >= sxy_min,
                             fit_params[:, 5] <= sz_max, fit_params[:, 5] >= sz_min,
                             fit_params[:, 0] >= amp_min), axis=1)
-
 
     condition_names = ["in_bounds", "center_close_to_guess_xy", "center_close_to_guess_z",
                        "xy_size_small_enough", "xy_size_big_enough", "z_size_small_enough",
@@ -971,61 +1043,84 @@ def filter_localizations(fit_params, init_params, coords, fit_dist_max_err, min_
 
     return to_keep, conditions, condition_names, filter_settings
 
-#
-def localize_beads(imgs, dx, dz, threshold, roi_size, filter_sigma_small, filter_sigma_large,
+
+def localize_beads(imgs, dxy, dz, threshold, roi_size, filter_sigma_small, filter_sigma_large,
                    min_spot_sep, sigma_bounds, fit_amp_min, fit_dist_max_err=(np.inf, np.inf), dist_boundary_min=(0, 0),
-                   use_gpu_fit=GPUFIT_AVAILABLE, use_gpu_filter=CUPY_AVAILABLE):
+                   use_gpu_fit=GPUFIT_AVAILABLE, use_gpu_filter=CUPY_AVAILABLE, verbose=True):
     """
+    Given an image consisting of diffraction limited spots and background, identify the diffraction limit spots using
+    the following procedure
+    (1) Obtain a filtered image using a difference-of-Gaussians filter
+    (2) Identify candidate spots from the filtered image using a threshold and maximum filter
+    (3) Fit candidate spots to a 2D or 3D Gaussian function. Note the fitting is done on the raw image, not the
+    filtered image
+    (4) Filter out likely candidate spots based on the results of the fitting
+    the various parameters used in this function are set in terms of real units, i.e. um, and not pixels.
 
-    @param imgs:
-    @param dx:
-    @param dz:
-    @param threshold:
-    @param roi_size:
-    @param filter_sigma_small: (sz, sy, sx)
-    @param filter_sigma_large: ()
-    @param min_spot_sep: (dz, dxy)
+    @param imgs: an image of size ny x nx or an image stack of size nz x ny x nx
+    @param dxy: xy-pixel spacing in um
+    @param dz: z-plane spacing in um
+    @param threshold: threshold used for identifying spots. This is applied after filtering of image
+    @param roi_size: (sz, sy, sx) in um
+    @param filter_sigma_small: (sz, sy, sx) small sigmas to be used in difference-of-Gaussian filter. Roughly speaking,
+    features which are smaller than these sigmas will be high pass filtered out.
+    @param filter_sigma_large: (sz, sy, sx) large sigmas to be used in difference-of-Gaussian filter. Roughly speaking,
+    features which are large than these sigmas will be low pass filtered out.
+    @param min_spot_sep: (dz, dxy) minimum separation allowed between adjacent peaks
     @param sigma_bounds: ((sz_min, sxy_min), (sz_max, sxy_max))
-    @param fit_amp_min:
-    @param fit_dist_max_err:
-    @param dist_boundary_min:
-    @param use_gpu_fit:
-    @param use_gpu_filter:
-    @return (z, y, x), fit_params, init_params, rois, to_keep, conditions, condition_names, filter_settings:
+    @param fit_amp_min: minimum amplitude value for fit to be kept
+    @param fit_dist_max_err: (dz_max, dxy_max) maximum distance between guess value and fit value
+    @param dist_boundary_min: (dz_min, dxy_min) filter out spots which are closer to the boundary than this
+    @param bool use_gpu_fit: whether or not to do spot fitting on the GPU
+    @param bool use_gpu_filter: whether or not to do difference-of-Gaussian filtering on GPU
+    @param bool verbose: whether or not to print information
+    @return coords, fit_params, init_params, rois, to_keep, conditions, condition_names, filter_settings:
+    coords = (z, y, x)
     """
-    # todo: need to ensure can also do 2D ... see e.g. 2021_07_09_localize_zhang_data.py
 
+    # make sure inputs correct types
+    roi_size = np.array(roi_size, copy=True)
+    min_spot_sep = np.array(min_spot_sep, copy=True)
+    filter_sigma_large = np.array(filter_sigma_large, copy=True)
+    filter_sigma_small = np.array(filter_sigma_small, copy=True)
+
+    # check if is 2D
     if imgs.ndim == 2:
         imgs = np.expand_dims(imgs, axis=0)
 
-    if imgs.shape[0] == 1:
-        data_is_2d = True
-    else:
-        data_is_2d = False
+    data_is_2d = imgs.shape[0] == 1
 
-    z, y, x = get_coords(imgs.shape, (dz, dx, dx))
-    dz_min, dxy_min = min_spot_sep
-    roi_size_pix = roi_fns.get_roi_size(roi_size, dx, dz, ensure_odd=True)
+    if data_is_2d:
+        roi_size[0] = 0
+        filter_sigma_large[0] = 0
+        filter_sigma_small[0] = 0
+        min_spot_sep[0] = 0
+
+    # unpack arguments
+    z, y, x = get_coords(imgs.shape, (dz, dxy, dxy))
+    dz_min_sep, dxy_min_sep = min_spot_sep
+    roi_size_pix = roi_fns.get_roi_size(roi_size, dxy, dz, ensure_odd=True)
 
     # ###################################
     # filter images
     # ###################################
     tstart = time.perf_counter()
 
-    ks = get_filter_kernel(filter_sigma_small, (dz, dx, dx))
-    kl = get_filter_kernel(filter_sigma_large, (dz, dx, dx))
+    ks = get_filter_kernel(filter_sigma_small, (dz, dxy, dxy))
+    kl = get_filter_kernel(filter_sigma_large, (dz, dxy, dxy))
     imgs_hp = filter_convolve(imgs, ks, use_gpu=use_gpu_filter)
     imgs_lp = filter_convolve(imgs, kl, use_gpu=use_gpu_filter)
     imgs_filtered = imgs_hp - imgs_lp
 
-    print("filtered image in %0.2fs" % (time.perf_counter() - tstart))
+    if verbose:
+        print("filtered image in %0.2fs" % (time.perf_counter() - tstart))
 
     # ###################################
     # identify candidate beads
     # ###################################
     tstart = time.perf_counter()
 
-    footprint = get_max_filter_footprint((dz_min, dxy_min, dxy_min), (dz, dx, dx))
+    footprint = get_max_filter_footprint((dz_min_sep, dxy_min_sep, dxy_min_sep), (dz, dxy, dxy))
     centers_guess_inds, amps = find_peak_candidates(imgs_filtered, footprint, threshold)
 
     # real coordinates
@@ -1033,7 +1128,8 @@ def localize_beads(imgs, dx, dz, threshold, roi_size, filter_sigma_small, filter
                               y[0, centers_guess_inds[:, 1], 0],
                               x[0, 0, centers_guess_inds[:, 2]]), axis=1)
 
-    print("identified %d candidates in %0.2fs" % (len(centers_guess_inds), time.perf_counter() - tstart))
+    if verbose:
+        print("identified %d candidates in %0.2fs" % (len(centers_guess_inds), time.perf_counter() - tstart))
 
     # ###################################
     # identify candidate beads
@@ -1049,11 +1145,13 @@ def localize_beads(imgs, dx, dz, threshold, roi_size, filter_sigma_small, filter
 
         inds = np.ravel_multi_index(centers_guess_inds.transpose(), imgs_filtered.shape)
         weights = imgs_filtered.ravel()[inds]
-        centers_guess, inds_comb = filter_nearby_peaks(centers_guess, dxy_min, dz_min, weights=weights, mode="average")
+        centers_guess, inds_comb = filter_nearby_peaks(centers_guess, dxy_min_sep, dz_min_sep,
+                                                       weights=weights, mode="average")
 
         amps = amps[inds_comb]
-        print("Found %d points separated by dxy > %0.5g and dz > %0.5g in %0.1fs" %
-              (len(centers_guess), dxy_min, dz_min, time.perf_counter() - tstart))
+        if verbose:
+            print("Found %d points separated by dxy > %0.5g and dz > %0.5g in %0.1fs" %
+                  (len(centers_guess), dxy_min_sep, dz_min_sep, time.perf_counter() - tstart))
 
         # ###################################################
         # prepare ROIs
@@ -1063,8 +1161,6 @@ def localize_beads(imgs, dx, dz, threshold, roi_size, filter_sigma_small, filter
         rois, img_rois, coords = zip(*[get_roi(c, imgs, (z, y, x), roi_size_pix) for c in centers_guess])
         zrois, yrois, xrois = zip(*coords)
         rois = np.asarray(rois)
-        nsizes = (rois[:, 1] - rois[:, 0]) * (rois[:, 3] - rois[:, 2]) * (rois[:, 5] - rois[:, 4])
-        nfits = len(rois)
 
         # extract guess values
         bgs = np.array([np.mean(r) for r in img_rois])
@@ -1087,12 +1183,15 @@ def localize_beads(imgs, dx, dz, threshold, roi_size, filter_sigma_small, filter
                                 centers_guess[:, 2], centers_guess[:, 1], cz_guess,
                                 sxys, szs, bgs), axis=1)
 
-        print("Prepared %d rois and estimated initial parameters in %0.2fs" % (len(rois), time.perf_counter() - tstart))
+        if verbose:
+            print("Prepared %d rois and estimated initial parameters in %0.2fs" %
+                  (len(rois), time.perf_counter() - tstart))
 
         # ###################################################
         # localization
         # ###################################################
-        print("starting fitting for %d rois" % centers_guess.shape[0])
+        if verbose:
+            print("starting fitting for %d rois" % centers_guess.shape[0])
         tstart = time.perf_counter()
 
         fixed_params = [False] * 7
@@ -1104,13 +1203,13 @@ def localize_beads(imgs, dx, dz, threshold, roi_size, filter_sigma_small, filter
 
         fit_params, fit_states, chi_sqrs, niters, fit_t = fit_gauss_rois(img_rois, (zrois, yrois, xrois),
                                                                          init_params, estimator="LSE",
-                                                                         sf=1, dc=dx, angles=(0., 0., 0.),
+                                                                         sf=1, dc=dxy, angles=(0., 0., 0.),
                                                                          fixed_params=fixed_params,
                                                                          use_gpu=use_gpu_fit)
 
         tend = time.perf_counter()
-        print("Localization took %0.2fs" % (tend - tstart))
-
+        if verbose:
+            print("Localization took %0.2fs" % (tend - tstart))
 
         # ###################################################
         # filter fits
@@ -1119,6 +1218,101 @@ def localize_beads(imgs, dx, dz, threshold, roi_size, filter_sigma_small, filter
             filter_localizations(fit_params, init_params, (z, y, x), fit_dist_max_err, min_spot_sep,
                                  sigma_bounds, fit_amp_min, dist_boundary_min)
 
-        print("Identified %d likely candidates" % np.sum(to_keep))
+        if verbose:
+            print("Identified %d likely candidates" % np.sum(to_keep))
 
         return (z, y, x), fit_params, init_params, rois, to_keep, conditions, condition_names, filter_settings
+
+
+def plot_bead_locations(imgs, center_lists, title="", color_lists=None, color_limits=None, legend_labels=None,
+                        weights=None, cbar_labels=None, vlims_percentile=(0.01, 99.99), gamma=1, **kwargs):
+    """
+    Plot center locations over 2D image or max projection of 3D image. Supports plotting multiple different sets
+    of center locations, and using different colors to indicate properties of the different centers e.g. sigma,
+    amplitude, modulation depth, etc.
+
+    :param imgs: np.array either 3D or 2D. Dimensions order Z, Y, X
+    :param center_lists: [center_array_1, center_array_2, ...] where each center_array is a numpy array of size N_i x 3
+    consisting of triples of center values giving cz, cy, cx
+    :param str title: title of plot
+    :param color_lists: list of colors for each series to be plotted in
+    :param color_limits: [[vmin_1, vmax_1], ...]
+    :param legend_labels: labels for each series
+    :param weights: list of arrays [w_1, ..., w_n], with w_i the same size as center_array_i, giving the intensity of
+    the color to be plotted
+    :param cbar_labels: list of labels for color bars
+    :param vlims_percentile: (percentile_min, percentile_max) used to set color scale of image
+    :param gamma: gamma to use when displaying image
+    :return figure_handle:
+    """
+
+    if not isinstance(center_lists, list):
+        center_lists = [center_lists]
+    nlists = len(center_lists)
+
+    if color_lists is None:
+        cmap = plt.cm.get_cmap('hsv')
+        color_lists = []
+        for ii in range(nlists):
+            color_lists.append(cmap(ii / nlists))
+
+    if not isinstance(color_lists, (list, tuple)):
+        color_lists = [color_lists]
+
+    if legend_labels is None:
+        legend_labels = list(map(lambda x: "series #" + str(x) + " %d pts" % len(center_lists[x]), range(nlists)))
+
+    if weights is None:
+        weights = [np.ones(len(cs)) for cs in center_lists]
+
+    if not isinstance(weights, (list, tuple)):
+        weights = [weights]
+
+    if cbar_labels is None:
+        cbar_labels = ["" for cs in center_lists]
+
+    if not isinstance(cbar_labels, (list, tuple)):
+        cbar_labels = [cbar_labels]
+
+    if imgs.ndim == 3:
+        img_max_proj = np.nanmax(imgs, axis=0)
+    else:
+        img_max_proj = imgs
+
+    figh = plt.figure(**kwargs)
+    plt.suptitle(title)
+
+    # plot image
+    vmin = np.percentile(img_max_proj, vlims_percentile[0])
+    vmax = np.percentile(img_max_proj, vlims_percentile[1])
+
+    plt.imshow(img_max_proj, norm=PowerNorm(gamma=gamma, vmin=vmin, vmax=vmax), cmap=plt.cm.get_cmap("bone"))
+    xlim = plt.xlim()
+    ylim = plt.ylim()
+
+    cbar = plt.colorbar()
+    cbar.ax.set_ylabel("Image intensity (counts), gamma=%0.2f" % gamma)
+
+    # plot centers
+    for ii in range(nlists):
+        if color_limits is None:
+            vmin = 0
+            vmax = np.nanmax(weights[ii])
+        else:
+            vmin = color_limits[ii][0]
+            vmax = color_limits[ii][1]
+
+        cmap_color = LinearSegmentedColormap.from_list("test", [[0.5, 0.5, 0.5], color_lists[ii]])
+        cs = cmap_color((weights[ii] - vmin) / (vmax - vmin))
+
+        plt.scatter(center_lists[ii][:, 2], center_lists[ii][:, 1], facecolor='none', edgecolor=cs, marker='o')
+
+        cbar = plt.colorbar(plt.cm.ScalarMappable(norm=Normalize(vmin=vmin, vmax=vmax), cmap=cmap_color))
+        cbar.ax.set_ylabel(cbar_labels[ii])
+
+    plt.xlim(xlim)
+    plt.ylim(ylim)
+
+    plt.legend(legend_labels)
+
+    return figh

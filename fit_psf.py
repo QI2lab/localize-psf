@@ -3,7 +3,7 @@ Functions for estimating PSF's from images of fluorescent beads (z-stacks or sin
 experimental PSF's from the average of many beads and fitting 2D and 3D PSF models to beads. Also includes tools for
 working withpoint-spread functions and optical transfer functions more generally.
 
-The primary functions that will be called by an external script are, find_beads(), autofit_psfs(), and display_autofit().
+The primary functions that will be called by an external script are, find_beads(), autofit_psfs(), and display_autofit()
 """
 import os
 import copy
@@ -17,7 +17,7 @@ import scipy.interpolate
 import scipy.signal
 from scipy import fft
 import matplotlib.pyplot as plt
-from matplotlib.colors import PowerNorm, LinearSegmentedColormap, Normalize
+from matplotlib.colors import PowerNorm
 
 import localize
 import fit
@@ -27,9 +27,9 @@ import rois
 # most of the functions don't require this module, and it does not easily pip install,
 # so don't require it. Probably should enforce some reasonable behavior on the functions
 # that require it...
-
+# https://pypi.org/project/psfmodels/
 try:
-    import psfmodels as psfm # https://pypi.org/project/psfmodels/
+    import psfmodels as psfm
     psfmodels_available = True
 except ImportError:
     psfmodels_available = False
@@ -41,7 +41,6 @@ def blur_img_otf(ground_truth, otf):
 
     :param ground_truth:
     :param otf: optical transfer function evalated at the FFT frequencies (with f=0 near the center of the array)
-
     :return img_blurred:
     """
     gt_ft = fft.fftshift(fft.fft2(fft.ifftshift(ground_truth)))
@@ -56,8 +55,9 @@ def blur_img_psf(ground_truth, psf):
 
     :param ground_truth:
     :param psf: point-spread function. this array should be centered at ny//2, nx//2
-    # todo: allow PSF of different size than image
+    :return blurred_img:
     """
+    # todo: allow PSF of different size than image
     otf, _ = psf2otf(psf)
 
     return blur_img_otf(ground_truth, otf)
@@ -169,13 +169,16 @@ def atf2otf(atf, dx=None, wavelength=0.5, ni=1.5, defocus_um=0, fx=None, fy=None
             raise TypeError("if defocus != 0, dx, wavelength, ni must be provided")
 
         k = 2*np.pi / wavelength * ni
-        defocus_fn = np.exp(1j * defocus_um * np.sqrt(np.array(k**2 - (2 * np.pi)**2 * (fx[None, :]**2 + fy[:, None]**2), dtype=np.complex)))
+        defocus_fn = np.exp(1j * defocus_um *
+                            np.sqrt(np.array(k**2 - (2 * np.pi)**2 * (fx[None, :]**2 + fy[:, None]**2),
+                                             dtype=np.complex)))
     else:
         defocus_fn = 1
 
     atf_defocus = atf * defocus_fn
     # if even number of frequencies, we must translate otf_c by one so that f and -f match up
-    otf_c_minus_conj = np.roll(np.roll(np.flip(atf_defocus, axis=(0, 1)), np.mod(ny + 1, 2), axis=0), np.mod(nx + 1, 2), axis=1).conj()
+    otf_c_minus_conj = np.roll(np.roll(np.flip(atf_defocus, axis=(0, 1)), np.mod(ny + 1, 2), axis=0),
+                               np.mod(nx + 1, 2), axis=1).conj()
 
     otf = scipy.signal.fftconvolve(atf_defocus, otf_c_minus_conj, mode='same') / np.sum(np.abs(atf) ** 2)
     return otf, atf_defocus
@@ -190,7 +193,7 @@ def circ_aperture_atf(fx, fy, na, wavelength):
     @param fy:
     @param na:
     @param wavelength:
-    @return:
+    @return atf:
     """
     fmax = 0.5 / (0.5 * wavelength / na)
 
@@ -211,7 +214,7 @@ def circ_aperture_otf(fx, fy, na, wavelength):
     :param fy:
     :param na: numerical aperture
     :param wavelength: in um
-    :return:
+    :return otf:
     """
     # maximum frequency imaging system can pass
     fmax = 1 / (0.5 * wavelength / na)
@@ -240,7 +243,7 @@ def na2fwhm(na, wavelength):
     :param wavelength:
     :return fwhm: in same units as wavelength
     """
-    fwhm = (1.6163399561827614) / np.pi * wavelength / na
+    fwhm = 1.6163399561827614 / np.pi * wavelength / na
     return fwhm
 
 
@@ -250,9 +253,9 @@ def fwhm2na(wavelength, fwhm):
 
     @param wavelength:
     @param fwhm:
-    @return:
+    @return na:
     """
-    na = (1.6163399561827614) / np.pi * wavelength / fwhm
+    na = 1.6163399561827614 / np.pi * wavelength / fwhm
     return na
 
 
@@ -263,11 +266,11 @@ def na2sxy(na, wavelength):
 
     :param na:
     :param wavelength:
-    :return:
+    :return sigma:
     """
     fwhm = na2fwhm(na, wavelength)
     sigma = 1.49686886 / 1.6163399561827614 / 2 * fwhm
-    #2 * sqrt{2*log(2)} * sigma = 0.5 * wavelength / NA
+    # 2 * sqrt{2*log(2)} * sigma = 0.5 * wavelength / NA
     # sigma = na2fwhm(na, wavelength) / (2*np.sqrt(2 * np.log(2)))
     return sigma
 
@@ -277,7 +280,7 @@ def sxy2na(wavelength, sigma_xy):
     Convert sigma xy value to equivalent numerical aperture, assuming these are related as in the Airy function PSF
     @param wavelength:
     @param sigma_xy:
-    @return:
+    @return fwhm:
     """
     fwhm = 2 * 1.6163399561827614 / 1.49686886 * sigma_xy
     # fwhm = na2fwhm(na, wavelength)
@@ -289,12 +292,12 @@ def na2sz(na, wavelength, ni):
     """
     Convert numerical aperture to equivalent sigma-z value,
 
-    todo: believe this is a gaussian approx. Find reference
+    @param na: numerical aperture
     @param wavelength:
-    @param sigma_xy:
     @param ni: index of refraction
-    @return:
+    @return sz:
     """
+    # todo: believe this is a gaussian approx. Find reference
     return np.sqrt(6) / np.pi * ni * wavelength / na ** 2
 
 
@@ -306,9 +309,10 @@ def sz2na(sigma_z, wavelength, ni):
     @param wavelength:
     @param sigma_z:
     @param ni: index of refraction
-    @ return:
+    @ return na:
     """
     return np.sqrt(np.sqrt(6) / np.pi * ni * wavelength / sigma_z)
+
 
 # different PSF model functions
 def gaussian2d_psf(x, y, p, sf=1):
@@ -318,7 +322,7 @@ def gaussian2d_psf(x, y, p, sf=1):
     :param y:
     :param p: [A, cx, cy, NA, bg]
     :param sf:
-    :return:
+    :return value:
     """
 
     return gaussian3d_psf(x, y, np.array([0]), [p[0], p[1], p[2], 0, p[3], 1, p[4]], sf=sf, angles=(0., 0., 0.))
@@ -369,9 +373,9 @@ def gaussian3d_psf_jac(x, y, z, dc, p, sf, angles=(0., 0., 0.)):
     :param p: [A, cx, cy, cz, sxy, sz, bg]
     :param sf: factor to oversample pixels. The value of each pixel is determined by averaging sf**2 equally spaced
     points in the pixel.
-    :return:
+    :param angles:
+    :return jacobian:
     """
-
 
     # oversample points in pixel
     xx_s, yy_s, zz_s = oversample_pixel(x, y, z, dc, sf=sf, euler_angles=angles)
@@ -400,13 +404,17 @@ def gaussian3d_psf_jac(x, y, z, dc, p, sf, angles=(0., 0., 0.)):
 def gaussian_lorentzian_psf(x, y, z, dc, p, sf=1, angles=(0., 0., 0.)):
     """
     Gaussian-Lorentzian PSF model. One difficulty with the Gaussian PSF is the weight is not the same in every z-plane,
-    as we expect it should be. The Gaussian-Lorentzian form remedies this, but the functional form is no longer separable
+    as we expect it should be. The Gaussian-Lorentzian form remedies this, but the functional form
+    is no longer separable
 
     @param x:
     @param y:
     @param z:
-    @param p: [A, cx, cy, cz, sxy, hwhm_z, bg]
-    @return:
+    @param float dc:
+    @param p: [amplitude, cx, cy, cz, sxy, hwhm_z, bg]
+    @param int sf:
+    @param angles:
+    @return value:
     """
 
     if not isinstance(sf, int):
@@ -429,6 +437,17 @@ def gaussian_lorentzian_psf(x, y, z, dc, p, sf=1, angles=(0., 0., 0.)):
 
 
 def gaussian_lorentzian_psf_jac(x, y, z, dc, p, sf=1, angles=(0., 0., 0.)):
+    """
+    Get jacobian of gaussian_lorentzian_psf()
+    @param x:
+    @param y:
+    @param z:
+    @param dc:
+    @param p:
+    @param sf:
+    @param angles:
+    @return jacobian:
+    """
     if not isinstance(sf, int):
         raise ValueError("sf must be an integer")
 
@@ -466,9 +485,10 @@ def born_wolf_psf(x, y, z, p, wavelength, ni, sf=1):
     :param y: in um
     :param z: in um
     :param p: [A, cx, cy, cz, NA, bg]
-    :param wavelength: in um
-    :param ni: index of refraction
-    :return:
+    :param float wavelength: in um
+    :param float ni: index of refraction
+    :param int sf:
+    :return value:
     """
     if sf != 1:
         raise NotImplementedError("Only implemented for sf=1")
@@ -526,7 +546,7 @@ def born_wolf_psf(x, y, z, p, wavelength, ni, sf=1):
             int_img = scipy.integrate.quad(lambda rho: integrand(rho, r, zc).imag, 0, 1)[0]
 
             coords = np.unravel_index(ii, rr.shape)
-            psfs[coords] = p[0] * 4 * (int_real ** 2 + int_img **2) + p[5]
+            psfs[coords] = p[0] * 4 * (int_real ** 2 + int_img ** 2) + p[5]
 
     return psfs
 
@@ -588,9 +608,11 @@ def oversample_voxel(coords, drs, sf=3):
     pts = np.arange(1 / (2 * sf), 1 - 1 / (2 * sf), 1 / sf) - 0.5
     pts_dims = np.meshgrid(*[pts * dr for dr in drs], indexing="ij")
 
-    coords_upsample = [np.expand_dims(c, axis=-1) + np.expand_dims(np.ravel(r), axis=0) for c, r in zip(coords, pts_dims)]
+    coords_upsample = [np.expand_dims(c, axis=-1) + np.expand_dims(np.ravel(r), axis=0)
+                       for c, r in zip(coords, pts_dims)]
     # now must add these to each point x, y, z
     return coords_upsample
+
 
 # main functions for fitting/plotting PSFs
 def get_psf_coords(ns, drs):
@@ -622,14 +644,17 @@ def model_psf(nx, dxy, z, p, wavelength, ni, sf=1, model='vectorial', **kwargs):
     For 'gaussian', it wraps the gaussian3d_pixelated_psf() function. More details about the relationship between
     the Gaussian sigma and the numerical aperture can be found here: https://doi.org/10.1364/AO.46.001819
 
-    todo: need to implement index of refraction?
+    todo: need to implement index of refraction everywhere?
 
     :param nx: number of points to be sampled in x- and y-directions
     :param dxy: pixel size in um
     :param z: z positions in um
     :param p: [A, cx, cy, cz, NA, bg]
-    :param wavelength: wavelength in um
-    :param model: 'gaussian', 'gibson-lanni', 'born-wolf', or 'vectorial'. 'gibson-lanni' relies on the psfmodels function
+    :param float wavelength: wavelength in um
+    :param float ni: index of refraction
+    :param int sf:
+    :param model: 'gaussian', 'gibson-lanni', 'born-wolf', or 'vectorial'. 'gibson-lanni'
+     relies on the psfmodels function
     scalar_psf(), while 'vectorial' relies on the psfmodels function vectorial_psf()
     :param kwargs: keywords passed through to vectorial_psf() or scalar_psf()
     :return:
@@ -701,19 +726,22 @@ def fit_psfmodel(img, dxy, dz, wavelength, ni, sf=1, model='vectorial',
 
     The x/y coordinates are assumed to match the convention of get_coords(), i.e. they are (arange(nx) / nx//2) * d
 
-    # todo: make sure ni implemented correctly. if want to use different ni, have to be careful because this will shift the focus position away from z=0
+    # todo: make sure ni implemented correctly. if want to use different ni, have to be careful because this will
+    # todo: shift the focus position away from z=0
     # todo: make sure oversampling (sf) works correctly with all functions
 
-    :param img: Nz x Ny x Nx image stack
-    :param dxy: dx and dy in um
-    :param dz: dz in um
-    :param init_params: [A, cx, cy, cz, NA, bg]
-    :param sd: standard deviations if img is derived from averaged pictures
-    :param wavelength: wavelength in um
+    :param img: nz x ny x nx image stack
+    :param float dxy: dx and dy in um
+    :param float dz: dz in um
+    :param float wavelength: wavelength in um
+    :param float ni: index of refraction
+    :param sf:
     :param model: 'gaussian', 'gibson-lanni', or 'vectorial'
-
-    :return result:
-    :return fit_fn:
+    :param init_params: [A, cx, cy, cz, NA, bg]
+    :param list[bool] fixed_params:
+    :param sd: standard deviations if img is derived from averaged pictures
+    :param bounds:
+    :return result, fit_fn: result is a dictionary object, and fit_fn takes arguments x and y
     """
 
     # get coordinates
@@ -740,11 +768,9 @@ def fit_psfmodel(img, dxy, dz, wavelength, ni, sf=1, model='vectorial',
         to_use = np.logical_not(np.isnan(img))
 
         bg = np.mean(img[to_use].ravel())
-        A = np.max(img[to_use].ravel()) - bg
+        amp = np.max(img[to_use].ravel()) - bg
 
-        cz, cy, cx = fit.get_moments(img, order=1, coords=(np.expand_dims(z, axis=(1, 2)),
-                                                           np.expand_dims(y, axis=(0, 2)),
-                                                           np.expand_dims(x, axis=(0, 1))))
+        cz, cy, cx = fit.get_moments(img, order=1, coords=(np.expand_dims(z, axis=(1, 2)), y, x))
 
         # iz = np.argmin(np.abs(z - cz))
         # m2y, m2x = tools.get_moments(img[iz], order=2, coords=[y, x])
@@ -754,7 +780,7 @@ def fit_psfmodel(img, dxy, dz, wavelength, ni, sf=1, model='vectorial',
         # na_guess = 0.22 * wavelength / np.sqrt(sx * sy)
         na_guess = 1
 
-        ip_default = [A, cx, cy, cz, na_guess, bg]
+        ip_default = [amp, cx, cy, cz, na_guess, bg]
 
         for ii in range(len(init_params)):
             if init_params[ii] is None:
@@ -775,35 +801,38 @@ def fit_psfmodel(img, dxy, dz, wavelength, ni, sf=1, model='vectorial',
                   (np.inf, x.max(), y.max(), zhigh, ni, np.inf))
 
     # do fitting
-    model_fn = lambda z, nx, dxy, p: model_psf(nx, dxy, z, p, wavelength, ni, sf=sf, model=model)
+    def model_fn(z, nx, dxy, p): return model_psf(nx, dxy, z, p, wavelength, ni, sf=sf, model=model)
 
     result = fit.fit_model(img, lambda p: model_fn(z, nx, dxy, p), init_params,
                            fixed_params=fixed_params, sd=sd, bounds=bounds, jac='3-point', x_scale='jac')
 
     # model function at fit parameters
-    fit_fn = lambda z, nx, dxy: model_fn(z, nx, dxy, result['fit_params'])
+    def fit_fn(z, nx, dxy): return model_fn(z, nx, dxy, result['fit_params'])
 
     return result, fit_fn
 
 
 def plot_psfmodel_fit(imgs, dx, dz, wavelength, ni, sf, fit_params, model='vectorial',
-                      gamma=1, figsize=(18, 10), save_dir=None, label='', **kwargs):
+                      gamma=1., figsize=(18, 10), save_dir=None, label='', **kwargs):
     """
     Plot data and fit obtained from fit_psfmodel().
 
     Multiple different fits can be plotted if fit_params, chi_sqrs, cov, and model are provided as lists.
 
-    :param ni:
     :param imgs: 3D image stack
-    :param dx: pixel size in um
-    :param dz: space between z-planes in um
-    :param fits: list of fit dictionary objects to be plotted.
-    :param model: 'vectorial', 'gibson-lanni', 'born-wolf', or 'gaussian'
-    :param figsize:
-    :param save_dir: if not None, then a png of figure will be saved in the provided directory
-    :param label: label to add to the start of the file name, if saving
+    :param float dx: pixel size in um
+    :param float dz: space between z-planes in um
+    :param float float wavelength:
+    :param float ni:
+    :param int sf:
+    :param fit_params: nfits x nparams array
+    :param str model: 'vectorial', 'gibson-lanni', 'born-wolf', or 'gaussian'
+    :param float gamma:
+    :param tuple(float, float) figsize: (sx, sy)
+    :param str save_dir: if not None, then a png of figure will be saved in the provided directory
+    :param str label: label to add to the start of the file name, if saving
     :param kwargs: additional keyword arguments are passed to plt.figure()
-    :return:
+    :return figure_handle:
     """
 
     info = "%s, %s, sf=%d" % (label, model, sf)
@@ -876,7 +905,8 @@ def get_exp_psf(imgs, coords, centers, roi_sizes, backgrounds=None):
         zshift_pix = (zroi[cz_pix_roi, 0, 0] - centers[ii, 0]) / dz
 
         # get coordinates
-        img_roi_shifted = ndi.shift(np.array(img_roi, dtype=float), [zshift_pix, yshift_pix, xshift_pix], mode="constant", cval=-1)
+        img_roi_shifted = ndi.shift(np.array(img_roi, dtype=float), [zshift_pix, yshift_pix, xshift_pix],
+                                    mode="constant", cval=-1)
         img_roi_shifted[img_roi_shifted == -1] = np.nan
 
         # put into array in appropriate positions
@@ -1015,11 +1045,13 @@ def plot_psf_fit(imgs, imgs_fit, coords, fit_params, fit_param_names=None, label
 
     return figh
 
+
 def plot_fit_stats(fit_params, figsize=(18, 10), **kwargs):
     """
     Plot statistics for a list of fit result dictionaries
 
     :param fit_params: N x 6 list of localization fit parameters
+    :param figsize:
     :param kwargs: passed to plt.figure()
     :return figh: figure handle
     """
@@ -1050,99 +1082,8 @@ def plot_fit_stats(fit_params, figsize=(18, 10), **kwargs):
     return figh
 
 
-def plot_bead_locations(imgs, center_lists, title="", color_lists=None, color_limits=None, legend_labels=None, weights=None,
-                        cbar_labels=None, vlims_percentile=(0.01, 99.99), **kwargs):
-    """
-    Plot center locations on 2D image or max projection of 3D image
-
-    # todo: replace some of the more complicated plotting functions with this one ... maybe add another argument
-    # weights which gives intensity of each color
-
-    :param imgs: np.array either 3D or 2D. Dimensions order Z, Y, X
-    :param center_lists: [center_array_1, center_array_2, ...] where each center_array is a numpy array of size N_i x 3
-    consisting of triples of center values giving cz, cy, cx
-    :param color_lists: list of colors for each series to be plotted in
-    :param color_limits: [[vmin_1, vmax_1], ...]
-    :param legend_labels: labels for each series
-    :param weights: list of arrays [w_1, ..., w_n], with w_i the same size as center_array_i, giving the intensity of
-    the color to be plotted
-    :return:
-    """
-
-    if not isinstance(center_lists, list):
-        center_lists = [center_lists]
-    nlists = len(center_lists)
-
-    if color_lists is None:
-        cmap = plt.cm.get_cmap('hsv')
-        color_lists = []
-        for ii in range(nlists):
-            color_lists.append(cmap(ii / nlists))
-
-    if not isinstance(color_lists, (list, tuple)):
-        color_lists = [color_lists]
-
-
-    if legend_labels is None:
-        legend_labels = list(map(lambda x: "series #" + str(x) + " %d pts" % len(center_lists[x]), range(nlists)))
-
-    if weights is None:
-        weights = [np.ones(len(cs)) for cs in center_lists]
-
-    if not isinstance(weights, (list, tuple)):
-        weights = [weights]
-
-    if cbar_labels is None:
-        cbar_labels = ["" for cs in center_lists]
-
-    if not isinstance(cbar_labels, (list, tuple)):
-        cbar_labels = [cbar_labels]
-
-    if imgs.ndim == 3:
-        img_max_proj = np.nanmax(imgs, axis=0)
-    else:
-        img_max_proj = imgs
-
-    figh = plt.figure(**kwargs)
-    plt.suptitle(title)
-
-    # plot image
-    vmin = np.percentile(img_max_proj, vlims_percentile[0])
-    vmax = np.percentile(img_max_proj, vlims_percentile[1])
-
-    plt.imshow(img_max_proj, vmin=vmin, vmax=vmax, cmap=plt.cm.get_cmap("bone"))
-    xlim = plt.xlim()
-    ylim = plt.ylim()
-
-    cbar = plt.colorbar()
-    cbar.ax.set_ylabel("Image intensity (counts)")
-
-    # plot centers
-    for ii in range(nlists):
-        if color_limits is None:
-            vmin = 0
-            vmax = np.nanmax(weights[ii])
-        else:
-            vmin = color_limits[ii][0]
-            vmax = color_limits[ii][1]
-
-        cmap_color = LinearSegmentedColormap.from_list("test", [[0.5, 0.5, 0.5], color_lists[ii]])
-        cs = cmap_color((weights[ii] - vmin) / (vmax - vmin))
-
-        plt.scatter(center_lists[ii][:, 2], center_lists[ii][:, 1], facecolor='none', edgecolor=cs, marker='o')
-
-        cbar = plt.colorbar(plt.cm.ScalarMappable(norm=Normalize(vmin=vmin, vmax=vmax), cmap=cmap_color))
-        cbar.ax.set_ylabel(cbar_labels[ii])
-
-    plt.xlim(xlim)
-    plt.ylim(ylim)
-
-    plt.legend(legend_labels)
-
-    return figh
-
-
 # main fitting function
+# todo: does it make more sense to move this to localize.py? Or maybe somewhere else?
 def autofit_psfs(imgs, psf_roi_size, dx, dz, wavelength, ni=1.5, model='vectorial', sf=1,
                  threshold=100, min_spot_sep=(3, 3),
                  filter_sigma_small=(1, 0.5, 0.5), filter_sigma_large=(3, 5, 5),
@@ -1175,14 +1116,14 @@ def autofit_psfs(imgs, psf_roi_size, dx, dz, wavelength, ni=1.5, model='vectoria
     :param float fit_amp_thresh: only consider spots which have fit values larger tha this amplitude
     :param dist_boundary_min:
     :param fit_dist_max_err:
-    :param int num_localization_to_plot: number of ROI's to plot
+    :param int num_localizations_to_plot: number of ROI's to plot
     :param tuple psf_percentiles: calculate the averaged PSF from the smallest supplied percentage of spots. When
     a tuple is given, compute PSF's corresponding to each supplied percentage.
     :param bool plot: whether or not to plot
     :param float gamma: gamma to use when plotting
-    :param save_dir:
-    :param fig_size:
-    :param **kwargs: passed through to figures
+    :param str save_dir:
+    :param figsize: (sx, sy)
+    :param **kwargs: passed through to plt.figure()
 
     :return:
     """
@@ -1232,18 +1173,18 @@ def autofit_psfs(imgs, psf_roi_size, dx, dz, wavelength, ni=1.5, model='vectoria
     # ###################################
     z, y, x = localize.get_coords(imgs.shape, (dz, dx, dx))
 
-    coords, fit_params, init_params, rois, to_keep, conditions, condition_names, filter_settings = localize.localize_beads(
-        imgs, dx, dz, threshold, roi_size_loc, filter_sigma_small, filter_sigma_large,
-        min_spot_sep, sigma_bounds, fit_amp_thresh, fit_dist_max_err=fit_dist_max_err, dist_boundary_min=dist_boundary_min,
-        use_gpu_filter=False)
+    coords, fit_params, init_params, rois, to_keep, conditions, condition_names, filter_settings = \
+        localize.localize_beads(imgs, dx, dz, threshold, roi_size_loc, filter_sigma_small, filter_sigma_large,
+                                min_spot_sep, sigma_bounds, fit_amp_thresh, fit_dist_max_err=fit_dist_max_err,
+                                dist_boundary_min=dist_boundary_min, use_gpu_filter=False)
 
     # ###################################
     # plot individual localizations
     # ###################################
     ind_to_plot = np.arange(len(to_keep), dtype=int)[to_keep][:num_localizations_to_plot]
     results = joblib.Parallel(n_jobs=-1, verbose=10, timeout=None)(
-        joblib.delayed(localize.plot_gauss_roi)(fit_params[ind], rois[ind], imgs, coords, init_params[ind], figsize=figsize,
-                                                prefix="localization_roi_%d" % ind, save_dir=save_dir)
+        joblib.delayed(localize.plot_gauss_roi)(fit_params[ind], rois[ind], imgs, coords, init_params[ind],
+                                                figsize=figsize, prefix="localization_roi_%d" % ind, save_dir=save_dir)
         for ind in ind_to_plot
     )
 
@@ -1299,8 +1240,9 @@ def autofit_psfs(imgs, psf_roi_size, dx, dz, wavelength, ni=1.5, model='vectoria
                             fit_params[:, 2][to_keep] / dx,
                             fit_params[:, 1][to_keep] / dx), axis=1)
 
-        figh = plot_bead_locations(imgs, centers, title="Max intensity projection and NA from 2D fit versus position",
-                            weights=fit_params[:, 4], cbar_labels=["sigma"], figsize=figsize, **kwargs)
+        figh = localize.plot_bead_locations(imgs, centers, weights=fit_params[:, 4], cbar_labels=["sigma"],
+                                            title="Max intensity projection and NA from 2D fit versus position",
+                                            figsize=figsize, **kwargs)
 
         if saving:
             fname = os.path.join(save_dir, "sigma_versus_position.png")
@@ -1317,7 +1259,6 @@ def autofit_psfs(imgs, psf_roi_size, dx, dz, wavelength, ni=1.5, model='vectoria
         fname = os.path.join(save_dir, "localization_results.pkl")
         with open(fname, "wb") as f:
             pickle.dump(data, f)
-
 
     return coords, fit_params, init_params, rois, to_keep, conditions, condition_names, filter_settings,\
            psfs_real, psf_coords, otfs_real, otf_coords, psf_percentiles, fit_params_real

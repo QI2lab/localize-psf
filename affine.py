@@ -128,7 +128,8 @@ def xform_mat(mat, xform, img_coords, mode='nearest'):
     co = [np.reshape(c, output_shape) for c in co]
 
     # only use points with coords in image
-    to_use = np.logical_and.reduce([np.logical_and(oc >= np.min(ocm), oc <= np.max(ocm)) for oc, ocm in zip(co, co_mat)])
+    to_use = np.logical_and.reduce([np.logical_and(oc >= np.min(ocm), oc <= np.max(ocm))
+                                    for oc, ocm in zip(co, co_mat)])
     if mode == 'nearest':
         # find closest point in matrix to each output point
         inds = [tuple(np.array(np.round(oc[to_use]), dtype=int)) for oc in co]
@@ -342,12 +343,14 @@ def xform_sinusoid_params_roi(fx, fy, phase, object_size, img_roi, affine_mat,
     :param float fy: y-component of frequency in object space
     :param float phase: phase of pattern in object space coordinates system o or o'.
     :param list[int] object_size: [sy, sx], size of object space, required to define origin of o'
-    :param list[int] img_roi: [ystart, yend, xstart, xend], region of interest in image space. Note: this region does not include
-    the pixels at yend and xend! In coordinates with integer values the pixel centers, it is the area
+    :param list[int] img_roi: [ystart, yend, xstart, xend], region of interest in image space. Note: this region does
+     not include the pixels at yend and xend! In coordinates with integer values the pixel centers, it is the area
     [ystart - 0.5*dy, yend-0.5*dy] x [xstart -0.5*dx, xend - 0.5*dx]
     :param np.array affine_mat: affine transformation matrix, which takes points from o -> i
-    :param str input_origin: "fft" if phase is provided in coordinate system o', or "edge" if provided in coordinate sysem o
-    :param str output_origin: "fft" if output phase should be in coordinate system r' or "edge" if in coordinate system r
+    :param str input_origin: "fft" if phase is provided in coordinate system o', or "edge" if provided in
+     coordinate system o
+    :param str output_origin: "fft" if output phase should be in coordinate system r' or "edge" if in
+     coordinate system r
 
     :return fx_xform: x-component of frequency in coordinate system r'
     :return fy_xform: y-component of frequency in coordinates system r'
@@ -435,7 +438,7 @@ def fit_xform_points(from_pts, to_pts, translate_only=False):
     :param from_pts: npts x ndims array, where each column gives coordinates for a different dimension, e.g. first
      column is x, second is y,...
     :param to_pts: npts x ndims array. The desired affine transformation acts on from_pts to produce to_pts
-
+    :param bool translate_only: if True do not allow scaling/shearing in affine transformation, only allow translation
     :return affine_mat: affine matrix. This is an (ndim + 1) x (ndim + 1) matrix which act on homogeneous coordinates.
     To transform coordinates using this affine transformation use xform_points()
     :return vars: estimated variances of the affine transformation matrix entries
@@ -469,7 +472,8 @@ def fit_xform_points(from_pts, to_pts, translate_only=False):
             var_sample = residuals / (npts - (ndim + 1))
             vars[ii] = np.diag(xt_x_inv) * var_sample
         else:
-            params_temp, residuals, rank, svals = np.linalg.lstsq(np.expand_dims(from_pts_aug[-1], axis=1), to_pts[ii] - from_pts[ii], rcond=None)
+            params_temp, residuals, rank, svals = \
+                np.linalg.lstsq(np.expand_dims(from_pts_aug[-1], axis=1), to_pts[ii] - from_pts[ii], rcond=None)
             affine_mat[ii, -1] = params_temp
             affine_mat[ii, ii] = 1
 
@@ -488,8 +492,9 @@ def fit_xform_points_ransac(from_pts, to_pts, dist_err_max=0.3, niterations=1000
 
     :param from_pts:
     :param to_pts:
-    :param dist_err_max: maximum distance error for points to be considered "inliers"
-    :param niterations: number of iterations of RANSAC
+    :param float dist_err_max: maximum distance error for points to be considered "inliers"
+    :param int niterations: number of iterations of RANSAC
+    :param int njobs: passed through to joblib to set number of cores to use
     :param kwargs: passed through to fit_xform_points()
 
     :result xform_best, inliers_best, err_best, vars_best:
@@ -530,7 +535,8 @@ def fit_xform_points_ransac(from_pts, to_pts, dist_err_max=0.3, niterations=1000
             is_inlier_prop[np.sort(np.random.choice(np.arange(npts), size=ninit_pts, replace=False))] = True
             not_inlier_prop = np.logical_not(is_inlier_prop)
 
-            xform_prop, _ = fit_xform_points(from_pts[is_inlier_prop], to_pts[is_inlier_prop], translate_only=translate_only)
+            xform_prop, _ = fit_xform_points(from_pts[is_inlier_prop], to_pts[is_inlier_prop],
+                                             translate_only=translate_only)
 
             # get distance errors of other points to determine if inliers or outliers
             dist_errs = np.sqrt(np.linalg.norm(to_pts[not_inlier_prop] -
@@ -539,7 +545,8 @@ def fit_xform_points_ransac(from_pts, to_pts, dist_err_max=0.3, niterations=1000
             is_inlier_prop[not_inlier_prop] = dist_errs < dist_err_max
 
             # refit using all inliers and compute final error and inliers
-            xform_prop, vars_prop = fit_xform_points(from_pts[is_inlier_prop], to_pts[is_inlier_prop], translate_only=translate_only)
+            xform_prop, vars_prop = fit_xform_points(from_pts[is_inlier_prop], to_pts[is_inlier_prop],
+                                                     translate_only=translate_only)
 
             dist_errs = np.sqrt(np.linalg.norm(to_pts - xform_points(from_pts, xform_prop), axis=1))
 
@@ -574,15 +581,15 @@ def fit_xform_img(img, img_xformed, init_params=None):
 
     raise NotImplementedError("Function not finished!")
     # todo: OR maybe better idea: look at cross correlation and maximize this to begin with?
-    xform_fn = lambda p: np.array([[p[0], p[1], p[2]], [p[3], p[4], p[5]], [0, 0, 1]])
+    def xform_fn(p): return np.array([[p[0], p[1], p[2]], [p[3], p[4], p[5]], [0, 0, 1]])
 
     # err_fn = lambda p: img.ravel() - affine_xform_mat(mask, xform_fn(p), img.shape, mode='nearest').ravel()
     # fit_dict = optimize.least_squares(err_fn, init_params)
     img_sum = np.sum(img)
 
     img_coords = np.meshgrid(range(img.shape[1], img.shape[0]))
-    min_fn = lambda p: -np.sum(img.ravel() * xform_mat(img_xformed, xform_fn(p), img_coords, mode='interp').ravel()) / \
-                       img_sum / np.sum(xform_mat(img_xformed, xform_fn(p), img_coords, mode='interp'))
+    def min_fn(p): return -np.sum(img.ravel() * xform_mat(img_xformed, xform_fn(p), img_coords, mode='interp').ravel()) / \
+                           img_sum / np.sum(xform_mat(img_xformed, xform_fn(p), img_coords, mode='interp'))
 
     fit_dict = optimize.minimize(min_fn, init_params)
     pfit = fit_dict['x']

@@ -19,14 +19,16 @@ def fit_model(img, model_fn, init_params, fixed_params=None, sd=None, bounds=Non
     :param np.array img: nd array
     :param model_fn: function f(p)
     :param list[float] init_params: p = [p1, p2, ..., pn]
-    :param list[boolean] fixed_params: list of boolean values, same size as init_params. If None, no parameters will be fixed.
+    :param list[boolean] fixed_params: list of boolean values, same size as init_params. If None,
+     no parameters will be fixed.
     :param sd: uncertainty in parameters y. e.g. if experimental curves come from averages then should be the standard
     deviation of the mean. If None, then will use a value of 1 for all points. As long as these values are all the same
     they will not affect the optimization results, although they will affect chi squared.
     :param tuple[tuple[float]] bounds: (lbs, ubs). If None, -/+ infinity used for all parameters.
-    :param model_jacobian: Jacobian of the model function as a list, [df/dp[0], df/dp[1], ...]. If None, no jacobian used.
+    :param model_jacobian: Jacobian of the model function as a list, [df/dp[0], df/dp[1], ...]. If None,
+     no jacobian used.
     :param kwargs: additional key word arguments will be passed through to scipy.optimize.least_squares
-    :return:
+    :return dict results:
     """
     to_use = np.logical_not(np.isnan(img))
 
@@ -60,16 +62,18 @@ def fit_least_squares(model_fn, init_params, fixed_params=None, bounds=None, mod
     and calculating fit uncertainty.
 
     :param model_fn: function of model parameters p which returns an array, where the sum of squares of this array is
-    minimized. e.g. if we have a set of data points x_i and we make measurements y_i with uncertainties sigma_i, and we have
-    a model m(p, x_i)
+    minimized. e.g. if we have a set of data points x_i and we make measurements y_i with uncertainties sigma_i,
+    and we have a model m(p, x_i)
      then f(p) = [(m(p, x_i) - y_i) / sigma_i]
     :param list[float] init_params: p = [p1, p2, ..., pn]
-    :param list[boolean] fixed_params: list of boolean values, same size as init_params. If None, no parameters will be fixed.
+    :param list[boolean] fixed_params: list of boolean values, same size as init_params. If None,
+     no parameters will be fixed.
     :param tuple[tuple[float]] bounds: (lbs, ubs). If None, -/+ infinity used for all parameters.
-    :param model_jacobian: Jacobian of the model function as a list, [df/dp[0], df/dp[1], ...]. If None, no jacobian used.
+    :param model_jacobian: Jacobian of the model function as a list, [df/dp[0], df/dp[1], ...]. If None,
+     no jacobian used.
     :param kwargs: additional key word arguments will be passed through to scipy.optimize.least_squares
 
-    :return fit_params: dictionary object. Uncertainty can be obtained from the square rootsof the diagonals of the
+    :return results: dictionary object. Uncertainty can be obtained from the square rootsof the diagonals of the
      covariance matrix, but these will only be meaningful if variances were appropriately provided for the cost function
     """
 
@@ -163,8 +167,8 @@ def get_moments(img, order=1, coords=None, dims=None):
     :param order: order of moments to be calculated
     :param coords: list of coordinate arrays for each dimension e.g. (y, x), where y, x etc. are broadcastable to the
     same size as img
-    :param dims: dimensions to be summed over. For example, given roi_size 3D array of size Nz x Ny x Nz, calculate the 2D
-    moments of each slice by setting dims = [1, 2]
+    :param dims: dimensions to be summed over. For example, given roi_size 3D array of size Nz x Ny x Nz,
+     calculate the 2D moments of each slice by setting dims = [1, 2]
     :return moments:
     """
 
@@ -208,7 +212,7 @@ def fit_gauss1d(y, init_params=None, fixed_params=None, sd=None, x=None, bounds=
     :param sd:
     :param x:
     :param bounds:
-    :return:
+    :return results, fit_function:
     """
 
     # get coordinates if not provided
@@ -226,13 +230,13 @@ def fit_gauss1d(y, init_params=None, fixed_params=None, sd=None, x=None, bounds=
         to_use = np.logical_not(np.isnan(y))
 
         bg = np.nanmean(y.ravel())
-        A = np.max(y[to_use].ravel()) - bg
+        amp = np.max(y[to_use].ravel()) - bg
 
         cx, = get_moments(y, order=1, coords=[x])
         m2x, = get_moments(y, order=2, coords=[x])
         sx = np.sqrt(m2x - cx ** 2)
 
-        ip_default = [A, cx, sx, bg]
+        ip_default = [amp, cx, sx, bg]
 
         # set any parameters that were None to the default values
         for ii in range(len(init_params)):
@@ -243,14 +247,14 @@ def fit_gauss1d(y, init_params=None, fixed_params=None, sd=None, x=None, bounds=
         bounds = ((-np.inf, x.min(), 0, -np.inf),
                   (np.inf, x.max(), x.max() - x.min(), np.inf))
 
-    fn = lambda p: gauss2d(x, np.zeros(x.shape), [p[0], p[1], 0, p[2], 1, p[3], 0])
-    jacob_fn = lambda p: gauss2d_jacobian(x, np.zeros(x.shape), [p[0], p[1], 0, p[2], 1, p[3], 0])
+    def fn(p): return gauss2d(x, np.zeros(x.shape), [p[0], p[1], 0, p[2], 1, p[3], 0])
+    def jacob_fn(p): return gauss2d_jacobian(x, np.zeros(x.shape), [p[0], p[1], 0, p[2], 1, p[3], 0])
 
     result = fit_model(y, fn, init_params, fixed_params=fixed_params,
                        sd=sd, bounds=bounds, model_jacobian=jacob_fn, **kwargs)
 
     pfit = result['fit_params']
-    fit_fn = lambda x: gauss2d(x, np.zeros(x.shape), [pfit[0], pfit[1], 0, pfit[2], 1, pfit[3], 0])
+    def fit_fn(x): return gauss2d(x, np.zeros(x.shape), [pfit[0], pfit[1], 0, pfit[2], 1, pfit[3], 0])
 
     return result, fit_fn
 
@@ -272,8 +276,7 @@ def fit_gauss2d(img, init_params=None, fixed_params=None, sd=None, xx=None, yy=N
     non-regularly spaced grids, etc.)
     :param yy:
     :param bounds: (lbs, ubs)
-    :return dict results:
-    :return fit_fn:
+    :return dict results, fit_fn:
     """
 
     # get coordinates if not provided
@@ -291,7 +294,7 @@ def fit_gauss2d(img, init_params=None, fixed_params=None, sd=None, xx=None, yy=N
         to_use = np.logical_not(np.isnan(img))
 
         bg = np.nanmean(img.ravel())
-        A = np.max(img[to_use].ravel()) - bg
+        amp = np.max(img[to_use].ravel()) - bg
 
         cy, cx = get_moments(img, order=1, coords=(yy, xx))
         m2y, m2x = get_moments(img, order=2, coords=(yy, xx))
@@ -299,7 +302,7 @@ def fit_gauss2d(img, init_params=None, fixed_params=None, sd=None, xx=None, yy=N
             sx = np.sqrt(m2x - cx ** 2)
             sy = np.sqrt(m2y - cy ** 2)
 
-        ip_default = [A, cx, cy, sx, sy, bg, 0]
+        ip_default = [amp, cx, cy, sx, sy, bg, 0]
 
         # set any parameters that were None to the default values
         for ii in range(len(init_params)):
@@ -333,6 +336,7 @@ def fit_sum_gauss2d(img, ngaussians, init_params, fixed_params=None, sd=None, xx
     with this when looking at results using e.g. matplotlib.imshow, as this will display the negative y-axis on top.
 
     :param img: 2D image to fit
+    :param in ngaussians: number of Gaussians
     :param init_params: [A1, cx1, cy1, sx1, sy1, theta1, A2, cx2, ..., thetan, bg]
     :param fixed_params: list of boolean values, same size as init_params.
     :param sd: uncertainty in parameters y. e.g. if experimental curves come from averages then should be the standard
@@ -341,7 +345,7 @@ def fit_sum_gauss2d(img, ngaussians, init_params, fixed_params=None, sd=None, xx
     non-regularly spaced grids, etc.)
     :param yy:
     :param bounds: (lbs, ubs)
-    :return:
+    :return result, fit_function:
     """
 
     # get coordinates if not provided
@@ -380,7 +384,7 @@ def fit_half_gauss1d(y, init_params=None, fixed_params=None, sd=None, x=None, bo
     :param sd:
     :param x:
     :param bounds:
-    :return:
+    :return result, fit_function:
     """
 
     # get coordinates if not provided
@@ -399,13 +403,13 @@ def fit_half_gauss1d(y, init_params=None, fixed_params=None, sd=None, x=None, bo
         to_use = np.logical_not(np.isnan(y))
 
         bg = np.nanmean(y.ravel())
-        A = np.max(y[to_use].ravel()) - bg
+        amp = np.max(y[to_use].ravel()) - bg
 
         cx, = get_moments(y, order=1, coords=[x])
         m2x, = get_moments(y, order=2, coords=[x])
         sx = np.sqrt(m2x - cx ** 2)
 
-        ip_default = [A, cx, sx, bg, sx, bg]
+        ip_default = [amp, cx, sx, bg, sx, bg]
 
         # set any parameters that were None to the default values
         for ii in range(len(init_params)):
@@ -416,13 +420,13 @@ def fit_half_gauss1d(y, init_params=None, fixed_params=None, sd=None, x=None, bo
         bounds = ((-np.inf, x.min(), 0, -np.inf, 0, -np.inf),
                   (np.inf, x.max(), x.max() - x.min(), np.inf, x.max() - x.min(), np.inf))
 
-    hg_fn = lambda x, p: (p[0] * np.exp(-(x - p[1])**2 / (2*p[2]**2)) + p[3]) * (x < p[1]) + \
-                         ((p[0] + p[3] - p[5]) * np.exp(-(x - p[1])**2 / (2*p[4]**2)) + p[5]) * (x >= p[1])
+    def hg_fn(x, p): return (p[0] * np.exp(-(x - p[1])**2 / (2*p[2]**2)) + p[3]) * (x < p[1]) + \
+                            ((p[0] + p[3] - p[5]) * np.exp(-(x - p[1])**2 / (2*p[4]**2)) + p[5]) * (x >= p[1])
 
     result = fit_model(y, lambda p: hg_fn(x, p), init_params, fixed_params=fixed_params, sd=sd, bounds=bounds, **kwargs)
 
     pfit = result['fit_params']
-    fit_fn = lambda x: hg_fn(x, pfit)
+    def fit_fn(x): return hg_fn(x, pfit)
 
     return result, fit_fn
 
@@ -529,8 +533,8 @@ def sum_gauss2d(x, y, p):
     Sum of n 2D gaussians
     :param x:
     :param y:
-    :param p: [A1, cx1, cx2, sx1, sx2, theta1, A2, ..., thetan, bg]
-    :return:
+    :param p: [amp_1, cx1, cx2, sx1, sx2, theta_1, amp_2, ..., theta_n, bg]
+    :return value:
     """
     if len(p) % 6 != 1:
         raise ValueError("Parameter list should have remainder 1 mod 6")
@@ -554,7 +558,7 @@ def sum_gauss2d_jacobian(x, y, p):
     :param x:
     :param y:
     :param p:
-    :return:
+    :return jacobian:
     """
     if len(p) % 6 != 1:
         raise ValueError("Parameter array had wrong length")
@@ -611,6 +615,7 @@ def gauss3d_jacobian(x, y, z, p):
 
     :param x: x-coordinates to evaluate function at.
     :param y: y-coordinates to evaluate function at. Either same size as x, or broadcastable with x.
+    :param z: z-coordinates
     :param p: [A, cx, cy, cz, sxrot, syrot, szrot, bg, phi, theta, psi]
     :return value:
     """
@@ -657,10 +662,10 @@ def circle(x, y, p):
     """
     Function which attains one value within a circle and another value outside it. These regions are continuously
     stitched together by an exponential decay. This length should be non-zero for reliable fitting
-    @param x:
+    @param x: x-coordinates to evaluate function at.
     @param y:
     @param p: [cx, cy, radius, in value, out value, decay_len]
-    @return:
+    @return value:
     """
     dist = np.sqrt((x - p[0])**2 + (y - p[1])**2)
     in_circ = p[3] * np.exp((p[2] - dist) / p[5]) + p[4]
@@ -669,12 +674,13 @@ def circle(x, y, p):
 
     return in_circ
 
+
 def line_piecewise(x, p):
     """
     Two piecewise lines which connect at a point
-    @param x:
+    @param x: x-positions to evaluate function
     @param p: [slope 1, y-intercept 1, slope 2, changover point]
-    @return:
+    @return value:
     """
     l1 = p[0] * x + p[1]
     # l1(p[3]) = l2(p[3])
@@ -689,10 +695,10 @@ def line_piecewise(x, p):
 def sinc_squared2d(x, y, p):
     """
     Product of sinc squareds
-    @param x:
-    @param y:
+    @param x: x-points to evaluate function
+    @param y: y-points to evaluate function
     @param p: [amp, cx, cy, wx, wy, bg, theta]
-    @return:
+    @return value:
     """
 
     xrot = np.cos(p[6]) * (x - p[1]) - np.sin(p[6]) * (y - p[2])
