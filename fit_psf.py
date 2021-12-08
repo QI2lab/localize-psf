@@ -7,6 +7,7 @@ The primary functions that will be called by an external script are, find_beads(
 """
 import os
 import copy
+import warnings
 import pickle
 import joblib
 import numpy as np
@@ -1124,7 +1125,8 @@ def autofit_psfs(imgs, psf_roi_size, dx, dz, wavelength, ni=1.5, model='vectoria
     :param figsize: (sx, sy)
     :param **kwargs: passed through to plt.figure()
 
-    :return:
+    :return coords, fit_params, init_params, rois, to_keep, conditions, condition_names, filter_settings,\
+           psfs_real, psf_coords, otfs_real, otf_coords, psf_percentiles, fit_params_real:
     """
 
     if isinstance(psf_percentiles, (int, float)):
@@ -1177,6 +1179,10 @@ def autofit_psfs(imgs, psf_roi_size, dx, dz, wavelength, ni=1.5, model='vectoria
                                 min_spot_sep, sigma_bounds, fit_amp_thresh, fit_dist_max_err=fit_dist_max_err,
                                 dist_boundary_min=dist_boundary_min, use_gpu_filter=False)
 
+    no_psfs_found = not np.any(to_keep)
+    if no_psfs_found:
+        warnings.warn("no spots were localized")
+
     # ###################################
     # plot individual localizations
     # ###################################
@@ -1190,7 +1196,7 @@ def autofit_psfs(imgs, psf_roi_size, dx, dz, wavelength, ni=1.5, model='vectoria
     # ###################################
     # plot fit statistics
     # ###################################
-    if plot:
+    if plot and not no_psfs_found:
         figh = plot_fit_stats(fit_params[to_keep], figsize=figsize, **kwargs)
 
         if saving:
@@ -1205,36 +1211,40 @@ def autofit_psfs(imgs, psf_roi_size, dx, dz, wavelength, ni=1.5, model='vectoria
     psfs_real = np.zeros((nps,) + tuple(psf_roi_size))
     otfs_real = np.zeros(psfs_real.shape, dtype=complex)
     fit_params_real = np.zeros((nps, 6))
-    for ii in range(len(psf_percentiles)):
-        # only keep smallest so many percent of spots
-        sigma_max = np.percentile(fit_params[:, 4][to_keep],  psf_percentiles[ii])
-        to_use = np.logical_and(to_keep, fit_params[:, 4] <= sigma_max)
+    psf_coords = None
+    otf_coords = None
+    
+    if not no_psfs_found:
+        for ii in range(len(psf_percentiles)):
+            # only keep smallest so many percent of spots
+            sigma_max = np.percentile(fit_params[:, 4][to_keep],  psf_percentiles[ii])
+            to_use = np.logical_and(to_keep, fit_params[:, 4] <= sigma_max)
 
-        # get centers
-        centers = np.stack((fit_params[:, 3][to_use],
-                            fit_params[:, 2][to_use],
-                            fit_params[:, 1][to_use]), axis=1)
+            # get centers
+            centers = np.stack((fit_params[:, 3][to_use],
+                                fit_params[:, 2][to_use],
+                                fit_params[:, 1][to_use]), axis=1)
 
-        # find experiment psf/otf
-        psfs_real[ii], psf_coords, otfs_real[ii], otf_coords = get_exp_psf(imgs, (z, y, x), centers, psf_roi_size,
-                                                                           backgrounds=fit_params[:, 5][to_use])
+            # find experiment psf/otf
+            psfs_real[ii], psf_coords, otfs_real[ii], otf_coords = get_exp_psf(imgs, (z, y, x), centers, psf_roi_size,
+                                                                            backgrounds=fit_params[:, 5][to_use])
 
-        results, _ = fit_psfmodel(psfs_real[ii], dx, dz, wavelength, ni, sf, model=model)
-        fit_params_real[ii] = results["fit_params"]
+            results, _ = fit_psfmodel(psfs_real[ii], dx, dz, wavelength, ni, sf, model=model)
+            fit_params_real[ii] = results["fit_params"]
 
-        if plot:
-            figh = plot_psfmodel_fit(psfs_real[ii], dx, dz, wavelength, ni, sf, fit_params_real[ii], model=model,
-                                     gamma=gamma, figsize=figsize, label="smallest %d percent" % psf_percentiles[ii])
+            if plot:
+                figh = plot_psfmodel_fit(psfs_real[ii], dx, dz, wavelength, ni, sf, fit_params_real[ii], model=model,
+                                        gamma=gamma, figsize=figsize, label="smallest %d percent" % psf_percentiles[ii])
 
-            if saving:
-                fname = os.path.join(save_dir, "experimental_psf_smallest_%0.2f.png" % psf_percentiles[ii])
-                figh.savefig(fname)
-                plt.close(figh)
+                if saving:
+                    fname = os.path.join(save_dir, "experimental_psf_smallest_%0.2f.png" % psf_percentiles[ii])
+                    figh.savefig(fname)
+                    plt.close(figh)
 
     # ###################################
     # plot localization positions
     # ###################################
-    if plot:
+    if plot and not no_psfs_found:
         centers = np.stack((fit_params[:, 3][to_keep] / dz,
                             fit_params[:, 2][to_keep] / dx,
                             fit_params[:, 1][to_keep] / dx), axis=1)
