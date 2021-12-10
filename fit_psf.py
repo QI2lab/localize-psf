@@ -4,6 +4,10 @@ experimental PSF's from the average of many beads and fitting 2D and 3D PSF mode
 working withpoint-spread functions and optical transfer functions more generally.
 
 The primary functions that will be called by an external script are, find_beads(), autofit_psfs(), and display_autofit()
+
+12/09/21 Steven Sheppard: Made changes to return "fit_states", "chi_sqrs" and "niters" in autofit_psf(),
+                          autofit_psf() takes parameters in physical units (WIP, change caused more errors)
+                          added features to help debug
 """
 import os
 import copy
@@ -1089,8 +1093,10 @@ def autofit_psfs(imgs, psf_roi_size, dx, dz, wavelength, ni=1.5, model='vectoria
                  threshold=100, min_spot_sep=(3, 3),
                  filter_sigma_small=(1, 0.5, 0.5), filter_sigma_large=(3, 5, 5),
                  sigma_bounds=((1, 1), (10, 10)), roi_size_loc=(13, 21, 21), fit_amp_thresh=100,
-                 dist_boundary_min=(0, 0), fit_dist_max_err=(np.inf, np.inf),
-                 num_localizations_to_plot=5, psf_percentiles=(20, 5), plot=True, gamma=0.5, save_dir=None,
+                 dist_boundary_min=(0, 0), max_number_iterations=100, fit_dist_max_err=(np.inf, np.inf),
+                 num_localizations_to_plot=5, psf_percentiles=(20, 5),
+                 plot=True, only_plot_good_fits=True, plot_filtered_image=False,
+                 gamma=0.5, save_dir=None,
                  figsize=(18, 10), **kwargs):
 
     """
@@ -1111,16 +1117,19 @@ def autofit_psfs(imgs, psf_roi_size, dx, dz, wavelength, ni=1.5, model='vectoria
     :param min_spot_sep: (sz, sxy) minimum spot separation between different beads, in pixels
     :param filter_sigma_small: (sz, sy, sx) sigmas of Gaussian filter used to smooth image, in pixels
     :param filter_sigma_large: (sz, sy, sx) sigmas of Gaussian filter used to removed background, in pixels
-     :param sigma_bounds: ((sz_min, sxy_min), (sz_max, sxy_max)) in pixels. exclude fits with sigmas that fall outside
+    :param sigma_bounds: ((sz_min, sxy_min), (sz_max, sxy_max)) in pixels. exclude fits with sigmas that fall outside
     these ranges
     :param roi_size_loc: (sz, sy, sx) size of ROI to used in localization, in pixels
     :param float fit_amp_thresh: only consider spots which have fit values larger tha this amplitude
     :param dist_boundary_min:
+    :param max_number_iterations: 
     :param fit_dist_max_err:
     :param int num_localizations_to_plot: number of ROI's to plot
     :param tuple psf_percentiles: calculate the averaged PSF from the smallest supplied percentage of spots. When
     a tuple is given, compute PSF's corresponding to each supplied percentage.
-    :param bool plot: whether or not to plot
+    :param bool plot: optionally plot diagnostics
+    :param bool only_plot_good_fits: when plotting ROI, plot only fits that passed all filtering tests or plot all fits
+    :param bool plot_filtered_image: plot ROI's against filtered image also
     :param float gamma: gamma to use when plotting
     :param str save_dir:
     :param figsize: (sx, sy)
@@ -1140,45 +1149,19 @@ def autofit_psfs(imgs, psf_roi_size, dx, dz, wavelength, ni=1.5, model='vectoria
         if not os.path.exists(save_dir):
             os.mkdir(save_dir)
 
-    # ###################################
-    # convert spot-finding parameters from pixels to distnace units
-    # ###################################
-    min_spot_sep = list(copy.deepcopy(min_spot_sep))
-    min_spot_sep[0] = min_spot_sep[0] * dz
-    min_spot_sep[1] = min_spot_sep[1] * dx
-
-    filter_sigma_small = list(copy.deepcopy(filter_sigma_small))
-    filter_sigma_small[0] = filter_sigma_small[0] * dz
-    filter_sigma_small[1] = filter_sigma_small[1] * dx
-    filter_sigma_small[2] = filter_sigma_small[2] * dx
-
-    filter_sigma_large = list(copy.deepcopy(filter_sigma_large))
-    filter_sigma_large[0] = filter_sigma_large[0] * dz
-    filter_sigma_large[1] = filter_sigma_large[1] * dx
-    filter_sigma_large[2] = filter_sigma_large[2] * dx
-
-    sigma_bounds = list(copy.deepcopy(sigma_bounds))
-    sigma_bounds[0] = list(sigma_bounds[0])
-    sigma_bounds[1] = list(sigma_bounds[1])
-    sigma_bounds[0][0] = sigma_bounds[0][0] * dz
-    sigma_bounds[0][1] = sigma_bounds[0][1] * dx
-    sigma_bounds[1][0] = sigma_bounds[1][0] * dz
-    sigma_bounds[1][1] = sigma_bounds[1][1] * dx
-
-    roi_size_loc = list(copy.deepcopy(roi_size_loc))
-    roi_size_loc[0] = roi_size_loc[0] * dz
-    roi_size_loc[1] = roi_size_loc[1] * dx
-    roi_size_loc[2] = roi_size_loc[2] * dx
 
     # ###################################
     # do localization
     # ###################################
     z, y, x = localize.get_coords(imgs.shape, (dz, dx, dx))
-
-    coords, fit_params, init_params, rois, to_keep, conditions, condition_names, filter_settings = \
+    # SS: include niters, chi_sqrrs and fit_states from localization 
+    coords, fit_params, init_params, rois,\
+    to_keep, conditions, condition_names, filter_settings, \
+    fit_states, chi_sqrs, niters, imgs_filtered = \
         localize.localize_beads(imgs, dx, dz, threshold, roi_size_loc, filter_sigma_small, filter_sigma_large,
                                 min_spot_sep, sigma_bounds, fit_amp_thresh, fit_dist_max_err=fit_dist_max_err,
-                                dist_boundary_min=dist_boundary_min, use_gpu_filter=False)
+                                dist_boundary_min=dist_boundary_min, max_number_iterations=max_number_iterations,
+                                use_gpu_filter=False)
 
     no_psfs_found = not np.any(to_keep)
     if no_psfs_found:
@@ -1187,18 +1170,30 @@ def autofit_psfs(imgs, psf_roi_size, dx, dz, wavelength, ni=1.5, model='vectoria
     # ###################################
     # plot individual localizations
     # ###################################
-    ind_to_plot = np.arange(len(to_keep), dtype=int)[to_keep][:num_localizations_to_plot]
-    results = joblib.Parallel(n_jobs=-1, verbose=10, timeout=None)(
-        joblib.delayed(localize.plot_gauss_roi)(fit_params[ind], rois[ind], imgs, coords, init_params[ind],
-                                                figsize=figsize, prefix="localization_roi_%d" % ind, save_dir=save_dir)
-        for ind in ind_to_plot
-    )
+    if plot:
+        if only_plot_good_fits:
+            ind_to_plot = np.arange(len(to_keep), dtype=int)[to_keep][:num_localizations_to_plot]
+        else:   
+            ind_to_plot = np.arange(len(to_keep), dtype=int)[:num_localizations_to_plot]
+
+        results = joblib.Parallel(n_jobs=-1, verbose=10, timeout=None)(
+                  joblib.delayed(localize.plot_gauss_roi)(fit_params[ind], rois[ind], imgs, coords, init_params[ind],
+                                                          figsize=figsize, prefix="localization_roi_%d" % ind, save_dir=save_dir)
+                    for ind in ind_to_plot
+                   )
+        
+        if plot_filtered_image:
+            results = joblib.Parallel(n_jobs=-1, verbose=10, timeout=None)(
+                joblib.delayed(localize.plot_gauss_roi)(fit_params[ind], rois[ind], imgs_filtered, coords, init_params[ind], same_color_scale=False,
+                                                        figsize=figsize, prefix="localization_roi_%d_filtered" % ind, save_dir=save_dir)
+                for ind in ind_to_plot
+            )
 
     # ###################################
     # plot fit statistics
     # ###################################
     if plot and not no_psfs_found:
-        figh = plot_fit_stats(fit_params[to_keep], figsize=figsize, **kwargs)
+        figh = plot_fit_stats(fit_params[to_keep], figsize=figsize)
 
         if saving:
             fname = os.path.join(save_dir, "fit_stats.png")
@@ -1209,7 +1204,10 @@ def autofit_psfs(imgs, psf_roi_size, dx, dz, wavelength, ni=1.5, model='vectoria
     # get and plot experimental PSFs
     # ###################################
     nps = len(psf_percentiles)
-    psfs_real = np.zeros((nps,) + tuple(psf_roi_size))
+    psf_roi_size_pix = np.round(np.array(psf_roi_size) / np.array([dz, dx, dx])).astype(int)
+    psf_roi_size_pix += (1 - np.mod(psf_roi_size_pix, 2))
+    
+    psfs_real = np.zeros((nps,) + tuple(psf_roi_size_pix))
     otfs_real = np.zeros(psfs_real.shape, dtype=complex)
     fit_params_real = np.zeros((nps, 6))
     psf_coords = None
@@ -1227,8 +1225,8 @@ def autofit_psfs(imgs, psf_roi_size, dx, dz, wavelength, ni=1.5, model='vectoria
                                 fit_params[:, 1][to_use]), axis=1)
 
             # find experiment psf/otf
-            psfs_real[ii], psf_coords, otfs_real[ii], otf_coords = get_exp_psf(imgs, (z, y, x), centers, psf_roi_size,
-                                                                            backgrounds=fit_params[:, 5][to_use])
+            psfs_real[ii], psf_coords, otfs_real[ii], otf_coords = get_exp_psf(imgs, (z, y, x), centers, psf_roi_size_pix,
+                                                                               backgrounds=fit_params[:, 5][to_use])
 
             results, _ = fit_psfmodel(psfs_real[ii], dx, dz, wavelength, ni, sf, model=model)
             fit_params_real[ii] = results["fit_params"]
@@ -1246,13 +1244,18 @@ def autofit_psfs(imgs, psf_roi_size, dx, dz, wavelength, ni=1.5, model='vectoria
     # plot localization positions
     # ###################################
     if plot and not no_psfs_found:
-        centers = np.stack((fit_params[:, 3][to_keep] / dz,
-                            fit_params[:, 2][to_keep] / dx,
-                            fit_params[:, 1][to_keep] / dx), axis=1)
+        centers_all = np.stack((fit_params[:, 3],
+                                fit_params[:, 2],
+                                fit_params[:, 1]), axis=1)
 
-        figh = localize.plot_bead_locations(imgs, centers, weights=fit_params[:, 4], cbar_labels=["sigma"],
-                                            title="Max intensity projection and NA from 2D fit versus position",
-                                            figsize=figsize, **kwargs)
+        extent = [x.min() - 0.5 * dx, x.max() + 0.5 * dx, y.max() + 0.5 * dx, y.min() - 0.5 * dx]
+
+        figh = localize.plot_bead_locations(imgs, [centers_all, centers_all[to_keep]],
+                                            weights=[np.ones(len(centers_all)), fit_params[to_keep, 4]],
+                                            cbar_labels=["all fits", r"kept fits, $\sigma_{xy} (\mu m)$"],
+                                            title="Max intensity projection and size from 2D fit versus position",
+                                            extent=extent,
+                                            figsize=figsize)
 
         if saving:
             fname = os.path.join(save_dir, "sigma_versus_position.png")
@@ -1263,6 +1266,7 @@ def autofit_psfs(imgs, psf_roi_size, dx, dz, wavelength, ni=1.5, model='vectoria
         data = {"coords": coords, "fit_params": fit_params, "init_params": init_params,
                 "rois": rois, "to_keep": to_keep, "conditions": conditions,
                 "condition_names": condition_names, "filter_settings": filter_settings,
+                "fit_states": fit_states, "chi_sqrs": chi_sqrs, "niterations": niters,
                 "psfs_real": psfs_real, "psf_coords": psf_coords, "otfs_real": otfs_real, "otf_coords": otf_coords,
                 "psf_percentiles": psf_percentiles, "fit_params_real": fit_params_real}
 
@@ -1270,5 +1274,7 @@ def autofit_psfs(imgs, psf_roi_size, dx, dz, wavelength, ni=1.5, model='vectoria
         with open(fname, "wb") as f:
             pickle.dump(data, f)
 
-    return coords, fit_params, init_params, rois, to_keep, conditions, condition_names, filter_settings,\
+    return coords, fit_params, init_params, rois, \
+           to_keep, conditions, condition_names, filter_settings,\
+           fit_states, chi_sqrs, niters, \
            psfs_real, psf_coords, otfs_real, otf_coords, psf_percentiles, fit_params_real

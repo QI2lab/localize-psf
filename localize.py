@@ -4,6 +4,8 @@ Code for localizing and fitting (typically diffraction limited) spots/beads
 The fitting code can be run on a CPU using multiprocessing with joblib, or on a GPU using custom modifications
 to GPUfit which can be found at https://github.com/QI2lab/Gpufit. To use the GPU code, you must download and
 compile this repository and install the python bindings.
+
+12/09/21 Steven Sheppard: Changes to reflect changes from fit_psf.py
 """
 import os
 import time
@@ -1046,7 +1048,7 @@ def filter_localizations(fit_params, init_params, coords, fit_dist_max_err, min_
 
 def localize_beads(imgs, dxy, dz, threshold, roi_size, filter_sigma_small, filter_sigma_large,
                    min_spot_sep, sigma_bounds, fit_amp_min, fit_dist_max_err=(np.inf, np.inf), dist_boundary_min=(0, 0),
-                   use_gpu_fit=GPUFIT_AVAILABLE, use_gpu_filter=CUPY_AVAILABLE, verbose=True):
+                   max_number_iterations=100, use_gpu_fit=GPUFIT_AVAILABLE, use_gpu_filter=CUPY_AVAILABLE, verbose=True):
     """
     Given an image consisting of diffraction limited spots and background, identify the diffraction limit spots using
     the following procedure
@@ -1062,19 +1064,21 @@ def localize_beads(imgs, dxy, dz, threshold, roi_size, filter_sigma_small, filte
     @param dz: z-plane spacing in um
     @param threshold: threshold used for identifying spots. This is applied after filtering of image
     @param roi_size: (sz, sy, sx) in um
-    @param filter_sigma_small: (sz, sy, sx) small sigmas to be used in difference-of-Gaussian filter. Roughly speaking,
+    @param filter_sigma_small: (sz, sy, sx) small sigmas in um to be used in difference-of-Gaussian filter. Roughly speaking,
     features which are smaller than these sigmas will be high pass filtered out.
-    @param filter_sigma_large: (sz, sy, sx) large sigmas to be used in difference-of-Gaussian filter. Roughly speaking,
+    @param filter_sigma_large: (sz, sy, sx) large sigmas in um to be used in difference-of-Gaussian filter. Roughly speaking,
     features which are large than these sigmas will be low pass filtered out.
-    @param min_spot_sep: (dz, dxy) minimum separation allowed between adjacent peaks
-    @param sigma_bounds: ((sz_min, sxy_min), (sz_max, sxy_max))
+    @param min_spot_sep: (dz, dxy) minimum separation allowed between adjacent peaks in um
+    @param sigma_bounds: ((sz_min, sxy_min), (sz_max, sxy_max)) in um
     @param fit_amp_min: minimum amplitude value for fit to be kept
-    @param fit_dist_max_err: (dz_max, dxy_max) maximum distance between guess value and fit value
-    @param dist_boundary_min: (dz_min, dxy_min) filter out spots which are closer to the boundary than this
+    @param fit_dist_max_err: (dz_max, dxy_max) maximum distance between guess value and fit value in um
+    @param dist_boundary_min: (dz_min, dxy_min) filter out spots which are closer to the boundary than this in um
+    @param max_number_iterations: Max number of iterations
     @param bool use_gpu_fit: whether or not to do spot fitting on the GPU
     @param bool use_gpu_filter: whether or not to do difference-of-Gaussian filtering on GPU
-    @param bool verbose: whether or not to print information
-    @return coords, fit_params, init_params, rois, to_keep, conditions, condition_names, filter_settings:
+    @param bool verbose: whether or not to print information to terminal
+    @return coords, fit_params, init_params, rois, to_keep, conditions, condition_names, filter_settings,
+            fit_states, chi_sqrs, niters, imgs_filtered:
     coords = (z, y, x)
     """
 
@@ -1202,7 +1206,8 @@ def localize_beads(imgs, dxy, dz, threshold, roi_size, filter_sigma_small, filte
             fixed_params[3] = True
 
         fit_params, fit_states, chi_sqrs, niters, fit_t = fit_gauss_rois(img_rois, (zrois, yrois, xrois),
-                                                                         init_params, estimator="LSE",
+                                                                         init_params, max_number_iterations,
+                                                                         estimator="LSE",
                                                                          sf=1, dc=dxy, angles=(0., 0., 0.),
                                                                          fixed_params=fixed_params,
                                                                          use_gpu=use_gpu_fit)
@@ -1221,11 +1226,13 @@ def localize_beads(imgs, dxy, dz, threshold, roi_size, filter_sigma_small, filte
         if verbose:
             print("Identified %d likely candidates" % np.sum(to_keep))
 
-        return (z, y, x), fit_params, init_params, rois, to_keep, conditions, condition_names, filter_settings
+        return (z, y, x), fit_params, init_params, rois, \
+               to_keep, conditions, condition_names, filter_settings, \
+               fit_states, chi_sqrs, niters, imgs_filtered
 
 
 def plot_bead_locations(imgs, center_lists, title="", color_lists=None, color_limits=None, legend_labels=None,
-                        weights=None, cbar_labels=None, vlims_percentile=(0.01, 99.99), gamma=1, **kwargs):
+                        weights=None, cbar_labels=None, vlims_percentile=(0.01, 99.99), gamma=1, extent=None, **kwargs):
     """
     Plot center locations over 2D image or max projection of 3D image. Supports plotting multiple different sets
     of center locations, and using different colors to indicate properties of the different centers e.g. sigma,
@@ -1251,7 +1258,7 @@ def plot_bead_locations(imgs, center_lists, title="", color_lists=None, color_li
     nlists = len(center_lists)
 
     if color_lists is None:
-        cmap = plt.cm.get_cmap('hsv')
+        cmap = plt.get_cmap('hsv')
         color_lists = []
         for ii in range(nlists):
             color_lists.append(cmap(ii / nlists))
@@ -1279,6 +1286,10 @@ def plot_bead_locations(imgs, center_lists, title="", color_lists=None, color_li
     else:
         img_max_proj = imgs
 
+    ny, nx = img_max_proj.shape
+    if extent is None:
+        extent = [-0.5, nx - 0.5, ny - 0.5, -0.5]
+
     figh = plt.figure(**kwargs)
     plt.suptitle(title)
 
@@ -1286,7 +1297,7 @@ def plot_bead_locations(imgs, center_lists, title="", color_lists=None, color_li
     vmin = np.percentile(img_max_proj, vlims_percentile[0])
     vmax = np.percentile(img_max_proj, vlims_percentile[1])
 
-    plt.imshow(img_max_proj, norm=PowerNorm(gamma=gamma, vmin=vmin, vmax=vmax), cmap=plt.cm.get_cmap("bone"))
+    plt.imshow(img_max_proj, norm=PowerNorm(gamma=gamma, vmin=vmin, vmax=vmax), cmap="bone", extent=extent)
     xlim = plt.xlim()
     ylim = plt.ylim()
 
