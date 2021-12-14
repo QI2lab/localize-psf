@@ -174,9 +174,8 @@ def atf2otf(atf, dx=None, wavelength=0.5, ni=1.5, defocus_um=0, fx=None, fy=None
             raise TypeError("if defocus != 0, dx, wavelength, ni must be provided")
 
         k = 2*np.pi / wavelength * ni
-        defocus_fn = np.exp(1j * defocus_um *
-                            np.sqrt(np.array(k**2 - (2 * np.pi)**2 * (fx[None, :]**2 + fy[:, None]**2),
-                                             dtype=np.complex)))
+        kperp = np.sqrt(np.array(k**2 - (2 * np.pi)**2 * (fx[None, :]**2 + fy[:, None]**2), dtype=np.complex))
+        defocus_fn = np.exp(1j * defocus_um * kperp)
     else:
         defocus_fn = 1
 
