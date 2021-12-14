@@ -1,7 +1,6 @@
 """
 Tools for dealing with regions of interest (ROI's)
 """
-
 import numpy as np
 
 
