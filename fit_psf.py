@@ -10,6 +10,7 @@ The primary functions that will be called by an external script are, find_beads(
                           added features to help debug
 """
 import os
+import time
 import copy
 import warnings
 import pickle
@@ -1092,9 +1093,11 @@ def autofit_psfs(imgs, psf_roi_size, dx, dz, wavelength, ni=1.5, model='vectoria
                  threshold=100, min_spot_sep=(3, 3),
                  filter_sigma_small=(1, 0.5, 0.5), filter_sigma_large=(3, 5, 5),
                  sigma_bounds=((1, 1), (10, 10)), roi_size_loc=(13, 21, 21), fit_amp_thresh=100,
-                 dist_boundary_min=(0, 0), max_number_iterations=100, fit_dist_max_err=(np.inf, np.inf),
+                 dist_boundary_min=(0, 0), max_number_iterations=100,
+                 fit_dist_max_err=(np.inf, np.inf),
                  num_localizations_to_plot=5, psf_percentiles=(20, 5),
                  plot=True, only_plot_good_fits=True, plot_filtered_image=False,
+                 use_gpu_filter=False,
                  gamma=0.5, save_dir=None,
                  figsize=(18, 10), **kwargs):
 
@@ -1160,7 +1163,7 @@ def autofit_psfs(imgs, psf_roi_size, dx, dz, wavelength, ni=1.5, model='vectoria
         localize.localize_beads(imgs, dx, dz, threshold, roi_size_loc, filter_sigma_small, filter_sigma_large,
                                 min_spot_sep, sigma_bounds, fit_amp_thresh, fit_dist_max_err=fit_dist_max_err,
                                 dist_boundary_min=dist_boundary_min, max_number_iterations=max_number_iterations,
-                                use_gpu_filter=False)
+                                use_gpu_filter=use_gpu_filter)
 
     no_psfs_found = not np.any(to_keep)
     if no_psfs_found:
@@ -1170,6 +1173,9 @@ def autofit_psfs(imgs, psf_roi_size, dx, dz, wavelength, ni=1.5, model='vectoria
     # plot individual localizations
     # ###################################
     if plot:
+        print("plotting ROI's")
+        tstart_plot_roi = time.perf_counter()
+
         if only_plot_good_fits:
             ind_to_plot = np.arange(len(to_keep), dtype=int)[to_keep][:num_localizations_to_plot]
         else:   
@@ -1177,16 +1183,24 @@ def autofit_psfs(imgs, psf_roi_size, dx, dz, wavelength, ni=1.5, model='vectoria
 
         results = joblib.Parallel(n_jobs=-1, verbose=10, timeout=None)(
                   joblib.delayed(localize.plot_gauss_roi)(fit_params[ind], rois[ind], imgs, coords, init_params[ind],
-                                                          figsize=figsize, prefix="localization_roi_%d" % ind, save_dir=save_dir)
+                                                          figsize=figsize,
+                                                          prefix="localization_roi_%d" % ind,
+                                                          title="filter conditions = " + " ".join(["%d," % c for c in conditions[ind]]),
+                                                          save_dir=save_dir)
                     for ind in ind_to_plot
                    )
         
         if plot_filtered_image:
             results = joblib.Parallel(n_jobs=-1, verbose=10, timeout=None)(
                 joblib.delayed(localize.plot_gauss_roi)(fit_params[ind], rois[ind], imgs_filtered, coords, init_params[ind], same_color_scale=False,
-                                                        figsize=figsize, prefix="localization_roi_%d_filtered" % ind, save_dir=save_dir)
+                                                        figsize=figsize,
+                                                        prefix="localization_roi_%d_filtered" % ind,
+                                                        title="filter conditions = " + " ".join(["%d," % c for c in conditions[ind]]),
+                                                        save_dir=save_dir)
                 for ind in ind_to_plot
             )
+
+        print("plotting took %0.2fs" % (time.perf_counter() - tstart_plot_roi))
 
     # ###################################
     # plot fit statistics
@@ -1253,7 +1267,7 @@ def autofit_psfs(imgs, psf_roi_size, dx, dz, wavelength, ni=1.5, model='vectoria
                                             weights=[np.ones(len(centers_all)), fit_params[to_keep, 4]],
                                             cbar_labels=["all fits", r"kept fits, $\sigma_{xy} (\mu m)$"],
                                             title="Max intensity projection and size from 2D fit versus position",
-                                            extent=extent,
+                                            extent=extent, gamma=gamma,
                                             figsize=figsize)
 
         if saving:

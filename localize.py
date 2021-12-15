@@ -783,7 +783,7 @@ def fit_gauss_rois(img_rois, coords_rois, init_params, max_number_iterations=100
 
 
 def plot_gauss_roi(fit_params, roi, imgs, coords, init_params=None, same_color_scale=True,
-                   fit_fn=None,
+                   fit_fn=None, title="",
                    figsize=(16, 8), prefix="", save_dir=None):
     """
     Plot results obtained from fitting functions fit_gauss_roi() or fit_gauss_rois()
@@ -829,8 +829,13 @@ def plot_gauss_roi(fit_params, roi, imgs, coords, init_params=None, same_color_s
     # plot results interpolated on regular grid
     # ################################
     figh_interp = plt.figure(figsize=figsize)
-    st_str = "Fit, max projections, interpolated, ROI = [%d, %d, %d, %d, %d, %d]\n" % tuple(roi) + \
-             "         A=%3.3f, cx=%3.5f, cy=%3.5f, cz=%3.5f, sxy=%3.5f, sz=%3.5f, bg=%3.3f" % tuple(fit_params)
+    st_str = "Fit, max projections, interpolated, ROI = [%d, %d, %d, %d, %d, %d]\n" % tuple(roi)
+    
+    if title != "":
+        st_str += title + "\n"
+    
+    st_str += "         A=%3.3f, cx=%3.5f, cy=%3.5f, cz=%3.5f, sxy=%3.5f, sz=%3.5f, bg=%3.3f" % tuple(fit_params)
+    
     if init_params is not None:
         st_str += "\nguess A=%3.3f, cx=%3.5f, cy=%3.5f, cz=%3.5f, sxy=%3.5f, sz=%3.5f, bg=%3.3f" % tuple(init_params)
     plt.suptitle(st_str)
