@@ -5,6 +5,18 @@ contained here are general purpose, and they have been split into a separate rep
 so that both the [mcSIM code](https://github.com/QI2lab/mcSIM) and the 
 [OPM code](https://github.com/QI2lab/OPM) can include it as a submodule.
 
+To install the code in this repository as a package, first clone it
+
+`git clone https://github.com/QI2lab/localize-psf.git`
+
+then navigate to the root directory and run
+
+`pip install .`
+
+If GPU support is desired, run
+
+`pip install .[gpu]`
+
 ## [affine.py](affine.py)
 Tools for working with affine transformations. These include manipulating transformation matrices
 and fitting affine transformations from coordinate data (as opposed to raw image data). The fitting
