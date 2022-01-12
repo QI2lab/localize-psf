@@ -5,7 +5,7 @@ contained here are general purpose, and they have been split into a separate rep
 so that both the [mcSIM code](https://github.com/QI2lab/mcSIM) and the 
 [OPM code](https://github.com/QI2lab/OPM) can include it as a submodule.
 
-To install the code in this repository as a package, first clone it
+To install the code in this repository as a package,
 ```
 git clone https://github.com/QI2lab/localize-psf.git
 cd localize-psf
