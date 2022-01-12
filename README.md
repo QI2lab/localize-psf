@@ -6,12 +6,11 @@ so that both the [mcSIM code](https://github.com/QI2lab/mcSIM) and the
 [OPM code](https://github.com/QI2lab/OPM) can include it as a submodule.
 
 To install the code in this repository as a package, first clone it
-
-`git clone https://github.com/QI2lab/localize-psf.git`
-
-then navigate to the root directory and run
-
-`pip install .`
+```
+git clone https://github.com/QI2lab/localize-psf.git
+cd localize-psf
+pip install .
+```
 
 If GPU support is desired, run
 
