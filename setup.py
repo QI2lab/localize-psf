@@ -10,11 +10,14 @@ with open(path.join(this_dir, "README.md")) as f:
 required_pkgs = ['numpy',
                  'scipy',
                  'matplotlib',
-                 'joblib']
+                 'joblib',
+                 'psfmodels @ git+https://git@github.com/tlambert03/PSFmodels-py@master#egg=psfmodels', # install from github because PyPI seems broken]
+                 ]
 
 # optional required packages
 # e.g. `pip install -e .[gpu]`
 extras = {'gpu': ['cupy']}
+# todo: also need to include https://github.com/QI2lab/Gpufit with extras['gpu']
 
 setup(
     name='localize_psf',
@@ -26,3 +29,5 @@ setup(
     python_requires='>=3.7',
     install_requires=required_pkgs,
     extras_require=extras)
+
+#@v1.1#egg=some-pkg
