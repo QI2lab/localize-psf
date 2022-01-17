@@ -11,13 +11,13 @@ required_pkgs = ['numpy',
                  'scipy',
                  'matplotlib',
                  'joblib',
-                 'psfmodels @ git+https://git@github.com/tlambert03/PSFmodels-py@master#egg=psfmodels', # install from github because PyPI seems broken]
                  ]
 
 # optional required packages
 # e.g. `pip install -e .[gpu]`
-extras = {'gpu': ['cupy']}
-# todo: also need to include https://github.com/QI2lab/Gpufit with extras['gpu']
+extras = {'gpu': ['cupy'], # todo: also need to include https://github.com/QI2lab/Gpufit with extras['gpu']
+          'psfmodels': ['psfmodels @ git+https://git@github.com/tlambert03/PSFmodels-py@master#egg=psfmodels'] # often have trouble installing this, so make optional
+          }
 
 setup(
     name='localize_psf',
