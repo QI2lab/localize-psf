@@ -11,9 +11,14 @@ git clone https://github.com/QI2lab/localize-psf.git
 cd localize-psf
 pip install .
 ```
+If you wish to edit the code, then install with the `-e` option,
+```
+git clone https://github.com/QI2lab/localize-psf.git
+cd localize-psf
+pip install -e .
+```
 
-If GPU support is desired, run
-
+If GPU support is desired, replace the install command with
 `pip install .[gpu]`
 
 ## [affine.py](affine.py)
