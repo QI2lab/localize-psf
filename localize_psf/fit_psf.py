@@ -20,10 +20,10 @@ from scipy import fft
 import matplotlib.pyplot as plt
 from matplotlib.colors import PowerNorm
 
-import localize
-import fit
-import affine
-import rois
+from localize_psf import localize
+from localize_psf import fit
+from localize_psf import affine
+from localize_psf import rois
 
 # most of the functions don't require this module, and it does not easily pip install,
 # so don't require it. Probably should enforce some reasonable behavior on the functions

@@ -7,7 +7,7 @@ primarily 1D, 2D, and 3D gaussians allowing for arbitrary rotations.
 import copy
 import numpy as np
 import scipy.optimize
-import affine
+from localize_psf import affine
 
 
 def fit_model(img, model_fn, init_params, fixed_params=None, sd=None, bounds=None, model_jacobian=None, **kwargs):

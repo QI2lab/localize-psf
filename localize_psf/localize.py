@@ -14,9 +14,9 @@ import scipy.ndimage
 import joblib
 import matplotlib.pyplot as plt
 from matplotlib.colors import PowerNorm, LinearSegmentedColormap, Normalize
-import rois as roi_fns
-import fit
-import fit_psf as psf
+import localize_psf.rois as roi_fns
+from localize_psf import fit
+import localize_psf.fit_psf as psf
 
 # for filtering on GPU
 try:
