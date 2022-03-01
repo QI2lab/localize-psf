@@ -10,7 +10,8 @@ import scipy.optimize
 from localize_psf import affine
 
 
-def fit_model(img, model_fn, init_params, fixed_params=None, sd=None, bounds=None, model_jacobian=None, **kwargs):
+def fit_model(img: np.ndarray, model_fn, init_params: list[float], fixed_params: list[bool] = None,
+              sd: np.ndarray = None, bounds: tuple[tuple[float]] = None, model_jacobian=None, **kwargs) -> dict:
     """
     Fit 2D model function to an image. Any Nan values in the image will be ignored. This function is a wrapper for
     for the non-linear least squares fit function scipy.optimize.least_squares() which additionally handles fixing
@@ -56,7 +57,8 @@ def fit_model(img, model_fn, init_params, fixed_params=None, sd=None, bounds=Non
     return results
 
 
-def fit_least_squares(model_fn, init_params, fixed_params=None, bounds=None, model_jacobian=None, **kwargs):
+def fit_least_squares(model_fn, init_params: list[float], fixed_params: list[bool]=None,
+                      bounds: tuple[tuple[float]]=None, model_jacobian=None, **kwargs) -> dict:
     """
     Wrapper for non-linear least squares fit function scipy.optimize.least_squares which handles fixing parameters
     and calculating fit uncertainty.
@@ -65,13 +67,13 @@ def fit_least_squares(model_fn, init_params, fixed_params=None, bounds=None, mod
     minimized. e.g. if we have a set of data points x_i and we make measurements y_i with uncertainties sigma_i,
     and we have a model m(p, x_i)
      then f(p) = [(m(p, x_i) - y_i) / sigma_i]
-    :param list[float] init_params: p = [p1, p2, ..., pn]
-    :param list[boolean] fixed_params: list of boolean values, same size as init_params. If None,
+    :param init_params: p = [p1, p2, ..., pn]
+    :param fixed_params: list of boolean values, same size as init_params. If None,
      no parameters will be fixed.
-    :param tuple[tuple[float]] bounds: (lbs, ubs). If None, -/+ infinity used for all parameters.
+    :param  bounds: (lbs, ubs). If None, -/+ infinity used for all parameters.
     :param model_jacobian: Jacobian of the model function as a list, [df/dp[0], df/dp[1], ...]. If None,
      no jacobian used.
-    :param kwargs: additional key word arguments will be passed through to scipy.optimize.least_squares
+    :param kwargs: additional key word arguments will be passed through to scipy.optimize.least_squares()
 
     :return results: dictionary object. Uncertainty can be obtained from the square rootsof the diagonals of the
      covariance matrix, but these will only be meaningful if variances were appropriately provided for the cost function
@@ -159,7 +161,7 @@ def fit_least_squares(model_fn, init_params, fixed_params=None, bounds=None, mod
     return result
 
 
-def get_moments(img, order=1, coords=None, dims=None):
+def get_moments(img: np.ndarray, order: int = 1, coords: tuple[np.ndarray] = None, dims: list[int] = None) -> list[float]:
     """
     Calculate moments of distribution of arbitrary size
 
@@ -201,7 +203,8 @@ def get_moments(img, order=1, coords=None, dims=None):
 
 
 # fit data to gaussians
-def fit_gauss1d(y, init_params=None, fixed_params=None, sd=None, x=None, bounds=None, **kwargs):
+def fit_gauss1d(y: np.ndarray, init_params: list[float] = None, fixed_params: list[bool] = None,
+                sd: np.ndarray = None, x: np.ndarray = None, bounds: tuple[tuple[float]] = None, **kwargs):
     """
     Fit 1D Gaussian. This is a wrapper for fit_model() which additionally computes reasonably parameter guess values
     from the input data y.
@@ -259,7 +262,9 @@ def fit_gauss1d(y, init_params=None, fixed_params=None, sd=None, x=None, bounds=
     return result, fit_fn
 
 
-def fit_gauss2d(img, init_params=None, fixed_params=None, sd=None, xx=None, yy=None, bounds=None, **kwargs):
+def fit_gauss2d(img: np.ndarray, init_params: list[float] = None, fixed_params: list[bool] = None,
+                sd: np.ndarray = None, xx: np.ndarray = None, yy: np.ndarray = None,
+                bounds: tuple[tuple[float]] = None, **kwargs):
     """
     Fit 2D gaussian function. The angle theta is defined clockwise from the x- (or y-) axis. NOTE: be careful
     with this when looking at results using e.g. matplotlib.imshow, as this will display the negative y-axis on top.
@@ -330,7 +335,9 @@ def fit_gauss2d(img, init_params=None, fixed_params=None, sd=None, xx=None, yy=N
     return result, fit_fn
 
 
-def fit_sum_gauss2d(img, ngaussians, init_params, fixed_params=None, sd=None, xx=None, yy=None, bounds=None, **kwargs):
+def fit_sum_gauss2d(img: np.ndarray, ngaussians: int, init_params: list[float],
+                    fixed_params: list[bool] = None, sd: np.ndarray = None,
+                    xx: np.ndarray = None, yy: np.ndarray = None, bounds: tuple[tuple[float]] = None, **kwargs):
     """
     Fit 2D gaussian function. The angle theta is defined clockwise from the x- (or y-) axis. NOTE: be careful
     with this when looking at results using e.g. matplotlib.imshow, as this will display the negative y-axis on top.
