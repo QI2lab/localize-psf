@@ -11,12 +11,11 @@ gi(xi, yi) = g(T^{-1} [[xi], [yi], [1]])
 import joblib
 import numpy as np
 from numpy import fft
-import copy
-from scipy import optimize
 import scipy.interpolate
+from localize_psf import fit
 
 
-def xform2params(affine_mat):
+def xform2params(affine_mat: np.ndarray) -> np.ndarray:
     """
     Parametrize 2D affine transformation in terms of rotation angles, magnifications, and offsets.
     T = [[Mx * cos(tx), -My * sin(ty), vx],
@@ -29,6 +28,9 @@ def xform2params(affine_mat):
 
     :return list[float]: [mx, theta_x, vx, my, theta_y, vy]
     """
+    if affine_mat.shape != (3, 3):
+        raise ValueError("xform2params only works with 2D affine transformations (i.e. 3x3 matrices)")
+
     # get offsets
     vx = affine_mat[0, -1]
     vy = affine_mat[1, -1]
@@ -44,7 +46,7 @@ def xform2params(affine_mat):
     return np.array([mx, theta_x, vx, my, theta_y, vy])
 
 
-def params2xform(params):
+def params2xform(params: list[float]) -> np.ndarray:
     """
     Construct a 2D affine transformation from parameters. Inverse function for xform2params()
 
@@ -72,7 +74,7 @@ def params2xform(params):
     return affine_xform
 
 
-def rotation2xform(angle, center):
+def rotation2xform(angle: float, center: list[float]) -> np.ndarray:
     """
     Get 2D transform corresponding to a rotation by a given angle about a given center
 
@@ -93,7 +95,7 @@ def rotation2xform(angle, center):
 
 
 # transform functions/matrices under action of affine transformation
-def xform_mat(mat, xform, img_coords, mode='nearest'):
+def xform_mat(mat_obj: np.ndarray, xform: np.ndarray, img_coords: tuple[np.ndarray], mode: str = 'nearest') -> np.ndarray:
     """
     Given a matrix defined on object space coordinates, M[yo, xo], calculate corresponding matrix at image
     space coordinates. This is given by (roughly speaking)
@@ -102,53 +104,55 @@ def xform_mat(mat, xform, img_coords, mode='nearest'):
     Object coordinates are assumed to be [0, ..., nx-1] and [0, ..., ny-1]
     # todo: want object coordinates to be on a grid, but don't want to force a specific one like this ...
 
-    :param np.array mat: matrix in object space
-    :param np.array xform: affine transformation which takes object space coordinates as input, [yi, xi] = T * [xo, yo]
-    :param img_coords: (xi, yi, ...) list of coordinate arrays where the transformed matrix is to be evaluated. Each
-    array must be the same shape. i.e., xi.shape = yi.shape = ...
+    :param mat_obj: matrix in object space
+    :param xform: affine transformation which takes object space coordinates as input, [yi, xi] = T * [xo, yo]
+    :param img_coords: (c1, c0) list of coordinate arrays where the image-space matrix is to be evaluated. All
+    coordinate arrays must be the same shape. i.e., xi.shape = yi.shape.
     :param str mode: 'nearest' or 'interp'. 'interp' will produce better results if e.g. looking at phase content after
     affine transformation.
 
-    :return mat_out: matrix in image space, M'[yi, xi]
+    :return mat_img: matrix in image space, M'[yi, xi]
     """
-
-    xo = np.arange(mat.shape[1])
-    yo = np.arange(mat.shape[0])
-    co_mat = [xo, yo]
+    if mat_obj.ndim != 2:
+        raise ValueError("img_obj must be a 2D array")
 
     # image space coordinates
     output_shape = img_coords[0].shape
-    ci = np.stack([ic.ravel() for ic in img_coords], axis=1)
-    mat_out = np.zeros(output_shape)
+    coords_img = np.stack([ic.ravel() for ic in img_coords], axis=1)
 
     # get corresponding object space coordinates
     xform_inv = np.linalg.inv(xform)
 
-    co = xform_points(ci, xform_inv).transpose()
-    co = [np.reshape(c, output_shape) for c in co]
+    coords_obj_from_img = xform_points(coords_img, xform_inv).transpose()
+    coords_obj_from_img = [np.reshape(c, output_shape) for c in coords_obj_from_img]
 
     # only use points with coords in image
-    to_use = np.logical_and.reduce([np.logical_and(oc >= np.min(ocm), oc <= np.max(ocm))
-                                    for oc, ocm in zip(co, co_mat)])
+    coords_obj_bounds = [np.arange(mat_obj.shape[1]), np.arange(mat_obj.shape[0])]
+
+    to_use = np.logical_and.reduce([np.logical_and(oc >= np.min(ocm),
+                                                   oc <= np.max(ocm))
+                                    for oc, ocm in zip(coords_obj_from_img, coords_obj_bounds)])
+
+    # get matrix in image space
     if mode == 'nearest':
-        # find closest point in matrix to each output point
-        inds = [tuple(np.array(np.round(oc[to_use]), dtype=int)) for oc in co]
+        # find closest point in image to each output point
+        inds = [tuple(np.array(np.round(oc[to_use]), dtype=int)) for oc in coords_obj_from_img]
         inds.reverse()
 
         # evaluate matrix
-        mat_out[to_use] = mat[tuple(inds)]
+        mat_img = np.zeros(output_shape) * np.nan
+        mat_img[to_use] = mat_obj[tuple(inds)]
 
     elif mode == 'interp':
-        # todo: write in way works for arbitrary dim
-        mat_out = scipy.interpolate.RectBivariateSpline(*co_mat, mat.transpose()).ev(*co)
-        mat_out[np.logical_not(to_use)] = 0
+        mat_img = scipy.interpolate.RectBivariateSpline(*coords_obj_bounds, mat_obj.transpose()).ev(*coords_obj_from_img)
+        mat_img[np.logical_not(to_use)] = np.nan
     else:
         raise ValueError("'mode' must be 'nearest' or 'interp' but was '%s'" % mode)
 
-    return mat_out
+    return mat_img
 
 
-def xform_fn(fn, xform):
+def xform_fn(fn, xform: np.ndarray):
     """
     Given a function f(xo, yo) and an affine transformation, (xi, yi, ...) = T * (xo, yo, ...), create the function
     f'(xi, yi, ...) = f( T^{-1}(xo, yo, ...) )
@@ -177,7 +181,7 @@ def xform_fn(fn, xform):
     return fn_out
 
 
-def xform_points(coords, xform):
+def xform_points(coords: np.ndarray, xform: np.ndarray) -> np.ndarray:
     """
     Transform coordinates of arbitrary dimension under the action of an affine transformation
 
@@ -193,7 +197,7 @@ def xform_points(coords, xform):
 
 
 # modify affine xform
-def xform_shift_center(xform, cobj_new=None, cimg_new=None):
+def xform_shift_center(xform: np.ndarray, cobj_new: tuple[float] = None, cimg_new: tuple[float] = None) -> np.ndarray:
     """
     Modify affine transform for coordinate shift in object or image space.
 
@@ -207,8 +211,9 @@ def xform_shift_center(xform, cobj_new=None, cimg_new=None):
     :param cimg_new: [cix, ciy]
     :return:
     """
+    # todo ... this should be implemented by multiplying affine matrices ...
 
-    xform = copy.deepcopy(xform)
+    xform = np.array(xform, copy=True)
 
     if cobj_new is None:
         cobj_new = [0, 0]
@@ -228,7 +233,7 @@ def xform_shift_center(xform, cobj_new=None, cimg_new=None):
 
 
 # transform sinusoid parameters for coordinate shifts
-def phase_edge2fft(frq, phase, img_shape, dx=1):
+def phase_edge2fft(frq: list[float], phase: float, img_shape: tuple[int], dx: float = 1.):
     """
     Give a sinusoidal pattern where we have defined the edge of the image to be x=0, and given the phase determined
     using this coordinate choice, transform the phase to the value referenced to near the center of the image
@@ -253,7 +258,7 @@ def phase_edge2fft(frq, phase, img_shape, dx=1):
     return phase_fft
 
 
-def phase_fft2edge(frq, phase, img_shape, dx=1):
+def phase_fft2edge(frq: list[float], phase: float, img_shape: tuple[int], dx: float = 1.):
     """
 
     :param list[float] or np.array frq:
@@ -269,14 +274,12 @@ def phase_fft2edge(frq, phase, img_shape, dx=1):
     ny = img_shape[0]
     yft = fft.fftshift(fft.fftfreq(ny, 1 / (dx*ny)))
 
-    # xft = tools.get_fft_pos(img_shape[1], dt=dx, centered=True, mode="symmetric")
-    # yft = tools.get_fft_pos(img_shape[0], dt=dx, centered=True, mode="symmetric")
     phase_edge = xform_phase_translation(frq[0], frq[1], phase, [xft[0], yft[0]])
 
     return phase_edge
 
 
-def xform_phase_translation(fx, fy, phase, shifted_center):
+def xform_phase_translation(fx: float, fy: float, phase: float, shifted_center: list[float]):
     """
     Transform sinusoid phase based on translating coordinate center. If we make the transformation,
     x' = x - cx
@@ -298,7 +301,7 @@ def xform_phase_translation(fx, fy, phase, shifted_center):
 
 
 # transform sinusoid parameters under full affine transformation
-def xform_sinusoid_params(fx_obj, fy_obj, phi_obj, affine_mat):
+def xform_sinusoid_params(fx_obj: float, fy_obj: float, phi_obj: float, affine_mat: np.ndarray) -> (float, float, float):
     """
     Given a sinusoid function of object space,
     cos[2pi f_x * xo + 2pi f_y * yo + phi_o],
@@ -324,8 +327,8 @@ def xform_sinusoid_params(fx_obj, fy_obj, phi_obj, affine_mat):
     return fx_img, fy_img, phi_img
 
 
-def xform_sinusoid_params_roi(fx, fy, phase, object_size, img_roi, affine_mat,
-                              input_origin="fft", output_origin="fft"):
+def xform_sinusoid_params_roi(fx: float, fy: float, phase: float, object_size: list[int], img_roi: list[int],
+                              affine_mat: np.ndarray, input_origin: str = "fft", output_origin: str = "fft"):
     """
     Transform sinusoid parameter from object space to a region of interest in image space.
 
@@ -396,38 +399,8 @@ def xform_sinusoid_params_roi(fx, fy, phase, object_size, img_roi, affine_mat,
     return fx_xform, fy_xform, phase_xform
 
 
-# deprecate this fn in favor of xform_sinusoid_params_roi()
-def get_roi_sinusoid_params(roi, fs, phi, dr=None):
-    """
-    choosing a region of interest (ROI) amounts to making a coordinate transform
-
-    # todo: probably better to write this more generally for a change of center, rather than narrowly as roi shift
-
-    :param list[int] roi: [r1_start, r1_end, r2_start, r2_end, r3_start, ..., rn_end]
-    :param fs: [f1, f2, ..., fn]
-    :param float phi:
-    :param list[float] dr: [dr1, dr2, ..., drn]
-    :return:
-    """
-
-    if dr is None:
-        dr = [1] * len(fs)
-
-    if isinstance(dr, (int, float)):
-        dr = [dr]
-
-    if len(dr) == 1 and len(fs) > 1:
-        dr = dr * len(fs)
-
-    phi_roi = phi
-    for ii in range(len(fs)):
-        phi_roi = phi_roi + 2 * np.pi * fs[ii] * roi[2*ii] * dr[ii]
-
-    return np.mod(phi_roi, 2*np.pi)
-
-
 # fit affine transformation
-def fit_xform_points(from_pts, to_pts, translate_only=False):
+def fit_xform_points(from_pts, to_pts, translate_only: bool = False) -> (np.ndarray, np.ndarray):
     """
     Solve for an affine transformation of arbitrary dimensions, where the transformation
     T = [[A, b], [0, ..., 0, 1]],
@@ -449,6 +422,10 @@ def fit_xform_points(from_pts, to_pts, translate_only=False):
     from_pts = np.asarray(from_pts).transpose()
     to_pts = np.asarray(to_pts).transpose()
     ndim, npts = to_pts.shape
+
+    if (npts < 3 * ndim and not translate_only) or (npts < ndim and translate_only):
+        raise ValueError("Not enough points provided to determine affine transformation."
+                         " Need 3*ndim points if translate_only=False, else ndim points")
 
     # augment points with a row of ones
     # rows are coord_0, coord_1, ..., coord_(n-1), 1
@@ -484,8 +461,8 @@ def fit_xform_points(from_pts, to_pts, translate_only=False):
     return affine_mat, vars
 
 
-def fit_xform_points_ransac(from_pts, to_pts, dist_err_max=0.3, niterations=1000, njobs=1,
-                            n_inliers_stop=np.inf, translate_only=False):
+def fit_xform_points_ransac(from_pts, to_pts, dist_err_max: float = 0.3, niterations: int = 1000, njobs: int = 1,
+                            n_inliers_stop: int = np.inf, translate_only: bool = False):
     """
     Determine affine transformation using the random sample consensus (RANSAC) algorithm. This approach
     is more robust to false correspondences between some of the from_pts and to_pts
@@ -566,38 +543,115 @@ def fit_xform_points_ransac(from_pts, to_pts, dist_err_max=0.3, niterations=1000
     return xform_best, inliers_best, error_best, vars_best
 
 
-def fit_xform_img(img, img_xformed, init_params=None):
+def fit_xform_img(mat_obj: np.ndarray, mat_img: np.ndarray, init_params: list[float] = None,
+                  fixed_params: list[bool] = None, bounds: tuple[tuple[float]] = None) -> (dict, np.ndarray):
     """
-    Fit affine transformation by comparing img with transformed images of mask
-    :param img:
-    :param img_xformed:
-    :param init_params:
+    Fit affine transformation by comparing image with transformed image
 
-    :return np.array pfit:
+    :param mat_obj: matrix in object space
+    :param mat_img: matrix in image space
+    :param init_params: let t by the affine transformation matrix, then the initial parameters are
+    [amplitude, background, t[0, 0], t[0, 1], t[0, 2], t[1, 0], t[1, 1], t[1, 2]]
+    :param fixed_params:
+    :bounds bounds:
+    :return results, xform:
     """
+
+    # ensure we are working with float arrays
+    mat_obj = np.array(mat_obj, dtype=float, copy=True)
+    mat_img = np.array(mat_img, dtype=float, copy=True)
 
     if init_params is None:
-        init_params = [1, 0, 0, 0, 1, 0]
+        init_params = np.array([1, 0, 1, 0, 0, 0, 1, 0])
 
-    raise NotImplementedError("Function not finished!")
-    # todo: OR maybe better idea: look at cross correlation and maximize this to begin with?
-    def xform_fn(p): return np.array([[p[0], p[1], p[2]], [p[3], p[4], p[5]], [0, 0, 1]])
+    def p2xform(p): return np.array([[p[2], p[3], p[4]],
+                                     [p[5], p[6], p[7]],
+                                     [0   , 0   , 1]])
 
-    # err_fn = lambda p: img.ravel() - affine_xform_mat(mask, xform_fn(p), img.shape, mode='nearest').ravel()
-    # fit_dict = optimize.least_squares(err_fn, init_params)
-    img_sum = np.sum(img)
+    def err_fn(p):
+        img_coords = np.meshgrid(np.arange(mat_img.shape[1]), np.arange(mat_img.shape[0]))
+        diff = mat_img.ravel() - (p[0] * xform_mat(mat_obj, p2xform(p), img_coords, mode='interp').ravel() + p[1])
+        diff[np.isnan(diff)] = 0
+        return diff
 
-    img_coords = np.meshgrid(range(img.shape[1], img.shape[0]))
-    def min_fn(p): return -np.sum(img.ravel() * xform_mat(img_xformed, xform_fn(p), img_coords, mode='interp').ravel()) / \
-                           img_sum / np.sum(xform_mat(img_xformed, xform_fn(p), img_coords, mode='interp'))
+    results = fit.fit_least_squares(err_fn, init_params, fixed_params=fixed_params, bounds=bounds)
+    xform = p2xform(results["fit_params"])
 
-    fit_dict = optimize.minimize(min_fn, init_params)
-    pfit = fit_dict['x']
-
-    return pfit
+    return results, xform
 
 
-def euler_mat(phi, theta, psi):
+# ######################
+# rotation matrices
+# ######################
+def get_rot_mat(rot_axis: list[float], gamma: float) -> np.ndarray:
+    """
+    Get matrix which rotates points about the specified axis by the given angle. Think of this rotation matrix
+    as acting on unit vectors, and hence its inverse R^{-1} transforms regular vectors. Therefore, we define
+    this matrix such that it rotates unit vectors in a lefthanded sense about the given axis for positive gamma.
+    e.g. when rotating about the z-axis this becomes
+    [[cos(gamma), -sin(gamma), 0],
+     [sin(gamma), cos(gamma), 0],
+     [0, 0, 1]]
+    since vectors are acted on by the inverse matrix, they rotated in a righthanded sense about the given axis.
+
+    :param rot_axis: unit vector specifying axis to rotate about, [nx, ny, nz]
+    :param float gamma: rotation angle in radians to transform point. A positive angle corresponds right-handed rotation
+    about the given axis
+    :return mat: 3x3 rotation matrix
+    """
+    if np.abs(np.linalg.norm(rot_axis) - 1) > 1e-12:
+        raise ValueError("rot_axis must be a unit vector")
+
+    nx, ny, nz = rot_axis
+    mat = np.array([[nx**2 * (1 - np.cos(gamma)) + np.cos(gamma), nx * ny * (1 - np.cos(gamma)) - nz * np.sin(gamma), nx * nz * (1 - np.cos(gamma)) + ny * np.sin(gamma)],
+                    [nx * ny * (1 - np.cos(gamma)) + nz * np.sin(gamma), ny**2 * (1 - np.cos(gamma)) + np.cos(gamma), ny * nz * (1 - np.cos(gamma)) - nx * np.sin(gamma)],
+                    [nx * nz * (1 - np.cos(gamma)) - ny * np.sin(gamma), ny * nz * (1 - np.cos(gamma)) + nx * np.sin(gamma), nz**2 * (1 - np.cos(gamma)) + np.cos(gamma)]])
+    return mat
+
+
+def get_rot_mat_angle_axis(rot_mat: np.ndarray) -> (np.ndarray, float):
+    """
+    Given a rotation matrix, determine the axis it rotates about and the angle it rotates through. This is
+    the inverse function for get_rot_mat()
+
+    Note that get_rot_mat_angle_axis(get_rot_mat(axis, angle)) can return either axis, angle or -axis, -angle
+    as these two rotation matrices are equivalent
+
+    @param rot_mat:
+    @return rot_axis, angle:
+    """
+    if np.linalg.norm(rot_mat.dot(rot_mat.transpose()) - np.identity(rot_mat.shape[0])) > 1e-12:
+        raise ValueError("rot_mat was not a valid rotation matrix")
+
+
+    eig_vals, eig_vects = np.linalg.eig(rot_mat)
+
+    # rotation matrix must have one eigenvalue that is 1 to numerical precision
+    ind = np.argmin(np.abs(eig_vals - 1))
+
+    # construct basis with e3 = rotation axis
+    e3 = eig_vects[:, ind].real
+
+    if np.linalg.norm(np.cross(np.array([0, 1, 0]), e3)) != 0:
+        e1 = np.cross(np.array([0, 1, 0]), e3)
+    else:
+        e1 = np.cross(np.array([1, 0, 0]), e3)
+    e1 = e1 / np.linalg.norm(e1)
+
+    e2 = np.cross(e3, e1)
+
+    # basis change matrix to look like rotation about z-axis
+    mat_basis_change = np.vstack((e1, e2, e3)).transpose()
+
+    # transformed rotation matrix
+    r_bc = np.linalg.inv(mat_basis_change).dot(rot_mat.dot(mat_basis_change))
+    angle = np.arcsin(r_bc[1, 0]).real
+    # angle = np.arcsin(r_bc[0, 1]).real
+
+    return e3, angle
+
+
+def euler_mat(phi: float, theta: float, psi: float) -> np.ndarray:
     """
     Define our Euler angles connecting the body frame to the space/lab frame by
     r_lab = U_z(phi) * U_y(theta) * U_z(psi) * r_body
@@ -626,7 +680,7 @@ def euler_mat(phi, theta, psi):
     return euler_mat
 
 
-def euler_mat_inv(phi, theta, psi):
+def euler_mat_inv(phi: float, theta: float, psi: float) -> np.ndarray:
     """
     r_body = U_z(-psi) * U_y(-theta) * U_z(-phi) * r_lab
 
@@ -638,7 +692,7 @@ def euler_mat_inv(phi, theta, psi):
     return euler_mat(-psi, -theta, -phi)
 
 
-def euler_mat_derivatives(phi, theta, psi):
+def euler_mat_derivatives(phi: float, theta: float, psi: float) -> (np.ndarray, np.ndarray, np.ndarray):
     """
     Derivative of Euler matrix with respect to Euler angles
 
@@ -672,7 +726,7 @@ def euler_mat_derivatives(phi, theta, psi):
     return dphi, dtheta, dpsi
 
 
-def euler_mat_inv_derivatives(phi, theta, psi):
+def euler_mat_inv_derivatives(phi: float, theta: float, psi: float) -> (np.ndarray, np.ndarray, np.ndarray):
     """
     Derivative of inverse Euler matrix with respect to Euler angles
 
