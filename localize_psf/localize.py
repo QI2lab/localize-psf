@@ -8,6 +8,8 @@ compile this repository and install the python bindings.
 import os
 import time
 import warnings
+import pickle
+import copy
 import numpy as np
 import scipy.signal
 import scipy.ndimage
@@ -663,7 +665,7 @@ def fit_gauss_roi(img_roi, coords, init_params=None, fixed_params=None, bounds=N
 
 def fit_gauss_rois(img_rois, coords_rois, init_params, max_number_iterations=100,
                    sf=1, dc=None, angles=None, estimator="LSE", model="gaussian",
-                   fixed_params=None, use_gpu=GPUFIT_AVAILABLE):
+                   fixed_params=None, use_gpu=GPUFIT_AVAILABLE, verbose=True):
     """
     Fit rois. Can use either CPU parallelization with joblib or GPU parallelization using gpufit
 
@@ -691,8 +693,12 @@ def fit_gauss_rois(img_rois, coords_rois, init_params, max_number_iterations=100
         if model != "gaussian":
             raise NotImplementedError("only model = 'gaussian' implemented for non gpu")
 
+        verbose_joblib = 0
+        if verbose:
+            verbose_joblib = 1
+
         tstart = time.perf_counter()
-        results = joblib.Parallel(n_jobs=-1, verbose=1, timeout=None)(
+        results = joblib.Parallel(n_jobs=-1, verbose=verbose_joblib, timeout=None)(
             joblib.delayed(fit_gauss_roi)(img_rois[ii], (zrois[ii], yrois[ii], xrois[ii]), init_params=init_params[ii],
                                           fixed_params=fixed_params, sf=sf, dc=dc, angles=angles)
             for ii in range(len(img_rois)))
@@ -954,8 +960,10 @@ def plot_gauss_roi(fit_params, roi, imgs, coords, init_params=None, same_color_s
     return figh_interp
 
 
-def filter_localizations(fit_params, init_params, coords, fit_dist_max_err, min_spot_sep,
-                         sigma_bounds, amp_min=0, dist_boundary_min=(0, 0)):
+def filter_localizations(fit_params: np.ndarray, init_params: np.ndarray, coords: tuple[np.ndarray],
+                         fit_dist_max_err: tuple[float], min_spot_sep: tuple[float],
+                         sigma_bounds: tuple[tuple[float], tuple[float]], amp_min: float = 0,
+                         dist_boundary_min: tuple[float] = (0, 0)):
     """
     Given a list of fit parameters, return boolean arrays indicating which fits pass/fail given a variety
     of tests for reasonability
@@ -1044,9 +1052,13 @@ def filter_localizations(fit_params, init_params, coords, fit_dist_max_err, min_
     return to_keep, conditions, condition_names, filter_settings
 
 
-def localize_beads(imgs, dxy, dz, threshold, roi_size, filter_sigma_small, filter_sigma_large,
-                   min_spot_sep, sigma_bounds, fit_amp_min, fit_dist_max_err=(np.inf, np.inf), dist_boundary_min=(0, 0),
-                   use_gpu_fit=GPUFIT_AVAILABLE, use_gpu_filter=CUPY_AVAILABLE, verbose=True):
+def localize_beads(imgs: np.ndarray, dxy: float, dz: float, threshold: float, roi_size: tuple[float],
+                   filter_sigma_small: tuple[float], filter_sigma_large: tuple[float],
+                   min_spot_sep: tuple[float] = (0, 0),
+                   sigma_bounds: tuple[tuple[float], tuple[float]] = ((0, 0), (np.inf, np.inf)),
+                   fit_amp_min: float = 0, fit_dist_max_err: tuple[float] = (np.inf, np.inf),
+                   dist_boundary_min: tuple[float] = (0, 0), max_number_iterations: int = 100,
+                   use_gpu_fit: bool = GPUFIT_AVAILABLE, use_gpu_filter: bool = CUPY_AVAILABLE, verbose: bool = True):
     """
     Given an image consisting of diffraction limited spots and background, identify the diffraction limit spots using
     the following procedure
@@ -1055,7 +1067,8 @@ def localize_beads(imgs, dxy, dz, threshold, roi_size, filter_sigma_small, filte
     (3) Fit candidate spots to a 2D or 3D Gaussian function. Note the fitting is done on the raw image, not the
     filtered image
     (4) Filter out likely candidate spots based on the results of the fitting
-    the various parameters used in this function are set in terms of real units, i.e. um, and not pixels.
+    the various parameters used in this function are set in terms of real units, i.e. um, and not pixels. To use
+    pixel units, set dxy=dz=1
 
     @param imgs: an image of size ny x nx or an image stack of size nz x ny x nx
     @param dxy: xy-pixel spacing in um
@@ -1074,7 +1087,8 @@ def localize_beads(imgs, dxy, dz, threshold, roi_size, filter_sigma_small, filte
     @param bool use_gpu_fit: whether or not to do spot fitting on the GPU
     @param bool use_gpu_filter: whether or not to do difference-of-Gaussian filtering on GPU
     @param bool verbose: whether or not to print information
-    @return coords, fit_params, init_params, rois, to_keep, conditions, condition_names, filter_settings:
+    @return coords, fit_params, init_params, rois, to_keep, conditions, condition_names, filter_settings,
+    fit_states, chi_sqrs, niters, imgs_filtered:
     coords = (z, y, x)
     """
 
@@ -1134,9 +1148,7 @@ def localize_beads(imgs, dxy, dz, threshold, roi_size, filter_sigma_small, filte
     # ###################################
     # identify candidate beads
     # ###################################
-    if len(centers_guess_inds) == 0:
-        return None
-    else:
+    if len(centers_guess_inds) != 0:
         # ###################################################
         # average multiple points too close together. Necessary bc if naive threshold, may identify several points
         # from same spot. Particularly important if spots have very different brightness levels.
@@ -1202,10 +1214,11 @@ def localize_beads(imgs, dxy, dz, threshold, roi_size, filter_sigma_small, filte
             fixed_params[3] = True
 
         fit_params, fit_states, chi_sqrs, niters, fit_t = fit_gauss_rois(img_rois, (zrois, yrois, xrois),
-                                                                         init_params, estimator="LSE",
+                                                                         init_params, max_number_iterations,
+                                                                         estimator="LSE",
                                                                          sf=1, dc=dxy, angles=(0., 0., 0.),
                                                                          fixed_params=fixed_params,
-                                                                         use_gpu=use_gpu_fit)
+                                                                         use_gpu=use_gpu_fit, verbose=verbose)
 
         tend = time.perf_counter()
         if verbose:
@@ -1221,11 +1234,27 @@ def localize_beads(imgs, dxy, dz, threshold, roi_size, filter_sigma_small, filte
         if verbose:
             print("Identified %d likely candidates" % np.sum(to_keep))
 
-        return (z, y, x), fit_params, init_params, rois, to_keep, conditions, condition_names, filter_settings
+    else:
+        fit_params = np.zeros((0, 7))
+        init_params = np.zeros((0, 7))
+        rois = np.zeros((0, 6))
+        to_keep = None
+        conditions = None
+        condition_names = None
+        filter_settings = None
+        fit_states = None
+        chi_sqrs = None
+        niters = None
 
+    return (z, y, x), fit_params, init_params, rois,\
+           to_keep, conditions, condition_names, filter_settings,\
+           fit_states, chi_sqrs, niters, imgs_filtered
 
-def plot_bead_locations(imgs, center_lists, title="", color_lists=None, color_limits=None, legend_labels=None,
-                        weights=None, cbar_labels=None, vlims_percentile=(0.01, 99.99), gamma=1, **kwargs):
+def plot_bead_locations(imgs: np.ndarray, center_lists: list[np.ndarray],
+                        title: str = "", color_lists: list[str] = None,
+                        color_limits: list[list[float]] = None, legend_labels: list[str] = None,
+                        weights: list[np.ndarray] = None, cbar_labels: list[str] = None,
+                        vlims_percentile: tuple[float] = (0.01, 99.99), gamma: float = 1, **kwargs):
     """
     Plot center locations over 2D image or max projection of 3D image. Supports plotting multiple different sets
     of center locations, and using different colors to indicate properties of the different centers e.g. sigma,
@@ -1316,3 +1345,192 @@ def plot_bead_locations(imgs, center_lists, title="", color_lists=None, color_li
     plt.legend(legend_labels)
 
     return figh
+
+
+def autofit_psfs(imgs, psf_roi_size, dx, dz, wavelength, ni=1.5, model='vectorial', sf=1,
+                 threshold=100, min_spot_sep=(3, 3),
+                 filter_sigma_small=(1, 0.5, 0.5), filter_sigma_large=(3, 5, 5),
+                 sigma_bounds=((1, 1), (10, 10)), roi_size_loc=(13, 21, 21), fit_amp_thresh=100,
+                 dist_boundary_min=(0, 0), fit_dist_max_err=(np.inf, np.inf),
+                 num_localizations_to_plot=5, psf_percentiles=(20, 5), plot=True, gamma=0.5, save_dir=None,
+                 figsize=(18, 10), **kwargs):
+    """
+    Find isolated points, fit PSFs, and report data. This is the main function of this module
+
+    :param imgs: nz x nx x ny image
+    :param psf_roi_size: [nz, ny, nx] ROI to determine PSFs on. This is not necessarily the same as the size of the
+    ROI's used during localization
+    :param float dx: pixel size in um
+    :param float dz: z-plane spacing in um
+    :param float wavelength: wavelength in um
+    :param float ni: index of refraction of medium
+    :param str model: "vectorial", "gibson-lanni", "born-wolf", or "gaussian". This model is used to fit the
+    averaged PSF's, but a gaussian model is always used for localization
+    :param int sf: sampling factor for oversampling along each dimension
+    :param float threshold: threshold pixel value to identify peaks. Note: this is applied to the filtered image,
+    and is not directly comparable to the values in the raw image array
+    :param min_spot_sep: (sz, sxy) minimum spot separation between different beads, in pixels
+    :param filter_sigma_small: (sz, sy, sx) sigmas of Gaussian filter used to smooth image, in pixels
+    :param filter_sigma_large: (sz, sy, sx) sigmas of Gaussian filter used to removed background, in pixels
+     :param sigma_bounds: ((sz_min, sxy_min), (sz_max, sxy_max)) in pixels. exclude fits with sigmas that fall outside
+    these ranges
+    :param roi_size_loc: (sz, sy, sx) size of ROI to used in localization, in pixels
+    :param float fit_amp_thresh: only consider spots which have fit values larger tha this amplitude
+    :param dist_boundary_min:
+    :param fit_dist_max_err:
+    :param int num_localizations_to_plot: number of ROI's to plot
+    :param tuple psf_percentiles: calculate the averaged PSF from the smallest supplied percentage of spots. When
+    a tuple is given, compute PSF's corresponding to each supplied percentage.
+    :param bool plot: whether or not to plot
+    :param float gamma: gamma to use when plotting
+    :param str save_dir:
+    :param figsize: (sx, sy)
+    :param **kwargs: passed through to plt.figure()
+
+    :return coords, fit_params, init_params, rois, to_keep, conditions, condition_names, filter_settings,\
+           psfs_real, psf_coords, otfs_real, otf_coords, psf_percentiles, fit_params_real:
+    """
+
+    if isinstance(psf_percentiles, (int, float)):
+        psf_percentiles = [psf_percentiles]
+
+    saving = False
+    if save_dir is not None:
+        saving = True
+
+        if not os.path.exists(save_dir):
+            os.mkdir(save_dir)
+
+    # ###################################
+    # convert spot-finding parameters from pixels to distnace units
+    # ###################################
+    min_spot_sep = list(copy.deepcopy(min_spot_sep))
+    min_spot_sep[0] = min_spot_sep[0] * dz
+    min_spot_sep[1] = min_spot_sep[1] * dx
+
+    filter_sigma_small = list(copy.deepcopy(filter_sigma_small))
+    filter_sigma_small[0] = filter_sigma_small[0] * dz
+    filter_sigma_small[1] = filter_sigma_small[1] * dx
+    filter_sigma_small[2] = filter_sigma_small[2] * dx
+
+    filter_sigma_large = list(copy.deepcopy(filter_sigma_large))
+    filter_sigma_large[0] = filter_sigma_large[0] * dz
+    filter_sigma_large[1] = filter_sigma_large[1] * dx
+    filter_sigma_large[2] = filter_sigma_large[2] * dx
+
+    sigma_bounds = list(copy.deepcopy(sigma_bounds))
+    sigma_bounds[0] = list(sigma_bounds[0])
+    sigma_bounds[1] = list(sigma_bounds[1])
+    sigma_bounds[0][0] = sigma_bounds[0][0] * dz
+    sigma_bounds[0][1] = sigma_bounds[0][1] * dx
+    sigma_bounds[1][0] = sigma_bounds[1][0] * dz
+    sigma_bounds[1][1] = sigma_bounds[1][1] * dx
+
+    roi_size_loc = list(copy.deepcopy(roi_size_loc))
+    roi_size_loc[0] = roi_size_loc[0] * dz
+    roi_size_loc[1] = roi_size_loc[1] * dx
+    roi_size_loc[2] = roi_size_loc[2] * dx
+
+    # ###################################
+    # do localization
+    # ###################################
+    z, y, x = get_coords(imgs.shape, (dz, dx, dx))
+
+    coords, fit_params, init_params, rois, to_keep, conditions, condition_names, filter_settings = \
+        localize_beads(imgs, dx, dz, threshold, roi_size_loc, filter_sigma_small, filter_sigma_large,
+                                min_spot_sep, sigma_bounds, fit_amp_thresh, fit_dist_max_err=fit_dist_max_err,
+                                dist_boundary_min=dist_boundary_min, use_gpu_filter=False)
+
+    no_psfs_found = not np.any(to_keep)
+    if no_psfs_found:
+        warnings.warn("no spots were localized")
+
+    # ###################################
+    # plot individual localizations
+    # ###################################
+    ind_to_plot = np.arange(len(to_keep), dtype=int)[to_keep][:num_localizations_to_plot]
+    results = joblib.Parallel(n_jobs=-1, verbose=10, timeout=None)(
+        joblib.delayed(plot_gauss_roi)(fit_params[ind], rois[ind], imgs, coords, init_params[ind],
+                                                figsize=figsize, prefix="localization_roi_%d" % ind, save_dir=save_dir)
+        for ind in ind_to_plot
+    )
+
+    # ###################################
+    # plot fit statistics
+    # ###################################
+    if plot and not no_psfs_found:
+        figh = psf.plot_fit_stats(fit_params[to_keep], figsize=figsize, **kwargs)
+
+        if saving:
+            fname = os.path.join(save_dir, "fit_stats.png")
+            figh.savefig(fname)
+            plt.close(figh)
+
+    # ###################################
+    # get and plot experimental PSFs
+    # ###################################
+    nps = len(psf_percentiles)
+    psfs_real = np.zeros((nps,) + tuple(psf_roi_size))
+    otfs_real = np.zeros(psfs_real.shape, dtype=complex)
+    fit_params_real = np.zeros((nps, 6))
+    psf_coords = None
+    otf_coords = None
+
+    if not no_psfs_found:
+        for ii in range(len(psf_percentiles)):
+            # only keep smallest so many percent of spots
+            sigma_max = np.percentile(fit_params[:, 4][to_keep], psf_percentiles[ii])
+            to_use = np.logical_and(to_keep, fit_params[:, 4] <= sigma_max)
+
+            # get centers
+            centers = np.stack((fit_params[:, 3][to_use],
+                                fit_params[:, 2][to_use],
+                                fit_params[:, 1][to_use]), axis=1)
+
+            # find experiment psf/otf
+            psfs_real[ii], psf_coords, otfs_real[ii], otf_coords = psf.get_exp_psf(imgs, (z, y, x), centers, psf_roi_size,
+                                                                               backgrounds=fit_params[:, 5][to_use])
+
+            results, _ = psf.fit_psfmodel(psfs_real[ii], dx, dz, wavelength, ni, sf, model=model)
+            fit_params_real[ii] = results["fit_params"]
+
+            if plot:
+                figh = psf.plot_psfmodel_fit(psfs_real[ii], dx, dz, wavelength, ni, sf, fit_params_real[ii], model=model,
+                                         gamma=gamma, figsize=figsize,
+                                         label="smallest %d percent" % psf_percentiles[ii])
+
+                if saving:
+                    fname = os.path.join(save_dir, "experimental_psf_smallest_%0.2f.png" % psf_percentiles[ii])
+                    figh.savefig(fname)
+                    plt.close(figh)
+
+    # ###################################
+    # plot localization positions
+    # ###################################
+    if plot and not no_psfs_found:
+        centers = np.stack((fit_params[:, 3][to_keep] / dz,
+                            fit_params[:, 2][to_keep] / dx,
+                            fit_params[:, 1][to_keep] / dx), axis=1)
+
+        figh = plot_bead_locations(imgs, centers, weights=fit_params[:, 4], cbar_labels=["sigma"],
+                                            title="Max intensity projection and NA from 2D fit versus position",
+                                            figsize=figsize, **kwargs)
+
+        if saving:
+            fname = os.path.join(save_dir, "sigma_versus_position.png")
+            figh.savefig(fname)
+            plt.close(figh)
+
+    if saving:
+        data = {"coords": coords, "fit_params": fit_params, "init_params": init_params,
+                "rois": rois, "to_keep": to_keep, "conditions": conditions,
+                "condition_names": condition_names, "filter_settings": filter_settings,
+                "psfs_real": psfs_real, "psf_coords": psf_coords, "otfs_real": otfs_real, "otf_coords": otf_coords,
+                "psf_percentiles": psf_percentiles, "fit_params_real": fit_params_real}
+
+        fname = os.path.join(save_dir, "localization_results.pkl")
+        with open(fname, "wb") as f:
+            pickle.dump(data, f)
+
+    return coords, fit_params, init_params, rois, to_keep, conditions, condition_names, filter_settings, \
+           psfs_real, psf_coords, otfs_real, otf_coords, psf_percentiles, fit_params_real
