@@ -24,14 +24,14 @@ try:
     import cupyx.scipy.signal
     import cupyx.scipy.ndimage
     CUPY_AVAILABLE = True
-except ImportError:
+except (ImportError, ModuleNotFoundError):
     CUPY_AVAILABLE = False
 
 # custom GPUFit for fitting on GPU
 try:
     import pygpufit.gpufit as gf
     GPUFIT_AVAILABLE = True
-except ImportError:
+except (ImportError, ModuleNotFoundError):
     GPUFIT_AVAILABLE = False
 
 
@@ -144,38 +144,40 @@ def filter_convolve(imgs, kernel, use_gpu=CUPY_AVAILABLE):
     """
 
     # todo: estimate how much memory convolution requires? Much more than I expect...
-
+    
     # convolve, and deal with edges by normalizing
-    if use_gpu:
-        kernel_cp = cp.asarray(kernel, dtype=cp.float32)
-        imgs_cp = cp.asarray(imgs, dtype=cp.float32)
-        imgs_filtered_cp = cupyx.scipy.signal.fftconvolve(imgs_cp, kernel_cp, mode="same")
-        imgs_filtered = cp.asnumpy(imgs_filtered_cp)
+    # if use_gpu:
+    #     print("\n\nIn GPU mode\n\n")
+    #     print('CUPY_AVAILABLE : ', CUPY_AVAILABLE)
+    #     kernel_cp = cp.asarray(kernel, dtype=cp.float32)
+    #     imgs_cp = cp.asarray(imgs, dtype=cp.float32)
+    #     imgs_filtered_cp = cupyx.scipy.signal.fftconvolve(imgs_cp, kernel_cp, mode="same")
+    #     imgs_filtered = cp.asnumpy(imgs_filtered_cp)
 
-        imgs_cp = None
-        del imgs_cp
+    #     imgs_cp = None
+    #     del imgs_cp
 
-        imgs_filtered_cp = None
-        del imgs_filtered_cp
+    #     imgs_filtered_cp = None
+    #     del imgs_filtered_cp
 
-        norm_cp = cupyx.scipy.signal.fftconvolve(cp.ones(imgs.shape), kernel_cp, mode="same")
-        norm = cp.asnumpy(norm_cp)
+    #     norm_cp = cupyx.scipy.signal.fftconvolve(cp.ones(imgs.shape), kernel_cp, mode="same")
+    #     norm = cp.asnumpy(norm_cp)
 
-        imgs_filtered = imgs_filtered / norm
+    #     imgs_filtered = imgs_filtered / norm
 
-        kernel_cp = None
-        del kernel_cp
+    #     kernel_cp = None
+    #     del kernel_cp
 
-        norm_cp = None
-        del norm_cp
+    #     norm_cp = None
+    #     del norm_cp
 
-        mempool = cp.get_default_memory_pool()
-        mempool.free_all_blocks()
-        # pinned_mempool = cp.get_default_pinned_memory_pool()
+    #     mempool = cp.get_default_memory_pool()
+    #     mempool.free_all_blocks()
+    #     # pinned_mempool = cp.get_default_pinned_memory_pool()
 
-    else:
-        imgs_filtered = scipy.signal.fftconvolve(imgs, kernel, mode="same") / \
-                        scipy.signal.fftconvolve(np.ones(imgs.shape), kernel, mode="same")
+    # else:
+    imgs_filtered = scipy.signal.fftconvolve(imgs, kernel, mode="same") / \
+                    scipy.signal.fftconvolve(np.ones(imgs.shape), kernel, mode="same")
 
     # this method too slow for large filter sizes
     # imgs_filtered = scipy.ndimage.convolve(imgs, kernel, mode="constant", cval=0) / \
