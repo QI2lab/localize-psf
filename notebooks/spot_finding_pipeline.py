@@ -46,6 +46,9 @@ import localize_skewed
 import image_post_processing as ipp
 from image_post_processing import deskew
 
+# %% [markdown]
+# ### Extract data
+
 # %%
 
 dir_load = Path('../../../from_server')
@@ -74,6 +77,9 @@ maxi = img.max()
 #     # colormap=color, 
 #     blending='additive',
 #     )
+# %% [markdown]
+# ### DoG filter
+
 # %%
 
 # size of spots in pixels
@@ -117,10 +123,13 @@ img_filtered = img_high_pass - img_low_pass
 # %%
 
 viewer = napari.Viewer()
-# viewer.add_image(img_high_pass, name='img_high_pass')
-# viewer.add_image(img_low_pass, name='img_low_pass')
+viewer.add_image(img_high_pass, name='img_high_pass')
+viewer.add_image(img_low_pass, name='img_low_pass')
 viewer.add_image(img, name='img')
 viewer.add_image(img_filtered, name='img_filtered')
+# %% [markdown]
+# ### Threshold DoG and local max
+
 # %%
 # threshold found with Napari
 dog_thresh = 4
@@ -158,6 +167,9 @@ viewer.add_image(img, name='img')
 viewer.add_image(img_filtered, name='img_filtered')
 viewer.add_points(centers_guess_inds, name='local maxis', blending='additive', size=3, face_color='r')
 
+
+# %% [markdown]
+# ### Fit gaussian
 
 # %%
 def get_roi_coordinates(centers, sizes, max_coords_val, min_sizes, return_sizes=True):
@@ -249,11 +261,16 @@ def extract_ROI(img, coords):
 # coords[:, 0, :]
 
 # %%
+# fit_roi_sizes = np.array([1.3, 1, 1]) * np.array([sz, sy, sx])
+fit_roi_sizes = 2* np.array([sz, sy, sx])
+# min_fit_roi_sizes = fit_roi_sizes * 0.7
+min_fit_roi_sizes = fit_roi_sizes * 0.5
+
 roi_coords, roi_sizes = get_roi_coordinates(
     centers = centers_guess_inds, 
-    sizes = 2 * np.array([sz, sy, sx]), 
+    sizes = fit_roi_sizes, 
     max_coords_val = np.array(img.shape) - 1, 
-    min_sizes = [sz, sy, sx],
+    min_sizes = min_fit_roi_sizes,
 )
 nb_rois = roi_coords.shape[0]
 
@@ -262,29 +279,42 @@ nb_rois
 
 # %%
 viewer = napari.Viewer()
-# all_rois = np.stack(extract_ROI(img, roi_coords[i]) for i in range(nb_rois))
-# viewer.add_image(all_rois, name='all rois')
-for i in range(nb_rois):
-    roi = extract_ROI(img, roi_coords[i])
-    viewer.add_image(roi, name=f'roi {i}', blending='additive')
-    
+viewer.add_image(img, name='img')
+viewer.add_image(img_filtered, name='img_filtered')
+viewer.add_points(roi_coords[:, 0, :], name='ROI start', blending='additive', size=3, face_color='r')
+viewer.add_points(roi_coords[:, 1, :], name='ROI end', blending='additive', size=3, face_color='g')
+
+# %%
+# viewer = napari.Viewer()
+# # all_rois = np.stack(extract_ROI(img, roi_coords[i]) for i in range(nb_rois))
+# # viewer.add_image(all_rois, name='all rois')
+# for i in range(nb_rois):
+#     roi = extract_ROI(img, roi_coords[i])
+#     viewer.add_image(roi, name=f'roi {i}', blending='additive')
+
 
 # %%
 i = 0
-roi = extract_ROI(img, roi_coords[i])
+# im_fitted = img_high_pass - img_low_pass
+im_fitted = img
+
+roi = extract_ROI(im_fitted, roi_coords[i])
 roi_gauss = extract_ROI(img_high_pass, roi_coords[i])
 
 # %%
 viewer = napari.Viewer()
-viewer.add_image(roi_gauss)
+viewer.add_image(roi, name='roi')
+viewer.add_image(roi_gauss, name='roi gauss')
 
 # %%
 centers_guess = (roi_sizes / 2)
+
+# %%
 init_params = np.array([
     amps[i], 
     centers_guess[i, 2],
     centers_guess[i, 1],
-    centers_guess[:i, 0],
+    centers_guess[i, 0],
     sigma_xy, 
     sigma_z, 
     roi.min(),
@@ -293,13 +323,182 @@ init_params = np.array([
 # %%
 theta = 0.
 
-localize.fit_gauss_roi(
+fit_results = localize.fit_gauss_roi(
     roi, 
     (localize.get_coords(roi_sizes[i], drs=[1, 1, 1])), 
     init_params,
 )
+fit_results
 
 # %%
-roi.shape
+amplitude, center_x, center_y, center_z, sigma_xy, sigma_z, offset = fit_results['fit_params']
+
+# %%
+viewer = napari.Viewer()
+viewer.add_image(roi, name='roi')
+viewer.add_image(roi_gauss, name='roi gauss')
+viewer.add_points([center_z, center_y, center_x], name='fitted center', blending='additive', size=2, face_color='r')
+
+# %%
+# # using img_high_pass or img_filtered gives really bad results
+# # I'd like to understand why fitted centered are all shifted
+# im_fitted = img #img_high_pass - img_low_pass # img
+
+# fit_results_rois = np.zeros((nb_rois, 8))
+# for i in range(nb_rois):
+#     # extract ROI
+#     roi = extract_ROI(im_fitted, roi_coords[i])
+#     # fit gaussian in ROI
+#     init_params = np.array([
+#         amps[i], 
+#         centers_guess[i, 2],
+#         centers_guess[i, 1],
+#         centers_guess[i, 0],
+#         sigma_xy, 
+#         sigma_z, 
+#         roi.min(),
+#     ])
+#     fit_results_roi = localize.fit_gauss_roi(
+#         roi, 
+#         (localize.get_coords(roi_sizes[i], drs=[1, 1, 1])), 
+#         init_params,
+#     )
+#     # amplitude, center_x, center_y, center_z, sigma_xy, sigma_z, offset
+#     fit_results_rois[i, :7] = fit_results_roi['fit_params']
+#     fit_results_rois[i, 7] = fit_results_roi['chi_squared']
+# # add origin coordinates of each ROI
+# centers = fit_results_rois[:, 1:4] + roi_coords[:, 0, :]
+
+# %%
+# using img_high_pass or img_filtered gives really bad results
+# I'd like to understand why fitted centered are all shifted
+im_fitted = img #img_high_pass - img_low_pass # img
+
+amplitudes = []
+centers = []
+sigmas = []
+chi_squareds = []
+all_res = []
+for i in range(nb_rois):
+    # extract ROI
+    roi = extract_ROI(im_fitted, roi_coords[i])
+    # fit gaussian in ROI
+    init_params = np.array([
+        amps[i], 
+        centers_guess[i, 2],
+        centers_guess[i, 1],
+        centers_guess[i, 0],
+        sigma_xy, 
+        sigma_z, 
+        roi.min(),
+    ])
+    fit_results = localize.fit_gauss_roi(
+        roi, 
+        (localize.get_coords(roi_sizes[i], drs=[1, 1, 1])), 
+        init_params,
+        fixed_params=np.full_like(init_params, False),
+    )
+    amplitude, center_x, center_y, center_z, sigma_xy, sigma_z, offset = fit_results['fit_params']
+    amplitudes.append(amplitude)
+    centers.append([center_z, center_y, center_x])
+    sigmas.append([sigma_xy, sigma_z])
+    chi_squareds.append(fit_results['chi_squared'])
+    all_res.append(fit_results['fit_params'])
+#     print(fit_results)
+# add origin coordinates of each ROI
+centers = np.array(centers) + roi_coords[:, 0, :]
+
+# %%
+np.array(all_res)[:,-4:]
+# np.array(all_res)[:,:4]
+
+# %% [markdown]
+# Fits only amplitude if ROI is too small, covarianc is a matrix of nan
+
+# %%
+# from napari.utils.colormaps.colormap_utils import vispy_or_mpl_colormap
+# cmap = vispy_or_mpl_colormap('plasma')
+import matplotlib as mpl
+cmap = mpl.cm.get_cmap('plasma')
+
+chi_squareds = np.array(chi_squareds)
+norm = mpl.colors.Normalize(vmin=chi_squareds.min(), vmax=chi_squareds.max())
+chi_colors = [cmap(norm(x)) for x in chi_squareds]
+
+sigmas = np.array(sigmas)
+norm = mpl.colors.Normalize(vmin=sigmas[:, 0].min(), vmax=sigmas[:, 0].max())
+sigma_xy_colors = [cmap(norm(x)) for x in sigmas[:, 0]]
+
+# %%
+viewer = napari.Viewer()
+viewer.add_image(img, name='img')
+viewer.add_image(img_filtered, name='img_filtered')
+# viewer.add_image(im_fitted, name='im_fitted')
+viewer.add_points(centers_guess_inds, name='local maxis', blending='additive', size=3, face_color='r')
+# viewer.add_points(centers, name='fitted centers', blending='additive', size=3, face_color='g')
+# viewer.add_points(centers, name='fitted centers', blending='additive', size=3, face_color=chi_squareds, face_colormap=cmap); # napari colormap doesn't work
+# viewer.add_points(centers, name='fitted centers chi squared', blending='additive', size=3, face_color=chi_colors)
+viewer.add_points(centers, name='fitted centers sigma xy', blending='additive', size=3, face_color=sigma_xy_colors)
+
+# %% [markdown]
+# Some blobs look like real spot blobs but are actually non spot blobs, they look simimlar becaus of the DoG kernel.  
+# In these blobs the diff between center from peak max and gaussian fit is noticeable.  
+# For real spot blobs, sometimes the peak max seems to provide more accurarte estimation of center's coordinates, but on the real image we observe that the gaussian fit is the most accurate method with small enough ROI.
+# But with too small ROI there is no real fitting, and with too big ROI one center can shift due to near spot. 
+
+# %% [markdown]
+# ### Radial spot finding
+
+# %%
+i = 0
+# im_fitted = img_high_pass - img_low_pass
+im_fitted = img
+
+roi = extract_ROI(im_fitted, roi_coords[i])
+roi_gauss = extract_ROI(img_high_pass, roi_coords[i])
+
+# %%
+center_x, center_y, center_z = localize.localize3d(roi)
+
+# %%
+np.hstack((center_z, center_y, center_x))
+
+# %%
+viewer = napari.Viewer()
+viewer.add_image(roi, name='roi')
+viewer.add_image(roi_gauss, name='roi gauss')
+viewer.add_points(centers_guess[i], name='guessed center', blending='additive', size=2, face_color='r')
+viewer.add_points(np.hstack((center_z, center_y, center_x)), name='fitted center', blending='additive', size=2, face_color='g')
+
+# %%
+# using img_high_pass or img_filtered gives really bad results
+# I'd like to understand why fitted centered are all shifted
+# im_fitted = img
+im_fitted = img_high_pass
+# im_fitted = img_high_pass - img_low_pass
+
+centers = np.zeros((nb_rois, 3))
+for i in range(nb_rois):
+    # extract ROI
+    roi = extract_ROI(im_fitted, roi_coords[i])
+    # radial method fitting
+#     center_x, center_y, center_z = localize.localize3d(roi)
+    centers[i, :] = np.hstack(localize.localize3d(roi))[::-1]
+#     print(fit_results)
+# reverse axes from 
+# add origin coordinates of each ROI
+centers = centers + roi_coords[:, 0, :]
+
+# %%
+viewer = napari.Viewer()
+viewer.add_image(img, name='img')
+viewer.add_image(img_filtered, name='img_filtered')
+# viewer.add_image(im_fitted, name='im_fitted')
+viewer.add_points(centers_guess_inds, name='local maxis', blending='additive', size=3, face_color='r')
+viewer.add_points(centers, name='fitted centers', blending='additive', size=3, face_color='g')
+
+# %% [markdown]
+# Still not perfect, probably need the RANSAC version of it.  
+# But how do we define the most accurate method if it's not with gaussian fitting?...
 
 # %%
