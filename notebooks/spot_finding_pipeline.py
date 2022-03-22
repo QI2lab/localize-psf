@@ -77,6 +77,66 @@ maxi = img.max()
 #     # colormap=color, 
 #     blending='additive',
 #     )
+
+# %% [markdown]
+# ### Parameters from Peter's code
+#
+# Code is:
+# ```python                   
+# ###############################
+# identify candidate points in opm data
+# ###############################
+# sigma_xy = 0.22 * emission_wavelengths[ch] / na
+# sigma_z = np.sqrt(6) / np.pi * ni * emission_wavelengths[ch] / na ** 2
+# sigma_xy = psf.na2sxy(na, emission_wavelengths[ch])
+# sigma_z = psf.na2sz(na, emission_wavelengths[ch], ni)
+#
+# difference of gaussian filer
+# filter_sigma_small = (0.5 * sigma_z, 0.25 * sigma_xy, 0.25 * sigma_xy)
+# filter_sigma_large = (3 * sigma_z, 3 * sigma_xy, 3 * sigma_xy)
+# fit roi size
+# roi_size = (5 * sigma_z, 12 * sigma_xy, 12 * sigma_xy)
+# assume points closer together than this come from a single bead
+# min_spot_sep = (3 * sigma_z, 3 * sigma_xy)
+# exclude points with sigmas outside these ranges
+# sigmas_min = (0.25 * sigma_z, 0.25 * sigma_xy)
+# sigmas_max = (3 * sigma_z, 4 * sigma_xy)
+# ```
+#
+# With na=1.0 and ni=1.4  
+# For ch 0:  
+#     - emission_wavelengths: 0.515  
+#     - sigma_xy: 0.123  
+#     - sigma_z: 0.562  
+#     - filter_sigma_small: [0.281 0.031 0.031]  
+#     - filter_sigma_large: [1.686 0.368 0.368]  
+#     - roi_size: [2.811 1.472 1.472]  
+#     - min_spot_sep: [1.686 0.368]  
+#     - sigmas_min: [0.141 0.031]  
+#     - sigmas_max: [1.686 0.491]  
+#
+# For ch 1:  
+#     - emission_wavelengths: 0.6  
+#     - sigma_xy: 0.143  
+#     - sigma_z: 0.655  
+#     - filter_sigma_small: [0.327 0.036 0.036]  
+#     - filter_sigma_large: [1.965 0.429 0.429]  
+#     - roi_size: [3.275 1.715 1.715]  
+#     - min_spot_sep: [1.965 0.429]  
+#     - sigmas_min: [0.164 0.036]  
+#     - sigmas_max: [1.965 0.572]  
+#
+# For ch 2:  
+#     - emission_wavelengths: 0.68  
+#     - sigma_xy: 0.162  
+#     - sigma_z: 0.742  
+#     - filter_sigma_small: [0.371 0.04  0.04 ]  
+#     - filter_sigma_large: [2.227 0.486 0.486]  
+#     - roi_size: [3.711 1.944 1.944]  
+#     - min_spot_sep: [2.227 0.486]  
+#     - sigmas_min: [0.186 0.04 ]  
+#     - sigmas_max: [2.227 0.648]  
+#
 # %% [markdown]
 # ### DoG filter
 
@@ -96,6 +156,16 @@ sigma_z_large = sigma_z * 1.6**(1/2)
 
 filter_sigma_small = (sigma_z_small, sigma_xy_small, sigma_xy_small)
 filter_sigma_large = (sigma_z_large, sigma_xy_large, sigma_xy_large)
+# %%
+print(f"  - sx: {np.round(sx, 3)}  ")
+print(f"  - sz: {np.round(sz, 3)}  ")
+print(f"  - sigma_xy: {np.round(sigma_xy, 3)}  ")
+print(f"  - sigma_z: {np.round(sigma_z, 3)}  ")
+print(f"  - sigma_xy_small: {np.round(sigma_xy_small, 3)}  ")
+print(f"  - sigma_xy_large: {np.round(sigma_xy_large, 3)}  ")
+print(f"  - sigma_z_small: {np.round(sigma_z_small, 3)}  ")
+print(f"  - sigma_z_large: {np.round(sigma_z_large, 3)}  ")
+
 # %%
 pixel_sizes = (1, 1, 1)
 kernel_small = localize.get_filter_kernel(filter_sigma_small, pixel_sizes, sigma_cutoff=2)
@@ -416,6 +486,31 @@ np.array(all_res)[:,-4:]
 # Fits only amplitude if ROI is too small, covarianc is a matrix of nan
 
 # %%
+viewer = napari.Viewer()
+viewer.add_image(img, name='img')
+viewer.add_image(img_filtered, name='img_filtered')
+# viewer.add_image(im_fitted, name='im_fitted')
+viewer.add_points(centers_guess_inds, name='local maxis', blending='additive', size=3, face_color='r')
+viewer.add_points(centers, name='fitted centers', blending='additive', size=3, face_color='g')
+# viewer.add_points(centers, name='fitted centers', blending='additive', size=3, face_color=chi_squareds, face_colormap=cmap); # napari colormap doesn't work
+# viewer.add_points(centers, name='fitted centers chi squared', blending='additive', size=3, face_color=chi_colors)
+# viewer.add_points(centers, name='fitted centers sigma xy', blending='additive', size=3, face_color=sigma_xy_colors)
+
+# %% [markdown]
+# Some blobs look like real spot blobs but are actually non spot blobs, they look simimlar becaus of the DoG kernel.  
+# In these blobs the diff between center from peak max and gaussian fit is noticeable.  
+# For real spot blobs, sometimes the peak max seems to provide more accurarte estimation of center's coordinates, but on the real image we observe that the gaussian fit is the most accurate method with small enough ROI.
+# But with too small ROI there is no real fitting, and with too big ROI one center can shift due to near spot. 
+
+# %% [markdown]
+# Now need to filter fitted spots:
+#   - goodness of fit
+#   - ratio sigma_z / sigma_xy
+#   - maximum distance between guess value and fit value
+#   - range of sigmas
+#   - ramge of intensity
+
+# %%
 # from napari.utils.colormaps.colormap_utils import vispy_or_mpl_colormap
 # cmap = vispy_or_mpl_colormap('plasma')
 import matplotlib as mpl
@@ -426,8 +521,20 @@ norm = mpl.colors.Normalize(vmin=chi_squareds.min(), vmax=chi_squareds.max())
 chi_colors = [cmap(norm(x)) for x in chi_squareds]
 
 sigmas = np.array(sigmas)
-norm = mpl.colors.Normalize(vmin=sigmas[:, 0].min(), vmax=sigmas[:, 0].max())
-sigma_xy_colors = [cmap(norm(x)) for x in sigmas[:, 0]]
+sigma_z_xy_ratios = sigmas[:, 0] / sigmas[:, 1]
+# norm = mpl.colors.Normalize(vmin=sigmas[:, 0].min(), vmax=sigmas[:, 0].max())
+# sigma_xy_colors = [cmap(norm(x)) for x in sigmas[:, 0]]
+norm = mpl.colors.Normalize(vmin=sigma_z_xy_ratios.min(), vmax=sigma_z_xy_ratios.max())
+sigma_ratios_colors = [cmap(norm(x)) for x in sigma_z_xy_ratios]
+
+# %%
+sigma_z_xy_ratios
+
+# %%
+plt.hist(sigma_z_xy_ratios);
+
+# %%
+plt.scatter(sigmas[:, 0], sigmas[:, 1])
 
 # %%
 viewer = napari.Viewer()
@@ -438,13 +545,7 @@ viewer.add_points(centers_guess_inds, name='local maxis', blending='additive', s
 # viewer.add_points(centers, name='fitted centers', blending='additive', size=3, face_color='g')
 # viewer.add_points(centers, name='fitted centers', blending='additive', size=3, face_color=chi_squareds, face_colormap=cmap); # napari colormap doesn't work
 # viewer.add_points(centers, name='fitted centers chi squared', blending='additive', size=3, face_color=chi_colors)
-viewer.add_points(centers, name='fitted centers sigma xy', blending='additive', size=3, face_color=sigma_xy_colors)
-
-# %% [markdown]
-# Some blobs look like real spot blobs but are actually non spot blobs, they look simimlar becaus of the DoG kernel.  
-# In these blobs the diff between center from peak max and gaussian fit is noticeable.  
-# For real spot blobs, sometimes the peak max seems to provide more accurarte estimation of center's coordinates, but on the real image we observe that the gaussian fit is the most accurate method with small enough ROI.
-# But with too small ROI there is no real fitting, and with too big ROI one center can shift due to near spot. 
+viewer.add_points(centers, name='fitted centers sigma ratios', blending='additive', size=3, face_color=sigma_ratios_colors)
 
 # %% [markdown]
 # ### Radial spot finding
@@ -497,8 +598,494 @@ viewer.add_image(img_filtered, name='img_filtered')
 viewer.add_points(centers_guess_inds, name='local maxis', blending='additive', size=3, face_color='r')
 viewer.add_points(centers, name='fitted centers', blending='additive', size=3, face_color='g')
 
+
 # %% [markdown]
 # Still not perfect, probably need the RANSAC version of it.  
 # But how do we define the most accurate method if it's not with gaussian fitting?...
+
+# %% [markdown]
+# ## Tiling
+
+# %% [markdown]
+# Considering a good enough spot finding method, run it on several tiles and merge results
+# One solution could be using Dask [map_overlap](https://docs.dask.org/en/latest/generated/dask.array.map_overlap.html)  
+# but we run computation on extra areas and we need to manage how to merge results in the overlaping ares.  
+# On the pther hand, the `get_roi_coordinates` has a `min_sizes` argument that we can use so with a given overlap we only keep once spots ROIs, either in one tile or the neighbooring one.  
+# To do so, `overlap = min_sizes - 1`
+
+# %% [markdown]
+# ### Make coordinates
+
+# %%
+def gen_split_overlap(seq_size, chunk_size, overlap=0):
+    # TODO: improve accuracy of computed sequences of indices 
+    if chunk_size < 1 or overlap < 0:
+        raise ValueError('check chunk_size > 1 and overlap > 0')
+
+    if chunk_size >= seq_size:
+        return [0, seq_size]
+
+    for i in range(0, seq_size - overlap, chunk_size - overlap):
+        pass
+
+
+def make_tiles_coordinates(total_size, tile_size, overlap):
+    """
+    Make a list of pairs of coordinates that define overlaping tiles.
+    
+    Parameters
+    ----------
+    total_size : array | list | tuple
+        The size of the original big image from which tiles are extracted.
+    tile_size : int | array
+        The size of tiles' dimensions without overlap. Dimensions are of equal 
+        size if int, else each dimension size is given by the array.
+    overlap : int | array | list | tuple
+        Overlap between neighbooring tiles. Overlaps are of equal 
+        size if int, else each overlap size is given by the iterable.
+    
+    Returns
+    -------
+    tiles_coordinates : ndarray
+        Pairs of coordinates, dim (nb_tiles, 2, dim_image)
+    
+    Example
+    -------
+    >>> make_tiles_coordinates(total_size=(5, 5), tile_size=(2, 2), overlap=1)
+    array([[[0, 0], [2, 2]],
+           [[0, 2], [2, 4]],
+           [[2, 0], [4, 2]],
+           [[2, 2], [4, 4]]])
+    """
+    pass   
+    
+
+
+# %%
+localize.get_coords([5, 5], [2, 3])
+
+# %%
+total_size = 10
+data = np.arange(total_size)
+chunk_size = 5
+overlap = 3
+
+np.arange(start=0, stop=total_size, step=chunk_size)
+
+# coords = np.array(list(gen_split_overlap(total_size, chunk_size, overlap)))
+# coords
+
+# %%
+print(data[coords[0, 0]: coords[0, 1]])
+print(data[coords[1, 0]: coords[1, 1]])
+
+# %%
+from tiler import Tiler
+
+# %%
+tiler = Tiler(
+    data_shape=(5, 5),
+    tile_shape=(2, 2),
+    overlap=1,
+    channel_dimension=None,
+    mode='irregular',
+)
+
+for i in range(4):
+    print(tiler.get_tile_bbox(tile_id=i))
+
+# %%
+image = np.arange(100).reshape(10, 10)
+image
+
+# %%
+tiler = Tiler(
+    data_shape=image.shape,
+    tile_shape=(5, 5),
+    overlap=1,
+    channel_dimension=None,
+    mode='irregular',
+)
+for tile_id, tile in tiler.iterate(image):
+    coords = tiler.get_tile_bbox(tile_id=tile_id)
+    print(coords)
+    print(tile)
+    print()
+    print(image[coords[0][0]: coords[1][0], coords[0][1]: coords[1][1]])
+    print('\n')
+
+# %% [markdown]
+# We have now a way to get coordinatesof overlapping tiles, now we need to make a function that detect spots per ROI, and one that merges the results.
+
+# %% [markdown]
+# ### Functionalize spot detection
+
+# %% [markdown]
+# #### check Dask behaviour
+
+# %%
+from dask.distributed import Client
+from dask import delayed
+
+client = Client(n_workers=4)
+
+
+# %%
+def sub_function_1(arg=None):
+    if arg is None:
+        return "sub_function_1"
+    else:
+        return "sub_function_1, arg:", arg
+
+def sub_function_2(arg):
+    print("sub_function_2, arg:", arg)
+
+def global_function(fct, fct_arg=None):
+    print("executed")
+    if fct_arg is None:
+        return fct()
+    else:
+        return fct(**fct_arg)
+
+
+# %%
+
+# x = delayed(global_function)(sub_function_1, {fct_arg:'Un argument!'})
+# x = delayed(global_function)(4)
+# print(x)
+# print(x.compute())
+
+x = delayed(global_function)(sub_function_1, {'arg': 4})
+print(x)
+print(x.compute())
+
+x = delayed(global_function)(sub_function_1)
+print(x)
+print(x.compute())
+
+# %% [markdown]
+# #### base functions
+
+# %%
+# size of spots in pixels
+sx = sy = 5
+sz = 20
+# FWHM = 2.355 x sigma
+sigma_xy = sx / 2.355
+sigma_z = sz / 2.355
+# to reproduce LoG with Dog we need sigma_big = 1.6 * sigma_small
+sigma_xy_small = sigma_xy / 1.6**(1/2)
+sigma_xy_large = sigma_xy * 1.6**(1/2)
+sigma_z_small = sigma_z / 1.6**(1/2)
+sigma_z_large = sigma_z * 1.6**(1/2)
+
+
+
+def get_roi_coordinates(centers, sizes, max_coords_val, min_sizes, return_sizes=False):
+    """
+    Make pairs of (z, y, x) coordinates defining an ROI.
+    
+    Parameters
+    ----------
+    centers : ndarray, dtype int
+        Centers of future ROIs, a Nx3 array.
+    sizes : array or list
+        Size of ROIs in each dimensions.
+    max_coords_val : array or list
+        Maximum value of coordinates in each dimension,
+        typically the original image shape - 1.
+    min_sizes : array or list
+        Minimum size of ROIs in each dimension.
+    
+    Returns
+    -------
+    roi_coords : ndarray
+        Pairs of point coordinates, a 2xNx3 array.
+    roi_coords : ndarray
+        Shape of each ROI, Nx3 array.
+    """
+    
+    # make raw coordinates
+    min_coords = centers - sizes / 2
+    max_coords = centers + sizes / 2
+    coords = np.stack([min_coords, max_coords]).astype(int)
+    # clean min and max values of coordinates
+    coords[coords < 0] = 0
+    for i in range(3):
+        coords[1, coords[1, :, i] > max_coords_val[i], i] = max_coords_val[i]
+    # delete small ROIs
+    roi_sizes = coords[1, :, :] - coords[0, :, :]
+    select = ~np.any([roi_sizes[:, i] <= min_sizes[i] for i in range(3)], axis=0)
+    coords = coords[:, select, :]
+    # swap axes for latter convenience
+    roi_coords = np.swapaxes(coords, 0, 1)
+    
+    if return_sizes:
+        roi_sizes = roi_sizes[select, :]
+        return roi_coords, roi_sizes
+    else:
+        return roi_coords
+
+    
+def extract_ROI(img, coords):
+    """
+    Extract a portion of an image given by the coordinates of 2 points.
+    
+    Parameters
+    ----------
+    img : ndarray, dimension 3
+        The i;age from which the ROI is extracted.
+    coords : ndarry, shape (2, 3)
+        The 2 coordinates of the 3 dimensional points at the corner of the ROI.
+    
+    Returns
+    -------
+    roi : ndarray
+        A region of interest of the original image.
+    """
+    
+    z0, y0, x0 = coords[0]
+    z1, y1, x1 = coords[1]
+    roi = img[z0:z1, y0:y1, x0:x1]
+    return roi
+
+
+def detect_blob_dog(tile, sigma_xy_small, sigma_xy_large, 
+                    sigma_z_small, sigma_z_large, dog_thresh,
+                    min_separations, pixel_sizes,
+                    sigma_cutoff, fit_roi_sizes, min_fit_roi_sizes):
+    """
+    
+    """
+    
+    filter_sigma_small = (sigma_z_small, sigma_xy_small, sigma_xy_small)
+    filter_sigma_large = (sigma_z_large, sigma_xy_large, sigma_xy_large)
+
+    kernel_small = localize.get_filter_kernel(filter_sigma_small, pixel_sizes, sigma_cutoff=sigma_cutoff)
+    kernel_large = localize.get_filter_kernel(filter_sigma_large, pixel_sizes, sigma_cutoff=sigma_cutoff)
+
+    img_high_pass = localize.filter_convolve(img, kernel_small, use_gpu=False)
+    img_low_pass = localize.filter_convolve(img, kernel_large, use_gpu=False)
+    img_filtered = img_high_pass - img_low_pass
+    # apply threshold found with Napari
+    img_filtered[img_filtered < dog_thresh] = 0
+
+    footprint = localize.get_max_filter_footprint(min_separations=min_separations, drs=pixel_sizes)
+    # array of size nz, ny, nx of True
+
+    # 
+    # maxis = scipy.ndimage.maximum_filter(img_filtered, footprint)
+    maxis = scipy.ndimage.maximum_filter(img_filtered, footprint=np.ones(min_separations))
+    centers_guess_inds, amps = localize.find_peak_candidates(img_filtered, footprint, threshold=dog_thresh)
+
+    # we don't return roi_sizes because we would have to manage it in
+    # the detect_spots_tile function, whereas another method could not output it
+    roi_coords = get_roi_coordinates(
+        centers = centers_guess_inds, 
+        sizes = fit_roi_sizes, 
+        max_coords_val = np.array(img.shape) - 1, 
+        min_sizes = min_fit_roi_sizes,
+    )
+    
+    return roi_coords
+    
+
+def estimate_center_gauss(tile, roi_coords, sigma_xy, sigma_z):
+    
+    roi_sizes = roi_coords[:, 1, :] - roi_coords[:, 0, :]
+    centers_guess = (roi_sizes / 2)
+    
+    # Gaussian fit to find center of each spot
+    amplitudes = []
+    centers = []
+    sigmas = []
+    chi_squareds = []
+    all_res = []
+    for i in range(len(roi_coords)):
+        # extract ROI
+        roi = extract_ROI(im_fitted, roi_coords[i])
+        # fit gaussian in ROI
+        init_params = np.array([
+            amps[i], 
+            centers_guess[i, 2],
+            centers_guess[i, 1],
+            centers_guess[i, 0],
+            sigma_xy, 
+            sigma_z, 
+            roi.min(),
+        ])
+        fit_results = localize.fit_gauss_roi(
+            roi, 
+            (localize.get_coords(roi_sizes[i], drs=[1, 1, 1])), 
+            init_params,
+            fixed_params=np.full_like(init_params, False),
+        )
+        amplitude, center_x, center_y, center_z, sigma_xy, sigma_z, offset = fit_results['fit_params']
+        # amplitudes.append(amplitude)
+        centers.append([center_z, center_y, center_x])
+        # sigmas.append([sigma_xy, sigma_z])
+        # chi_squareds.append(fit_results['chi_squared'])
+        # all_res.append(fit_results['fit_params'])
+    # add origin coordinates of each ROI
+    centers = np.array(centers) + roi_coords[:, 0, :]
+    
+    return centers
+
+
+def shift_coordinates(spots_coords, tile_coords):
+    
+    spots_coords = spots_coords+ tile_coords[:, 0, :]
+    return spots_coords
+    
+
+def detect_spots_tile(tile, tile_coords=None, 
+                      roi_method=detect_blob_dog, roi_kwargs=None,
+                      center_method=estimate_center_gauss, center_kwargs=None,
+                      filter_method=None, filter_kwargs=None):
+    """
+    Find spots in a region of interest.
+    
+    Parameters
+    ----------
+    tile : numpy.ndarray
+        A ND image where we want to find spots.
+    tile_coords : Union[Tuple, List, np.ndarray]
+        The coordinates of the 'lowest' corner of the tile in the
+        bigger image it is extracted from.
+    roi_method : fct
+        Method used to define ROI around detect potential spots.
+    roi_kwargs : dict
+        Optional arguments for the blob detection method.
+    center_method : fct
+        Method used to decipher more precisely spots coordinates
+    center_kwargs : dict
+        Optional arguments for the center method.
+    filter_method : str
+        Method used to discard wrong spots.
+    filter_kwargs : str
+        Optional arguments for the filter method.
+    
+    Returns
+    -------
+    spots_coords : numpy.ndarray
+        The coordinates in the bigger image reference system of all spots.
+    """
+    
+    if roi_method is not None:
+        rois_coords = roi_method(tile, roi_kwargs)
+        spots_coords = estimate_center_gauss(tile, rois_coords, **center_kwargs)
+    else:
+        # case where no pre-detection of ROIs is needed
+        spots_coords = estimate_center_gauss(tile, **center_kwargs)
+        
+    if tile_coords is not None:
+        spots_coords = shift_coordinates(spots_coords, tile_coords)
+    
+    if filter_method is not None:
+        spots_coords = filter_method(spots_coords, **filter_kwargs)
+    
+    return spots_coords
+
+def merge_spots_coords(all_coords):
+    """
+    Merge a list of spots coordinates into a single array.
+    """
+    pass
+
+
+# %%
+# size of spots in pixels
+sx = sy = 5
+sz = 20
+# FWHM = 2.355 x sigma
+sigma_xy = sx / 2.355
+sigma_z = sz / 2.355
+# to reproduce LoG with Dog we need sigma_big = 1.6 * sigma_small
+sigma_xy_small = sigma_xy / 1.6**(1/2)
+sigma_xy_large = sigma_xy * 1.6**(1/2)
+sigma_z_small = sigma_z / 1.6**(1/2)
+sigma_z_large = sigma_z * 1.6**(1/2)
+
+fit_roi_sizes = (1.5 * np.array([sz, sy, sx])).astype(int)
+
+tile = img
+tile_coords = None
+roi_method = detect_blob_dog
+roi_kwargs = {
+    'sigma_xy_small': sigma_xy / 1.6**(1/2),
+    'sigma_xy_large': sigma_xy * 1.6**(1/2),
+    'sigma_z_small': sigma_z / 1.6**(1/2),
+    'sigma_z_large': sigma_z * 1.6**(1/2),
+    'dog_thresh': 4,
+    'min_separations': (10, 3, 3), 
+    'pixel_sizes': (1, 1, 1),
+    'sigma_cutoff': 2, 
+    'fit_roi_sizes': fit_roi_sizes, 
+    'min_fit_roi_sizes': fit_roi_sizes,
+}
+center_method = estimate_center_gauss
+center_kwargs = {
+    'sigma_xy': sigma_xy, 
+    'sigma_z': sigma_z,
+}
+filter_method = None
+filter_kwargs = None
+
+# %%
+rois_coords = roi_method(tile, **roi_kwargs)
+print(roi_coords)
+
+# %%
+spots_coords = center_method(tile, rois_coords, **center_kwargs)
+print(spots_coords)
+
+# %%
+viewer = napari.Viewer()
+viewer.add_image(img, name='img')
+viewer.add_image(img_filtered, name='img_filtered')
+# viewer.add_image(im_fitted, name='im_fitted')
+viewer.add_points(spots_coords, name='fitted centers', blending='additive', size=3, face_color='g')
+
+# %% [markdown]
+# #### with Dask
+
+# %%
+rois_coords = delayed(roi_method)(tile, **roi_kwargs)
+spots_coords = delayed(estimate_center_gauss)(tile, rois_coords, **center_kwargs)
+print(spots_coords)
+print(spots_coords.compute())
+
+# %% [markdown]
+# #### On multiple tiles
+
+# %%
+start_x = 512
+start_y = 1000
+start_z = 128
+size_xy = 128 * 2
+size_z  = 128 * 2
+img = im[start_z:(start_z+size_z), start_y:(start_y+size_xy), start_x:(start_x+size_xy)].compute()
+
+# %%
+tile_shape = np.array([128, 128, 128]) + fit_roi_sizes
+overlap = fit_roi_sizes - 1
+
+tiler = Tiler(
+    data_shape=img.shape,
+    tile_shape=tile_shape,
+    overlap=overlap,
+    channel_dimension=None,
+    mode='irregular',
+)
+for tile_id, tile in tiler.iterate(img):
+    coords = tiler.get_tile_bbox(tile_id=tile_id)
+    print(coords)
+    print(tile.shape)
+    print()
+#     print(image[coords[0][0]: coords[1][0], coords[0][1]: coords[1][1]])
+#     print('\n')
+
+# %%
+fit_roi_sizes
 
 # %%
