@@ -37,6 +37,7 @@ import napari
 from napari.qt.threading import thread_worker
 from magicgui import magicgui
 # from matplotlib.colors import PowerNorm, LinearSegmentedColormap, Normalize
+from tiler import Tiler
 
 import localize_psf.rois as roi_fns
 from localize_psf import fit
@@ -678,8 +679,6 @@ np.arange(start=0, stop=total_size, step=chunk_size)
 print(data[coords[0, 0]: coords[0, 1]])
 print(data[coords[1, 0]: coords[1, 1]])
 
-# %%
-from tiler import Tiler
 
 # %%
 tiler = Tiler(
@@ -1112,10 +1111,11 @@ whole_spots_coords = center_method(img, rois_coords, amps, **center_kwargs)
 
 # %%
 
-viewer = napari.Viewer()
-viewer.add_image(img, name='img')
-viewer.add_points(whole_spots_coords, name='whole_spots_coords', blending='additive', size=3, face_color='g')
-viewer.add_points(tiled_spots_coords, name='tiled_spots_coords', blending='additive', size=3, face_color='r')
+# viewer = napari.Viewer()
+# viewer.add_image(img, name='img')
+# viewer.add_points(whole_spots_coords, name='whole_spots_coords', blending='additive', size=3, face_color='g')
+# viewer.add_points(tiled_spots_coords, name='tiled_spots_coords', blending='additive', size=3, face_color='r')
+
 # There are 3 more points in  the tilted version, apparently near the overlapping regions. Maybe the DoG is too sensitive to
 # end of tiles. The points can be easily filtered out as they are clearly not on a real spot.
 
@@ -1134,10 +1134,11 @@ client = Client(n_workers=nb_cores)
 
 tiled_spots_coords = []
 for tile_id, tile in tiler.iterate(img):
+    print(tile_id)
     # origin coordinates of the tile
     tile_coords_ori = delayed(get_tile_coords_ori)(tiler, tile_id)
     # get spots ROIs coordinates in the tile
-    rois_coords, amps = delayed(roi_method)(tile, **roi_kwargs)
+    rois_coords, amps = delayed(roi_method, nout=2)(tile, **roi_kwargs)
     # fit tile's spots with gaussian
     spots_coords = delayed(center_method)(tile, rois_coords, amps, **center_kwargs)
     # add origin coordinates to tile's spots' coordinates
@@ -1146,9 +1147,177 @@ for tile_id, tile in tiler.iterate(img):
     tiled_spots_coords.append(spots_coords)
 
 aggregated_spots_coords =  delayed(merge_spots_coords)(tiled_spots_coords)
-
-aggregated_spots_coords.compute()
+aggregated_spots_coords.visualize()
+# %%
+coords = aggregated_spots_coords.compute()
 client.close()
 
 
 # %%
+coords.shape
+
+# %% [markdown]
+# ## Include filtering
+
+# %%
+filter_params = {
+    'filter_amplitude_min': 20,
+    'filter_amplitude_max': False,
+    'filter_sigma_xy_min': 0.5,
+    'filter_sigma_xy_max': 5,
+    'filter_sigma_z_min': 2,
+    'filter_sigma_z_max': 20,
+    'filter_sigma_ratio_min': 1,
+    'filter_sigma_ratio_max': 5,
+    'filter_chi_squared': 200,
+    'filter_dist_center': 3,
+}
+
+
+# %%
+def make_filter_spots(filter_vars, filter_params):
+    """
+    Filter out spots based on gaussian fit results.
+    
+    Parameters
+    ----------
+    filter_vars : dict
+        Variables used to compute boolean filters.
+    filter_params : dict
+        Parameters (thresholds) applied to their corresponding variables.
+    
+    Return
+    ------
+    spot_select : array
+        Bolean vector of spots to keep.
+    """
+
+    # list of boolean filters for all spots thresholds
+    selectors = []
+
+    if filter_params['filter_amplitude_min']:
+        selectors.append(filter_vars['amplitudes'] >= filter_params['filter_amplitude_min'])
+    if filter_params['filter_amplitude_max']:
+        selectors.append(filter_vars['amplitudes'] <= filter_params['filter_amplitude_max'])
+    if filter_params['filter_sigma_xy_min']:
+        selectors.append(filter_vars['sigmas_xy'] >= filter_params['filter_sigma_xy_min'])
+    if filter_params['filter_sigma_xy_max']:
+        selectors.append(filter_vars['sigmas_xy'] <= filter_params['filter_sigma_xy_max'])
+    if filter_params['filter_sigma_z_min']:
+        selectors.append(filter_vars['sigmas_z'] >= filter_params['filter_sigma_z_min'])
+    if filter_params['filter_sigma_z_max']:
+        selectors.append(filter_vars['sigmas_z'] <= filter_params['filter_sigma_z_max'])
+    if filter_params['filter_sigma_ratio_min']:
+        selectors.append(filter_vars['sigma_ratios'] >= filter_params['filter_sigma_ratio_min'])
+    if filter_params['filter_sigma_ratio_max']:
+        selectors.append(filter_vars['sigma_ratios'] <= filter_params['filter_sigma_ratio_max'])
+    if filter_params['filter_chi_squared']:
+        selectors.append(filter_vars['chi_squared'] >= filter_params['filter_chi_squared'])
+    if filter_params['filter_dist_center']:
+        selectors.append(filter_vars['dist_center'] <= filter_params['filter_dist_center'])
+
+    if len(selectors) == 0:
+        print("No filter is active")
+    else:
+        spot_select = np.logical_and.reduce(selectors)
+    
+    return spot_select
+
+def apply_filter_spots(spots_coords, spot_select):
+    return spots_coords[spot_select, :]
+
+
+# %%
+def estimate_center_gauss(img, roi_coords, amps, sigma_xy, sigma_z, return_fit_vars=True):
+    
+    roi_sizes = roi_coords[:, 1, :] - roi_coords[:, 0, :]
+    centers_guess = (roi_sizes / 2)
+    
+    # Gaussian fit to find center of each spot
+    all_res = []
+    chi_squared = []
+    for i in range(len(roi_coords)):
+        # extract ROI
+        roi = extract_ROI(img, roi_coords[i])
+        # fit gaussian in ROI
+        init_params = np.array([
+            amps[i], 
+            centers_guess[i, 2],
+            centers_guess[i, 1],
+            centers_guess[i, 0],
+            sigma_xy, 
+            sigma_z, 
+            roi.min(),
+        ])
+        fit_results = localize.fit_gauss_roi(
+            roi, 
+            (localize.get_coords(roi_sizes[i], drs=[1, 1, 1])), 
+            init_params,
+            fixed_params=np.full_like(init_params, False),
+        )
+        chi_squared.append(fit_results['chi_squared'])
+        all_res.append(fit_results['fit_params'])
+        
+    # process all the results
+    all_res = np.array(all_res)
+    amplitudes = all_res[:, 0]
+    centers = all_res[:, 3:0:-1]
+    sigmas_xy = all_res[:, 4]
+    sigmas_z = all_res[:, 5]
+    # offsets = all_res[:, 6]
+    chi_squared = np.array(chi_squared)
+    # distances from initial guess
+    dist_center = np.sqrt(np.sum((centers - centers_guess)**2, axis=1))
+    # add origin coordinates of each ROI
+    centers = centers + roi_coords[:, 0, :]
+    # composed variables for filtering
+    sigma_ratios = sigmas_z / sigmas_xy
+    
+    fit_vars = {
+    'amplitudes': amplitudes,
+    'sigmas_xy': sigmas_xy,
+    'sigmas_z': sigmas_z,
+    # 'offsets': offsets,
+    'chi_squared': chi_squared,
+    'dist_center': dist_center,
+    'sigma_ratios': sigma_ratios,
+    }        
+    
+    if return_fit_vars:
+        return centers, fit_vars
+    else:
+        return centers
+
+center_method = estimate_center_gauss
+
+# %%
+client = Client(n_workers=nb_cores)
+
+tiled_spots_coords = []
+for tile_id, tile in tiler.iterate(img):
+    print(tile_id)
+    # origin coordinates of the tile
+    tile_coords_ori = delayed(get_tile_coords_ori)(tiler, tile_id)
+    # get spots ROIs coordinates in the tile
+    rois_coords, amps = delayed(roi_method, nout=2)(tile, **roi_kwargs)
+    # fit tile's spots with gaussian
+    spots_coords, fit_vars = delayed(center_method, nout=2)(tile, rois_coords, amps, **center_kwargs)
+    # make spots boolean selector
+    spot_select = delayed(make_filter_spots)(fit_vars, filter_params)
+    # apply filter on spots
+    spots_coords = delayed(apply_filter_spots)(spots_coords, spot_select)
+    # add origin coordinates to tile's spots' coordinates
+    spots_coords = delayed(shift_coordinates)(spots_coords, tile_coords_ori, 'single')
+    # save in global list of coordinates
+    tiled_spots_coords.append(spots_coords)
+
+aggregated_spots_coords = delayed(merge_spots_coords)(tiled_spots_coords)
+aggregated_spots_coords.visualize()
+
+# %%
+coords = aggregated_spots_coords.compute()
+print(f'Found {coords.shape[0]} spots')
+client.close()
+
+# %%
+# It's working! I just need to select appropriate filter thresholds.
