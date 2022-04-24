@@ -5,7 +5,7 @@ The global plan is:
   - spot detection working on single non-skewed tile, no GPU, no multiprocess, no coordinates change, no file handling
     - extract single ct xyz tile with spots
   - add multiple tiles (x, y, z vary), "stich" results with orthogonal change of coordinates
-  - add multiple time steps, channels
+  - add multiple time steps, channels (need different parameters per channel)
   - add Dask support per xyztc tile and merge results
   - add GPU support per tile? Manage conflict with multi-processes tile handling.
   - add support for skewed tiles
@@ -50,7 +50,6 @@ from image_post_processing import deskew
 # ### Extract data
 
 # %%
-
 dir_load = Path('../../../from_server')
 round = 1
 channel = 2
@@ -222,8 +221,8 @@ np.unique(maxis)
 footprint.shape
 
 # %%
-# we could remove the threshlding within each find_peak_candidates call
-# no: ndimage.maximum_filter returns same image size zith real values, need image == im_max
+# we could remove the thresholding within each find_peak_candidates call
+# no: ndimage.maximum_filter returns same image size with real values, need image == im_max
 # thus need to filter with threshold to avoid zeros or low values
 # TODO: use gradient on whole image could speed up global process
 centers_guess_inds, amps = localize.find_peak_candidates(img_filtered, footprint, threshold=dog_thresh)
@@ -815,7 +814,7 @@ def get_roi_coordinates(centers, sizes, max_coords_val, min_sizes, return_sizes=
         coords[1, coords[1, :, i] > max_coords_val[i], i] = max_coords_val[i]
     # delete small ROIs
     roi_sizes = coords[1, :, :] - coords[0, :, :]
-    select = ~np.any([roi_sizes[:, i] <= min_sizes[i] for i in range(3)], axis=0)
+    select = ~np.any([roi_sizes[:, i] < min_sizes[i] for i in range(3)], axis=0)
     coords = coords[:, select, :]
     # swap axes for latter convenience
     roi_coords = np.swapaxes(coords, 0, 1)
@@ -850,14 +849,14 @@ def extract_ROI(img, coords):
     return roi
 
 
-def detect_blob_dog(tile, sigma_xy_small, sigma_xy_large, 
+def detect_blob_dog(img, sigma_xy_small, sigma_xy_large, 
                     sigma_z_small, sigma_z_large, dog_thresh,
                     min_separations, pixel_sizes,
-                    sigma_cutoff, fit_roi_sizes, min_fit_roi_sizes):
+                    sigma_cutoff, fit_roi_sizes, min_fit_roi_sizes,
+                    return_amplitudes=True):
     """
     
     """
-    
     filter_sigma_small = (sigma_z_small, sigma_xy_small, sigma_xy_small)
     filter_sigma_large = (sigma_z_large, sigma_xy_large, sigma_xy_large)
 
@@ -873,9 +872,6 @@ def detect_blob_dog(tile, sigma_xy_small, sigma_xy_large,
     footprint = localize.get_max_filter_footprint(min_separations=min_separations, drs=pixel_sizes)
     # array of size nz, ny, nx of True
 
-    # 
-    # maxis = scipy.ndimage.maximum_filter(img_filtered, footprint)
-    maxis = scipy.ndimage.maximum_filter(img_filtered, footprint=np.ones(min_separations))
     centers_guess_inds, amps = localize.find_peak_candidates(img_filtered, footprint, threshold=dog_thresh)
 
     # we don't return roi_sizes because we would have to manage it in
@@ -886,24 +882,27 @@ def detect_blob_dog(tile, sigma_xy_small, sigma_xy_large,
         max_coords_val = np.array(img.shape) - 1, 
         min_sizes = min_fit_roi_sizes,
     )
-    
-    return roi_coords
+
+    if return_amplitudes:
+        return roi_coords, amps
+    else:
+        return roi_coords
     
 
-def estimate_center_gauss(tile, roi_coords, sigma_xy, sigma_z):
+def estimate_center_gauss(img, roi_coords, amps, sigma_xy, sigma_z):
     
     roi_sizes = roi_coords[:, 1, :] - roi_coords[:, 0, :]
     centers_guess = (roi_sizes / 2)
     
     # Gaussian fit to find center of each spot
-    amplitudes = []
+    # amplitudes = []
     centers = []
-    sigmas = []
-    chi_squareds = []
-    all_res = []
+    # sigmas = []
+    # chi_squareds = []
+    # all_res = []
     for i in range(len(roi_coords)):
         # extract ROI
-        roi = extract_ROI(im_fitted, roi_coords[i])
+        roi = extract_ROI(img, roi_coords[i])
         # fit gaussian in ROI
         init_params = np.array([
             amps[i], 
@@ -932,9 +931,12 @@ def estimate_center_gauss(tile, roi_coords, sigma_xy, sigma_z):
     return centers
 
 
-def shift_coordinates(spots_coords, tile_coords):
+def shift_coordinates(spots_coords, tile_coords, format='pair'):
     
-    spots_coords = spots_coords+ tile_coords[:, 0, :]
+    if format == 'pair':
+        spots_coords = spots_coords + tile_coords[:, 0, :]
+    elif format == 'single':
+        spots_coords = spots_coords + tile_coords
     return spots_coords
     
 
@@ -973,10 +975,10 @@ def detect_spots_tile(tile, tile_coords=None,
     
     if roi_method is not None:
         rois_coords = roi_method(tile, roi_kwargs)
-        spots_coords = estimate_center_gauss(tile, rois_coords, **center_kwargs)
+        spots_coords = center_method(tile, rois_coords, **center_kwargs)
     else:
         # case where no pre-detection of ROIs is needed
-        spots_coords = estimate_center_gauss(tile, **center_kwargs)
+        spots_coords = center_method(tile, **center_kwargs)
         
     if tile_coords is not None:
         spots_coords = shift_coordinates(spots_coords, tile_coords)
@@ -989,8 +991,9 @@ def detect_spots_tile(tile, tile_coords=None,
 def merge_spots_coords(all_coords):
     """
     Merge a list of spots coordinates into a single array.
+    Useful to aggregate data analyses distributed on several places.
     """
-    pass
+    return np.vstack(all_coords)
 
 
 # %%
@@ -1022,6 +1025,7 @@ roi_kwargs = {
     'sigma_cutoff': 2, 
     'fit_roi_sizes': fit_roi_sizes, 
     'min_fit_roi_sizes': fit_roi_sizes,
+    'return_amplitudes': True,
 }
 center_method = estimate_center_gauss
 center_kwargs = {
@@ -1032,13 +1036,13 @@ filter_method = None
 filter_kwargs = None
 
 # %%
-rois_coords = roi_method(tile, **roi_kwargs)
-print(roi_coords)
+rois_coords, amps = roi_method(tile, **roi_kwargs)
+print(rois_coords)
+print(rois_coords.shape)
 
 # %%
-spots_coords = center_method(tile, rois_coords, **center_kwargs)
+spots_coords = center_method(tile, rois_coords, amps, **center_kwargs)
 print(spots_coords)
-
 # %%
 viewer = napari.Viewer()
 viewer.add_image(img, name='img')
@@ -1081,11 +1085,70 @@ for tile_id, tile in tiler.iterate(img):
     coords = tiler.get_tile_bbox(tile_id=tile_id)
     print(coords)
     print(tile.shape)
-    print()
-#     print(image[coords[0][0]: coords[1][0], coords[0][1]: coords[1][1]])
-#     print('\n')
 
 # %%
-fit_roi_sizes
+tiled_spots_coords = []
+for tile_id, tile in tiler.iterate(img):
+    print(tile_id)
+    # origin coordinates of the tile
+    tile_coords_ori = tiler.get_tile_bbox(tile_id=tile_id)[0]
+    # get spots ROIs coordinates in the tile
+    rois_coords, amps = roi_method(tile, **roi_kwargs)
+    # fit tile's spots with gaussian
+    spots_coords = center_method(tile, rois_coords, amps, **center_kwargs)
+    # add origin coordinates to tile's spots' coordinates
+    spots_coords = spots_coords + tile_coords_ori
+    # save in global list of coordinates
+    tiled_spots_coords.append(spots_coords)
+
+tiled_spots_coords =  np.vstack(tiled_spots_coords)
+
+# %% Compare with the monolithic detection
+
+# get spots ROIs coordinates in the tile
+rois_coords, amps = roi_method(img, **roi_kwargs)
+# fit tile's spots with gaussian
+whole_spots_coords = center_method(img, rois_coords, amps, **center_kwargs)
+
+# %%
+
+viewer = napari.Viewer()
+viewer.add_image(img, name='img')
+viewer.add_points(whole_spots_coords, name='whole_spots_coords', blending='additive', size=3, face_color='g')
+viewer.add_points(tiled_spots_coords, name='tiled_spots_coords', blending='additive', size=3, face_color='r')
+# There are 3 more points in  the tilted version, apparently near the overlapping regions. Maybe the DoG is too sensitive to
+# end of tiles. The points can be easily filtered out as they are clearly not on a real spot.
+
+# %% Use Dask
+
+def get_tile_coords_ori(tiler, tile_id):
+    return tiler.get_tile_bbox(tile_id=tile_id)[0]
+
+from dask.distributed import Client
+from dask import delayed
+
+nb_cores = os.cpu_count()
+client = Client(n_workers=nb_cores)
+# cluster = LocalCluster(n_workers=4, threads_per_worker=2)
+# client = Client(cluster, asynchronous=True)
+
+tiled_spots_coords = []
+for tile_id, tile in tiler.iterate(img):
+    # origin coordinates of the tile
+    tile_coords_ori = delayed(get_tile_coords_ori)(tiler, tile_id)
+    # get spots ROIs coordinates in the tile
+    rois_coords, amps = delayed(roi_method)(tile, **roi_kwargs)
+    # fit tile's spots with gaussian
+    spots_coords = delayed(center_method)(tile, rois_coords, amps, **center_kwargs)
+    # add origin coordinates to tile's spots' coordinates
+    spots_coords = delayed(shift_coordinates)(spots_coords, tile_coords_ori, 'single')
+    # save in global list of coordinates
+    tiled_spots_coords.append(spots_coords)
+
+aggregated_spots_coords =  delayed(merge_spots_coords)(tiled_spots_coords)
+
+aggregated_spots_coords.compute()
+client.close()
+
 
 # %%
