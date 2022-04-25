@@ -1120,13 +1120,12 @@ whole_spots_coords = center_method(img, rois_coords, amps, **center_kwargs)
 # end of tiles. The points can be easily filtered out as they are clearly not on a real spot.
 
 # %% Use Dask
-
 def get_tile_coords_ori(tiler, tile_id):
     return tiler.get_tile_bbox(tile_id=tile_id)[0]
 
 from dask.distributed import Client
 from dask import delayed
-
+# %% Use Dask
 nb_cores = os.cpu_count()
 client = Client(n_workers=nb_cores)
 # cluster = LocalCluster(n_workers=4, threads_per_worker=2)
@@ -1319,5 +1318,155 @@ coords = aggregated_spots_coords.compute()
 print(f'Found {coords.shape[0]} spots')
 client.close()
 
+
 # %%
 # It's working! I just need to select appropriate filter thresholds.
+
+# %% [markdown]
+# ## Automated spot filtering parameters selection
+
+# %% [markdown]
+# We need a method to autoatically select the best parameters combination to filter spots.  
+# That requires a performance metrics.  
+# We can first match spots that are within a given distance (related to PSF), we can use one distance for the xy plane, and another one for the z axis. We will need to adapt that for tilted configuration. Points can ne only matched to a single other point, select the closest one.
+# Then can compute true and false positives and negatives.
+
+# %%
+def match_closest_points(ref, target):
+    """
+    
+    Example
+    -------
+    >>> ref = np.array([[0, 0, 0], [10, 0, 0], [0, 10, 0]])
+    >>> target = np.array([[1, 1, 1], [7, 0, 0], [0, 0, 10], [5, 0, 0], [0, 11, 0]])
+    >>> match_closest_points(source, target)
+        array([0, 1, 0, 0, 2])
+    """
+    from scipy.spatial import cKDTree
+    kdt_ref = KDTree(ref)
+
+    # closest node id and discard computed distances ('_,')
+    _, matched_ids = kdt_ref.query(x=target, k=1)
+    return matched_ids
+
+def compute_distances(source, target, method='xy_z_flat', dist_fct='euclidian', tilt_vector=None):
+    """
+    Parameters
+    ----------
+    source : ndarray
+        Coordinates of the first set of points.
+    target : ndarray
+        Coordinates of the second set of points.
+    method : str
+        Method used to compute distances. If 'xyz', standard distances are computed considering all axes
+        simultaneously. If 'xy_z_flat' 2 distances are computed, for the xy pkane and along the z axis 
+        respectively. If 'xy_z_tilted' 2 distances are computed for thetilted plane and axis.
+    
+    Example
+    -------
+    >>> source = np.array([[0, 0, 0], [1, 0, 0], [0, 1, 0]])
+    >>> target = np.array([[0, 0, 0], [-3, 0, 2], [0, 0, 10]])
+    >>> distance(source, target)
+        (array([0, 4, 0]), array([0., 2., 5.]))
+    >>> distance(source, target, dist_fct='L1')
+        (array([0, 4, 0]), array([0, 2, 7]))
+    
+    """
+    if method == 'xyz':
+        if dist_fct == 'euclidian':
+            dist = np.sqrt(np.sum((source - target)**2, axis=1))
+        elif dist_fct == 'L1':
+            dist = np.sum((source - target), axis=1)
+        else:
+            dist = dist_fct(source, target, axis=1)
+        return dist
+    elif method == 'xy_z_flat':
+        if dist_fct == 'euclidian':
+            dist_xy = np.sqrt(np.sum((source[:, 1:] - target[:, 1:])**2, axis=1))
+            dist_z = np.abs(source[:, 0] - target[:, 0])
+        elif dist_fct == 'L1':
+            dist_xy = np.sum(np.abs((source[:, 1:]  - target[:, 1:])), axis=1)
+            dist_z = np.abs(source[:, 0] - target[:, 0])
+        else:
+            dist_xy = dist_fct(source[:, 1:], target[:, 1:], axis=1)
+            dist_z = dist_fct(source[:, 0], target[:, 0])
+        return dist_z, dist_xy
+    elif method == 'xy_z_tilted':
+        pass
+
+
+def make_counts_array(data, return_all=True):
+    """
+    Return a vector of counts of same size as data.
+    """
+    uniq, counts = np.unique(data, return_counts=True)
+    if return_all:
+        return uniq, counts, counts[data]
+    else:
+        return counts[data]
+
+
+def remove_multiple_links(matched_ids, coords, dist_z, dist_xy):
+    """
+    
+    Example
+    -------
+    >>> matched_ids = np.array([2, 0, 1, 0, 1, 0])
+    >>> coords = np.array([[2, 2, 2], [0, 0, 0], [1, 1, 1], [0, 10, 0], [1, 1, 10], [0, 0, 10]])
+    >>> dist_z = np.array([0, 0, 0, 10, 10, 10])
+    >>> dist_xy = np.array([0, 0, 0, 10, 10, 10])
+    >>> remove_multiple_links(matched_ids, coords, dist_z, dist_xy)
+        (array([2, 0, 1]),
+         array([[2, 2, 2],
+                [0, 0, 0],
+                [1, 1, 1]]))
+    """
+    matched_uniq, matched_counts, counts_array = make_counts_array(matched_ids)
+    select_duplicated_array = counts_array != 1
+    if select_duplicated_array.sum() == 0:
+        return matched_uniq, coords
+    else:
+        # start with a copy of unique matches and coordinates
+        matched_ids_single = matched_ids[~select_duplicated_array]
+        coords_single = coords[~select_duplicated_array]
+        # then add a single match and set of coordinates per duplicated match
+        select_duplicated_uniq = matched_counts != 1
+        for i in matched_uniq[select_duplicated_uniq]:
+            select = matched_ids == i
+            coords_duplicated = coords[select]
+            dist_tot = dist_z[select] + dist_xy[select]
+            min_id = np.argmin(dist_tot)
+            matched_ids_single = np.hstack((matched_ids_single, i))
+            coords_single = np.vstack((coords_single, coords_duplicated[min_id]))
+        return matched_ids_single, coords_single
+    
+    
+def match_spots(ref, target, thresh_z=15, thresh_xy=5):
+    """
+    
+    Example
+    -------
+    >>> ref = np.array([[0, 0, 0], [10, 0, 0], [0, 10, 0]])
+    >>> target = np.array([[11, 0, 0], [1, 0, 0], [12, 0, 0], [100, 0, 0], [1, 1, 1], [0, 12, 0]])
+    >>> match_spots(ref, target, thresh_z=15, thresh_xy=5)
+    (array([2, 0, 1]),
+     array([[ 0, 12,  0],
+            [ 1,  0,  0],
+            [11,  0,  0]]))
+    """
+    # match all target points to reference points
+    matched_ids = match_closest_points(ref, target)
+    # compute separately distances in plane and along z axis
+    dist_z, dist_xy = compute_distances(ref[matched_ids], target, method='xy_z_flat', dist_fct='euclidian')
+    # threshold on both distances
+    select = np.logical_and(dist_z < thresh_z, dist_xy < thresh_xy)
+    matched_ids = matched_ids[select]
+    target = target[select]
+    dist_z = dist_z[select]
+    dist_xy = dist_xy[select]
+    # remove multiple links from single spots
+    matched_ids_single, target_single = remove_multiple_links(matched_ids, target, dist_z, dist_xy)
+    return matched_ids_single, target_single
+
+
+# %%
