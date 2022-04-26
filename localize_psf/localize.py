@@ -9,7 +9,6 @@ import os
 import time
 import warnings
 import pickle
-import copy
 import numpy as np
 import scipy.signal
 import scipy.ndimage
@@ -242,7 +241,8 @@ def find_peak_candidates(imgs, footprint, threshold, use_gpu_filter=CUPY_AVAILAB
     return centers_guess_inds, amps
 
 
-def filter_nearby_peaks(centers, min_xy_dist, min_z_dist, mode="average", weights=None, nmax=10000):
+def filter_nearby_peaks(centers: np.ndarray, min_xy_dist: float, min_z_dist: float, mode: str = "keep-one",
+                        weights: np.ndarray = None, nmax: int = 10000) -> (np.ndarray, np.ndarray):
     """
     Combine multiple center positions into a reduced set, where assume all centers separated by no more than
     min_xy_dist and min_z_dist come from the same feature.
@@ -272,124 +272,126 @@ def filter_nearby_peaks(centers, min_xy_dist, min_z_dist, mode="average", weight
     if weights is None:
         weights = np.ones(len(centers_unique))
 
-    if len(centers_unique) > nmax:
-        if mode == "average":
-            raise NotImplementedError("mode='average' is not implemented with nmax < np.inf. Set nmax to np.inf")
-
-        # todo: maybe I should check that dimension sizes are similar before dividing. If have very asymmetric
-        # todo: area it might be better to e.g. make more divisions along one dimension only
-        # todo: on second thought, I think the right approach is in each step to only divide once, and always divide the largest dimension
-
-        # if number of inputs is large, divide problem into subproblems, solve each of these, and combine results.
-        xlims = [np.min(centers[:, 2]), np.max(centers[:, 2])]
-        ylims = [np.min(centers[:, 1]), np.max(centers[:, 1])]
-        zlims = [np.min(centers[:, 0]), np.max(centers[:, 0])]
-
-        full_inds = np.arange(len(centers_unique), dtype=int)
-        centers_unique_sectors = []
-        inds_sectors = []
-
-        # divide space into octants, if each direction is large enough
-        if (zlims[1] - zlims[0]) > 2 * min_z_dist:
-            zedges = [zlims[0], 0.5 * (zlims[0] + zlims[1]), zlims[1] + min_z_dist]
-        else:
-            zedges = [zlims[0], zlims[1] + min_z_dist]
-
-        if (ylims[1] - ylims[0]) > 2 * min_xy_dist:
-            yedges = [ylims[0], 0.5 * (ylims[0] + ylims[1]), ylims[1] + min_xy_dist]
-        else:
-            yedges = [ylims[0], ylims[1] + min_xy_dist]
-
-        if (xlims[1] - xlims[0]) > 2 * min_xy_dist:
-            xedges = [xlims[0], 0.5 * (xlims[0] + xlims[1]), xlims[1] + min_xy_dist]
-        else:
-            xedges = [xlims[0], xlims[1] + min_xy_dist]
-
-        # solve sectors independently
-        for ii in range(len(xedges) - 1):
-            for jj in range(len(yedges) - 1):
-                for kk in range(len(zedges) - 1):
-                    to_use = np.logical_and.reduce((centers_unique[:, 0] >= zedges[kk], centers_unique[:, 0] < zedges[kk + 1],
-                                                    centers_unique[:, 1] >= yedges[jj], centers_unique[:, 1] < yedges[jj + 1],
-                                                    centers_unique[:, 2] >= xedges[ii], centers_unique[:, 2] < xedges[ii + 1]))
-
-                    if np.any(to_use):
-                        cu, i = filter_nearby_peaks(centers_unique[to_use], min_xy_dist, min_z_dist, mode=mode)
-                        centers_unique_sectors.append(cu)
-                        inds_sectors.append(full_inds[to_use][i])
-
-        centers_unique_sectors = np.concatenate(centers_unique_sectors, axis=0)
-        inds_sectors = np.concatenate(inds_sectors)
-
-        # check overlap regions between sectors
-        for ii in range(len(xedges) - 2):
-            to_use = np.logical_and(centers_unique_sectors[:, 2] >= xedges[ii + 1] - min_xy_dist,
-                                    centers_unique_sectors[:, 2] < xedges[ii + 1] + min_xy_dist)
-            if np.any(to_use):
-                centers_unique_overlap, i = filter_nearby_peaks(centers_unique_sectors[to_use], min_xy_dist, min_z_dist, mode=mode)
-
-                # get full centers by adding any that were not in the overlap region with the reduced set from the overlap region
-                centers_unique_sectors = np.concatenate((centers_unique_sectors[np.logical_not(to_use)], centers_unique_overlap))
-                inds_sectors = np.concatenate((inds_sectors[np.logical_not(to_use)], full_inds[inds_sectors][to_use][i]))
-
-        for ii in range(len(yedges) - 2):
-            to_use = np.logical_and(centers_unique_sectors[:, 1] >= yedges[ii + 1] - min_xy_dist,
-                                    centers_unique_sectors[:, 1] < yedges[ii + 1] + min_xy_dist)
-
-            if np.any(to_use):
-                centers_unique_overlap, i = filter_nearby_peaks(centers_unique_sectors[to_use], min_xy_dist, min_z_dist, mode=mode)
-
-                centers_unique_sectors = np.concatenate((centers_unique_sectors[np.logical_not(to_use)], centers_unique_overlap))
-                inds_sectors = np.concatenate((inds_sectors[np.logical_not(to_use)], full_inds[inds_sectors][to_use][i]))
-
-        for ii in range(len(zedges) - 2):
-            to_use = np.logical_and(centers_unique_sectors[:, 0] >= zedges[ii + 1] - min_z_dist,
-                                    centers_unique_sectors[:, 0] < zedges[ii + 1] + min_z_dist)
-            if np.any(to_use):
-                centers_unique_overlap, i = filter_nearby_peaks(centers_unique_sectors[to_use], min_xy_dist, min_z_dist, mode=mode)
-
-                centers_unique_sectors = np.concatenate((centers_unique_sectors[np.logical_not(to_use)], centers_unique_overlap))
-                inds_sectors = np.concatenate((inds_sectors[np.logical_not(to_use)], full_inds[inds_sectors][to_use][i]))
-
-        # full results
-        centers_unique = centers_unique_sectors
-        inds = inds_sectors
-
-    else:
-        # loop through points, at each step removing any duplicates and shrinking our list
-        # after looping through a point, it cannot be subsequently removed because the relations we are checking
-        # are symmetric.
-        # todo: is it possible this can fail in "average" mode?
-        # todo: looks like this might be easier if use some tools from scipy.spatial, scipy.spatial.cKDTree
-        counter = 0
-        while counter < len(centers_unique):
-            # compute distances to all other beads
-            z_dists = np.abs(centers_unique[counter][0] - centers_unique[:, 0])
-            xy_dists = np.sqrt((centers_unique[counter][1] - centers_unique[:, 1]) ** 2 +
-                               (centers_unique[counter][2] - centers_unique[:, 2]) ** 2)
-
-            # beads which are close enough we will combine
-            combine = np.logical_and(z_dists <= min_z_dist, xy_dists <= min_xy_dist)
+    # only need to act if minimum distances are non-zero
+    if min_xy_dist > 0 or min_z_dist > 0:
+        if len(centers_unique) > nmax:
             if mode == "average":
-                denom = np.nansum(np.logical_not(np.isnan(np.sum(centers_unique[combine], axis=1))) * weights[combine])
-                # compute new center from average and reset that position in the list
-                centers_unique[counter] = np.nansum(centers_unique[combine] * weights[combine][:, None], axis=0, dtype=float) / denom
-                weights[counter] = denom
-                combine[counter] = False
-            elif mode == "keep-one":
-                # don't want to remove the point itself
-                combine[counter] = False
-            elif mode == "remove":
-                pass
+                raise NotImplementedError("mode='average' is not implemented with nmax < np.inf. Set nmax to np.inf")
+
+            # todo: maybe I should check that dimension sizes are similar before dividing. If have very asymmetric
+            # todo: area it might be better to e.g. make more divisions along one dimension only
+            # todo: on second thought, I think the right approach is in each step to only divide once, and always divide the largest dimension
+
+            # if number of inputs is large, divide problem into subproblems, solve each of these, and combine results.
+            xlims = [np.min(centers[:, 2]), np.max(centers[:, 2])]
+            ylims = [np.min(centers[:, 1]), np.max(centers[:, 1])]
+            zlims = [np.min(centers[:, 0]), np.max(centers[:, 0])]
+
+            full_inds = np.arange(len(centers_unique), dtype=int)
+            centers_unique_sectors = []
+            inds_sectors = []
+
+            # divide space into octants, if each direction is large enough
+            if (zlims[1] - zlims[0]) > 2 * min_z_dist:
+                zedges = [zlims[0], 0.5 * (zlims[0] + zlims[1]), zlims[1] + min_z_dist]
             else:
-                raise ValueError("mode must be 'average', 'keep-one', or 'remove' but was '%s'" % mode)
+                zedges = [zlims[0], zlims[1] + min_z_dist]
 
-            # remove points from lists
-            inds = inds[np.logical_not(combine)]
-            centers_unique = centers_unique[np.logical_not(combine)]
-            weights = weights[np.logical_not(combine)]
+            if (ylims[1] - ylims[0]) > 2 * min_xy_dist:
+                yedges = [ylims[0], 0.5 * (ylims[0] + ylims[1]), ylims[1] + min_xy_dist]
+            else:
+                yedges = [ylims[0], ylims[1] + min_xy_dist]
 
-            counter += 1
+            if (xlims[1] - xlims[0]) > 2 * min_xy_dist:
+                xedges = [xlims[0], 0.5 * (xlims[0] + xlims[1]), xlims[1] + min_xy_dist]
+            else:
+                xedges = [xlims[0], xlims[1] + min_xy_dist]
+
+            # solve sectors independently
+            for ii in range(len(xedges) - 1):
+                for jj in range(len(yedges) - 1):
+                    for kk in range(len(zedges) - 1):
+                        to_use = np.logical_and.reduce((centers_unique[:, 0] >= zedges[kk], centers_unique[:, 0] < zedges[kk + 1],
+                                                        centers_unique[:, 1] >= yedges[jj], centers_unique[:, 1] < yedges[jj + 1],
+                                                        centers_unique[:, 2] >= xedges[ii], centers_unique[:, 2] < xedges[ii + 1]))
+
+                        if np.any(to_use):
+                            cu, i = filter_nearby_peaks(centers_unique[to_use], min_xy_dist, min_z_dist, mode=mode)
+                            centers_unique_sectors.append(cu)
+                            inds_sectors.append(full_inds[to_use][i])
+
+            centers_unique_sectors = np.concatenate(centers_unique_sectors, axis=0)
+            inds_sectors = np.concatenate(inds_sectors)
+
+            # check overlap regions between sectors
+            for ii in range(len(xedges) - 2):
+                to_use = np.logical_and(centers_unique_sectors[:, 2] >= xedges[ii + 1] - min_xy_dist,
+                                        centers_unique_sectors[:, 2] < xedges[ii + 1] + min_xy_dist)
+                if np.any(to_use):
+                    centers_unique_overlap, i = filter_nearby_peaks(centers_unique_sectors[to_use], min_xy_dist, min_z_dist, mode=mode)
+
+                    # get full centers by adding any that were not in the overlap region with the reduced set from the overlap region
+                    centers_unique_sectors = np.concatenate((centers_unique_sectors[np.logical_not(to_use)], centers_unique_overlap))
+                    inds_sectors = np.concatenate((inds_sectors[np.logical_not(to_use)], full_inds[inds_sectors][to_use][i]))
+
+            for ii in range(len(yedges) - 2):
+                to_use = np.logical_and(centers_unique_sectors[:, 1] >= yedges[ii + 1] - min_xy_dist,
+                                        centers_unique_sectors[:, 1] < yedges[ii + 1] + min_xy_dist)
+
+                if np.any(to_use):
+                    centers_unique_overlap, i = filter_nearby_peaks(centers_unique_sectors[to_use], min_xy_dist, min_z_dist, mode=mode)
+
+                    centers_unique_sectors = np.concatenate((centers_unique_sectors[np.logical_not(to_use)], centers_unique_overlap))
+                    inds_sectors = np.concatenate((inds_sectors[np.logical_not(to_use)], full_inds[inds_sectors][to_use][i]))
+
+            for ii in range(len(zedges) - 2):
+                to_use = np.logical_and(centers_unique_sectors[:, 0] >= zedges[ii + 1] - min_z_dist,
+                                        centers_unique_sectors[:, 0] < zedges[ii + 1] + min_z_dist)
+                if np.any(to_use):
+                    centers_unique_overlap, i = filter_nearby_peaks(centers_unique_sectors[to_use], min_xy_dist, min_z_dist, mode=mode)
+
+                    centers_unique_sectors = np.concatenate((centers_unique_sectors[np.logical_not(to_use)], centers_unique_overlap))
+                    inds_sectors = np.concatenate((inds_sectors[np.logical_not(to_use)], full_inds[inds_sectors][to_use][i]))
+
+            # full results
+            centers_unique = centers_unique_sectors
+            inds = inds_sectors
+
+        else:
+            # loop through points, at each step removing any duplicates and shrinking our list
+            # after looping through a point, it cannot be subsequently removed because the relations we are checking
+            # are symmetric.
+            # todo: is it possible this can fail in "average" mode?
+            # todo: looks like this might be easier if use some tools from scipy.spatial, scipy.spatial.cKDTree
+            counter = 0
+            while counter < len(centers_unique):
+                # compute distances to all other beads
+                z_dists = np.abs(centers_unique[counter][0] - centers_unique[:, 0])
+                xy_dists = np.sqrt((centers_unique[counter][1] - centers_unique[:, 1]) ** 2 +
+                                   (centers_unique[counter][2] - centers_unique[:, 2]) ** 2)
+
+                # beads which are close enough we will combine
+                combine = np.logical_and(z_dists <= min_z_dist, xy_dists <= min_xy_dist)
+                if mode == "average":
+                    denom = np.nansum(np.logical_not(np.isnan(np.sum(centers_unique[combine], axis=1))) * weights[combine])
+                    # compute new center from average and reset that position in the list
+                    centers_unique[counter] = np.nansum(centers_unique[combine] * weights[combine][:, None], axis=0, dtype=float) / denom
+                    weights[counter] = denom
+                    combine[counter] = False
+                elif mode == "keep-one":
+                    # don't want to remove the point itself
+                    combine[counter] = False
+                elif mode == "remove":
+                    pass
+                else:
+                    raise ValueError("mode must be 'average', 'keep-one', or 'remove' but was '%s'" % mode)
+
+                # remove points from lists
+                inds = inds[np.logical_not(combine)]
+                centers_unique = centers_unique[np.logical_not(combine)]
+                weights = weights[np.logical_not(combine)]
+
+                counter += 1
 
     return centers_unique, inds
 
@@ -609,6 +611,14 @@ def fit_gauss_roi(img_roi, coords, init_params=None, fixed_params=None, bounds=N
     """
     z_roi, y_roi, x_roi = coords
 
+    # if img_roi is 2D and z- dimension size is 0, treat as 3D
+    if img_roi.ndim == 2 and z_roi.shape[0] == 1:
+        img_roi = np.expand_dims(img_roi, axis=0)
+
+    # img_roi must be 3D
+    if img_roi.ndim != 3:
+        raise ValueError(f"img_roi must have 3 dimensions but had {img_roi.ndim:d}")
+
     to_use = np.logical_not(np.isnan(img_roi))
     x_roi_full, y_roi_full, z_roi_full = np.broadcast_arrays(x_roi, y_roi, z_roi)
 
@@ -665,7 +675,7 @@ def fit_gauss_roi(img_roi, coords, init_params=None, fixed_params=None, bounds=N
 
 def fit_gauss_rois(img_rois, coords_rois, init_params, max_number_iterations=100,
                    sf=1, dc=None, angles=None, estimator="LSE", model="gaussian",
-                   fixed_params=None, use_gpu=GPUFIT_AVAILABLE, verbose=True):
+                   fixed_params=None, use_gpu=GPUFIT_AVAILABLE, verbose=True, debug=False):
     """
     Fit rois. Can use either CPU parallelization with joblib or GPU parallelization using gpufit
 
@@ -689,6 +699,11 @@ def fit_gauss_rois(img_rois, coords_rois, init_params, max_number_iterations=100
 
     zrois, yrois, xrois = coords_rois
 
+    for ii in range(len(img_rois)):
+        if img_rois[ii].ndim != 3:
+            raise ValueError(f"img_rois position {ii:d} was not 3-dimensional")
+
+
     if not use_gpu:
         if model != "gaussian":
             raise NotImplementedError("only model = 'gaussian' implemented for non gpu")
@@ -698,10 +713,19 @@ def fit_gauss_rois(img_rois, coords_rois, init_params, max_number_iterations=100
             verbose_joblib = 1
 
         tstart = time.perf_counter()
-        results = joblib.Parallel(n_jobs=-1, verbose=verbose_joblib, timeout=None)(
-            joblib.delayed(fit_gauss_roi)(img_rois[ii], (zrois[ii], yrois[ii], xrois[ii]), init_params=init_params[ii],
-                                          fixed_params=fixed_params, sf=sf, dc=dc, angles=angles)
-            for ii in range(len(img_rois)))
+
+        if debug:
+            results = []
+            for ii in range(len(img_rois)):
+                results.append(fit_gauss_roi(img_rois[ii], (zrois[ii], yrois[ii], xrois[ii]),
+                                              init_params=init_params[ii],
+                                              fixed_params=fixed_params, sf=sf, dc=dc, angles=angles))
+        else:
+            results = joblib.Parallel(n_jobs=-1, verbose=verbose_joblib, timeout=None)(
+                joblib.delayed(fit_gauss_roi)(img_rois[ii], (zrois[ii], yrois[ii], xrois[ii]),
+                                              init_params=init_params[ii],
+                                              fixed_params=fixed_params, sf=sf, dc=dc, angles=angles)
+                for ii in range(len(img_rois)))
         tend = time.perf_counter()
 
         fit_params = np.asarray([r["fit_params"] for r in results])
@@ -748,11 +772,11 @@ def fit_gauss_rois(img_rois, coords_rois, init_params, max_number_iterations=100
 
         # check arguments
         if data.ndim != 2:
-            raise ValueError
+            raise ValueError("data wrong dimension")
         if init_params.ndim != 2 or init_params.shape != (nfits, 7):
-            raise ValueError
+            raise ValueError("init_params had wrong shape or dimension")
         if user_info.ndim != 1 or user_info.size != (3 * nfits * n_pts_per_fit + nfits):
-            raise ValueError
+            raise ValueError("user_info had wrong shape or dimension")
 
         if estimator == "MLE":
             est_id = gf.EstimatorID.MLE
@@ -810,7 +834,11 @@ def plot_gauss_roi(fit_params, roi, imgs, coords, init_params=None, same_color_s
     z, y, x = coords
     # extract useful coordinate info
     dc = x[0, 0, 1] - x[0, 0, 0]
-    dz = z[1, 0, 0] - z[0, 0, 0]
+
+    if z.shape[0] > 1:
+        dz = z[1, 0, 0] - z[0, 0, 0]
+    else:
+        dz = dc
 
     if init_params is not None:
         center_guess = np.array([init_params[3], init_params[2], init_params[1]])
@@ -819,9 +847,12 @@ def plot_gauss_roi(fit_params, roi, imgs, coords, init_params=None, same_color_s
 
     # get ROI and coordinates
     img_roi = roi_fns.cut_roi(roi, imgs)
-    x_roi = x[:, :, roi[4]:roi[5]]
-    y_roi = y[:, roi[2]:roi[3], :]
-    z_roi = z[roi[0]:roi[1], :, :]
+    # x_roi = x[:, :, roi[4]:roi[5]]
+    # y_roi = y[:, roi[2]:roi[3], :]
+    # z_roi = z[roi[0]:roi[1], :, :]
+    x_roi = roi_fns.cut_roi(roi, x)
+    y_roi = roi_fns.cut_roi(roi, y)
+    z_roi = roi_fns.cut_roi(roi, z)
 
     vmin_roi = np.percentile(img_roi[np.logical_not(np.isnan(img_roi))], 1)
     vmax_roi = np.percentile(img_roi[np.logical_not(np.isnan(img_roi))], 99.9)
@@ -833,70 +864,72 @@ def plot_gauss_roi(fit_params, roi, imgs, coords, init_params=None, same_color_s
     # plot results interpolated on regular grid
     # ################################
     figh_interp = plt.figure(figsize=figsize)
-    st_str = "Fit, max projections, interpolated, ROI = [%d, %d, %d, %d, %d, %d]\n" % tuple(roi) + \
-             "         A=%3.3f, cx=%3.5f, cy=%3.5f, cz=%3.5f, sxy=%3.5f, sz=%3.5f, bg=%3.3f" % tuple(fit_params)
-    if init_params is not None:
-        st_str += "\nguess A=%3.3f, cx=%3.5f, cy=%3.5f, cz=%3.5f, sxy=%3.5f, sz=%3.5f, bg=%3.3f" % tuple(init_params)
-    plt.suptitle(st_str)
+    st_str = f"Fit, max projections, interpolated, ROI = {roi}"
 
-    grid = plt.GridSpec(2, 4)
+    st_str += f"\n{'fit': <10}" + "A=%3.3f, cx=%3.5f, cy=%3.5f, cz=%3.5f, sxy=%3.5f, sz=%3.5f, bg=%3.3f" % tuple(fit_params)
+    if init_params is not None:
+        st_str += f"\n{'guess': <10}" + "A=%3.3f, cx=%3.5f, cy=%3.5f, cz=%3.5f, sxy=%3.5f, sz=%3.5f, bg=%3.3f" % tuple(init_params)
+
+    figh_interp.suptitle(st_str)
+
+    grid = figh_interp.add_gridspec(2, 4)
 
     # ################################
     # XY, data
     # ################################
-    ax = plt.subplot(grid[0, 1])
+    ax = figh_interp.add_subplot(grid[0, 1])
     extent = [y_roi[0, 0, 0] - 0.5 * dc, y_roi[0, -1, 0] + 0.5 * dc,
               x_roi[0, 0, 0] - 0.5 * dc, x_roi[0, 0, -1] + 0.5 * dc]
-    plt.imshow(np.nanmax(img_roi, axis=0).transpose(), vmin=vmin_roi, vmax=vmax_roi, origin="lower",
+    ax.imshow(np.nanmax(img_roi, axis=0).transpose(), vmin=vmin_roi, vmax=vmax_roi, origin="lower",
                extent=extent, cmap="bone")
 
-    plt.plot(center_fit[1], center_fit[2], 'mx')
+    ax.plot(center_fit[1], center_fit[2], 'mx')
     if init_params is not None:
-        plt.plot(center_guess[1], center_guess[2], 'gx')
+        ax.plot(center_guess[1], center_guess[2], 'gx')
 
     ax.set_ylim(extent[2:4])
     ax.set_xlim(extent[0:2])
-    plt.xlabel("Y (um)")
-    plt.ylabel("X (um)")
-    plt.title("XY")
+    ax.set_xlabel("Y (um)")
+    ax.set_ylabel("X (um)")
+    ax.set_title("XY")
 
     # ################################
     # XZ, data
     # ################################
-    ax = plt.subplot(grid[0, 0])
+    ax = figh_interp.add_subplot(grid[0, 0])
     extent = [z_roi[0, 0, 0] - 0.5 * dz, z_roi[-1, 0, 0] + 0.5 * dz,
               x_roi[0, 0, 0] - 0.5 * dc, x_roi[0, 0, -1] + 0.5 * dc]
-    plt.imshow(np.nanmax(img_roi, axis=1).transpose(), vmin=vmin_roi, vmax=vmax_roi, origin="lower",
+    ax.imshow(np.nanmax(img_roi, axis=1).transpose(), vmin=vmin_roi, vmax=vmax_roi, origin="lower",
                extent=extent, cmap="bone")
-    plt.plot(center_fit[0], center_fit[2], 'mx')
+    ax.plot(center_fit[0], center_fit[2], 'mx')
     if init_params is not None:
-        plt.plot(center_guess[0], center_guess[2], 'gx')
+        ax.plot(center_guess[0], center_guess[2], 'gx')
     ax.set_ylim(extent[2:4])
     ax.set_xlim(extent[0:2])
-    plt.xlabel("Z (um)")
-    plt.ylabel("X (um)")
-    plt.title("XZ")
+    ax.set_xlabel("Z (um)")
+    ax.set_ylabel("X (um)")
+    ax.set_title("XZ")
 
     # ################################
     # YZ, data
     # ################################
-    ax = plt.subplot(grid[1, 1])
+    ax = figh_interp.add_subplot(grid[1, 1])
     extent = [y_roi[0, 0, 0] - 0.5 * dc, y_roi[0, -1, 0] + 0.5 * dc,
               z_roi[0, 0, 0] - 0.5 * dz, z_roi[-1, 0, 0] + 0.5 * dz]
     with warnings.catch_warnings():
         warnings.filterwarnings('ignore', r'All-NaN (slice|axis) encountered')
 
-        plt.imshow(np.nanmax(img_roi, axis=2), vmin=vmin_roi, vmax=vmax_roi, origin="lower", extent=extent, cmap="bone")
+        ax.imshow(np.nanmax(img_roi, axis=2), vmin=vmin_roi, vmax=vmax_roi, origin="lower", extent=extent, cmap="bone")
 
-    plt.plot(center_fit[1], center_fit[0], 'mx')
+    ax.plot(center_fit[1], center_fit[0], 'mx')
     if init_params is not None:
-        plt.plot(center_guess[1], center_guess[0], 'gx')
+        ax.plot(center_guess[1], center_guess[0], 'gx')
 
     ax.set_ylim(extent[2:4])
     ax.set_xlim(extent[0:2])
-    plt.xlabel("Y (um)")
-    plt.ylabel("Z (um)")
-    plt.title("YZ")
+    ax.set_xlabel("Y (um)")
+    ax.set_ylabel("Z (um)")
+    ax.set_title("YZ")
 
     if same_color_scale:
         vmin_fit = vmin_roi
@@ -908,50 +941,50 @@ def plot_gauss_roi(fit_params, roi, imgs, coords, init_params=None, same_color_s
     # ################################
     # YX, fit
     # ################################
-    ax = plt.subplot(grid[0, 3])
+    ax = figh_interp.add_subplot(grid[0, 3])
     extent = [y_roi[0, 0, 0] - 0.5 * dc, y_roi[0, -1, 0] + 0.5 * dc,
               x_roi[0, 0, 0] - 0.5 * dc, x_roi[0, 0, -1] + 0.5 * dc]
-    plt.imshow(np.nanmax(img_fit, axis=0).transpose(), vmin=vmin_fit, vmax=vmax_fit,
+    ax.imshow(np.nanmax(img_fit, axis=0).transpose(), vmin=vmin_fit, vmax=vmax_fit,
                origin="lower", extent=extent, cmap="bone")
-    plt.plot(center_fit[1], center_fit[2], 'mx')
+    ax.plot(center_fit[1], center_fit[2], 'mx')
     if init_params is not None:
-        plt.plot(center_guess[1], center_guess[2], 'gx')
+        ax.plot(center_guess[1], center_guess[2], 'gx')
     ax.set_ylim(extent[2:4])
     ax.set_xlim(extent[0:2])
-    plt.xlabel("Y (um)")
-    plt.ylabel("X (um)")
+    ax.set_xlabel("Y (um)")
+    ax.set_ylabel("X (um)")
 
     # ################################
     # ZX, fit
     # ################################
-    ax = plt.subplot(grid[0, 2])
+    ax = figh_interp.add_subplot(grid[0, 2])
     extent = [z_roi[0, 0, 0] - 0.5 * dz, z_roi[-1, 0, 0] + 0.5 * dz,
               x_roi[0, 0, 0] - 0.5 * dc, x_roi[0, 0, -1] + 0.5 * dc]
-    plt.imshow(np.nanmax(img_fit, axis=1).transpose(), vmin=vmin_fit, vmax=vmax_fit,
+    ax.imshow(np.nanmax(img_fit, axis=1).transpose(), vmin=vmin_fit, vmax=vmax_fit,
                origin="lower", extent=extent, cmap="bone")
-    plt.plot(center_fit[0], center_fit[2], 'mx')
+    ax.plot(center_fit[0], center_fit[2], 'mx')
     if init_params is not None:
-        plt.plot(center_guess[0], center_guess[2], 'gx')
+        ax.plot(center_guess[0], center_guess[2], 'gx')
     ax.set_ylim(extent[2:4])
     ax.set_xlim(extent[0:2])
-    plt.xlabel("Z (um)")
-    plt.ylabel("X (um)")
+    ax.set_xlabel("Z (um)")
+    ax.set_ylabel("X (um)")
 
     # ################################
     # YZ, fit
     # ################################
-    ax = plt.subplot(grid[1, 3])
+    ax = figh_interp.add_subplot(grid[1, 3])
     extent = [y_roi[0, 0, 0] - 0.5 * dc, y_roi[0, -1, 0] + 0.5 * dc,
               z_roi[0, 0, 0] - 0.5 * dz, z_roi[-1, 0, 0] + 0.5 * dz]
-    plt.imshow(np.nanmax(img_fit, axis=2), vmin=vmin_fit, vmax=vmax_fit,
+    ax.imshow(np.nanmax(img_fit, axis=2), vmin=vmin_fit, vmax=vmax_fit,
                origin="lower", extent=extent, cmap="bone")
-    plt.plot(center_fit[1], center_fit[0], 'mx')
+    ax.plot(center_fit[1], center_fit[0], 'mx')
     if init_params is not None:
-        plt.plot(center_guess[1], center_guess[0], 'gx')
+        ax.plot(center_guess[1], center_guess[0], 'gx')
     ax.set_ylim(extent[2:4])
     ax.set_xlim(extent[0:2])
-    plt.xlabel("Y (um)")
-    plt.ylabel("Z (um)")
+    ax.set_xlabel("Y (um)")
+    ax.set_ylabel("Z (um)")
 
     if save_dir is not None:
         figh_interp.savefig(os.path.join(save_dir, "%s.png" % prefix))
@@ -1011,14 +1044,23 @@ def filter_localizations(fit_params: np.ndarray, init_params: np.ndarray, coords
 
     # maximum/minimum sigmas AND combine all conditions
     (sz_min, sxy_min), (sz_max, sxy_max) = sigma_bounds
-    conditions = np.stack((in_bounds, center_close_to_guess_xy, center_close_to_guess_z,
-                            fit_params[:, 4] <= sxy_max, fit_params[:, 4] >= sxy_min,
-                            fit_params[:, 5] <= sz_max, fit_params[:, 5] >= sz_min,
-                            fit_params[:, 0] >= amp_min), axis=1)
+    conditions = np.stack((in_bounds,
+                           center_close_to_guess_xy,
+                           center_close_to_guess_z,
+                           fit_params[:, 4] <= sxy_max,
+                           fit_params[:, 4] >= sxy_min,
+                           fit_params[:, 5] <= sz_max,
+                           fit_params[:, 5] >= sz_min,
+                           fit_params[:, 0] >= amp_min), axis=1)
 
-    condition_names = ["in_bounds", "center_close_to_guess_xy", "center_close_to_guess_z",
-                       "xy_size_small_enough", "xy_size_big_enough", "z_size_small_enough",
-                       "z_size_big_enough", "amp_ok"]
+    condition_names = ["in_bounds",
+                       "center_close_to_guess_xy",
+                       "center_close_to_guess_z",
+                       "xy_size_small_enough",
+                       "xy_size_big_enough",
+                       "z_size_small_enough",
+                       "z_size_big_enough",
+                       "amp_ok"]
 
     to_keep_temp = np.logical_and.reduce(conditions, axis=1)
 
@@ -1052,12 +1094,15 @@ def filter_localizations(fit_params: np.ndarray, init_params: np.ndarray, coords
     return to_keep, conditions, condition_names, filter_settings
 
 
-def localize_beads(imgs: np.ndarray, dxy: float, dz: float, threshold: float, roi_size: tuple[float],
-                   filter_sigma_small: tuple[float], filter_sigma_large: tuple[float],
+def localize_beads(imgs: np.ndarray, dxy: float, dz: float, threshold: float,
+                   roi_size: tuple[float] = (4, 2, 2),
+                   filter_sigma_small: tuple[float] = (1, 0.1, 0.1),
+                   filter_sigma_large: tuple[float] = (10, 5, 5),
                    min_spot_sep: tuple[float] = (0, 0),
                    sigma_bounds: tuple[tuple[float], tuple[float]] = ((0, 0), (np.inf, np.inf)),
                    fit_amp_min: float = 0, fit_dist_max_err: tuple[float] = (np.inf, np.inf),
-                   dist_boundary_min: tuple[float] = (0, 0), max_number_iterations: int = 100,
+                   dist_boundary_min: tuple[float] = (0, 0), max_nfit_iterations: int = 100,
+                   fit_filtered_images: bool = False, sf: int=1,
                    use_gpu_fit: bool = GPUFIT_AVAILABLE, use_gpu_filter: bool = CUPY_AVAILABLE, verbose: bool = True):
     """
     Given an image consisting of diffraction limited spots and background, identify the diffraction limit spots using
@@ -1084,6 +1129,9 @@ def localize_beads(imgs: np.ndarray, dxy: float, dz: float, threshold: float, ro
     @param fit_amp_min: minimum amplitude value for fit to be kept
     @param fit_dist_max_err: (dz_max, dxy_max) maximum distance between guess value and fit value
     @param dist_boundary_min: (dz_min, dxy_min) filter out spots which are closer to the boundary than this
+    @param max_nfit_iterations: maximum number of iterations in fitting function
+    @param fit_filtered_images: whether to perform fitting on raw images or filtered images
+    @param sf: oversampling factored used in PSF model to simulate pixelation
     @param bool use_gpu_fit: whether or not to do spot fitting on the GPU
     @param bool use_gpu_filter: whether or not to do difference-of-Gaussian filtering on GPU
     @param bool verbose: whether or not to print information
@@ -1097,6 +1145,7 @@ def localize_beads(imgs: np.ndarray, dxy: float, dz: float, threshold: float, ro
     min_spot_sep = np.array(min_spot_sep, copy=True)
     filter_sigma_large = np.array(filter_sigma_large, copy=True)
     filter_sigma_small = np.array(filter_sigma_small, copy=True)
+    dist_boundary_min = np.array(dist_boundary_min, copy=True)
 
     # check if is 2D
     if imgs.ndim == 2:
@@ -1105,10 +1154,12 @@ def localize_beads(imgs: np.ndarray, dxy: float, dz: float, threshold: float, ro
     data_is_2d = imgs.shape[0] == 1
 
     if data_is_2d:
-        roi_size[0] = 0
+        roi_size[0] = 1
         filter_sigma_large[0] = 0
         filter_sigma_small[0] = 0
         min_spot_sep[0] = 0
+        dist_boundary_min[0] = 0
+        dz = 1 # dz not meaningful in this case
 
     # unpack arguments
     z, y, x = get_coords(imgs.shape, (dz, dxy, dxy))
@@ -1119,6 +1170,8 @@ def localize_beads(imgs: np.ndarray, dxy: float, dz: float, threshold: float, ro
     # filter images
     # ###################################
     tstart = time.perf_counter()
+
+    # imgs = cp.asnumpy(cupyx.scipy.ndimage.median_filter(cp.array(imgs), size=(3, 3, 3)))
 
     ks = get_filter_kernel(filter_sigma_small, (dz, dxy, dxy))
     kl = get_filter_kernel(filter_sigma_large, (dz, dxy, dxy))
@@ -1158,7 +1211,7 @@ def localize_beads(imgs: np.ndarray, dxy: float, dz: float, threshold: float, ro
         inds = np.ravel_multi_index(centers_guess_inds.transpose(), imgs_filtered.shape)
         weights = imgs_filtered.ravel()[inds]
         centers_guess, inds_comb = filter_nearby_peaks(centers_guess, dxy_min_sep, dz_min_sep,
-                                                       weights=weights, mode="average")
+                                                       weights=weights, mode="average", nmax=np.inf)
 
         amps = amps[inds_comb]
         if verbose:
@@ -1170,30 +1223,47 @@ def localize_beads(imgs: np.ndarray, dxy: float, dz: float, threshold: float, ro
         # ###################################################
         tstart = time.perf_counter()
 
-        rois, img_rois, coords = zip(*[get_roi(c, imgs, (z, y, x), roi_size_pix) for c in centers_guess])
+        if fit_filtered_images:
+            rois, img_rois, coords = zip(*[get_roi(c, imgs_filtered, (z, y, x), roi_size_pix) for c in centers_guess])
+        else:
+            rois, img_rois, coords = zip(*[get_roi(c, imgs, (z, y, x), roi_size_pix) for c in centers_guess])
+
         zrois, yrois, xrois = zip(*coords)
         rois = np.asarray(rois)
 
         # extract guess values
         bgs = np.array([np.mean(r) for r in img_rois])
-        sxs = np.array([np.sqrt(np.sum(ir * (xr - cg[2]) ** 2) / np.sum(ir)) for ir, xr, cg in
-                        zip(img_rois, xrois, centers_guess)])
-        sys = np.array([np.sqrt(np.sum(ir * (yr - cg[1]) ** 2) / np.sum(ir)) for ir, yr, cg in
-                        zip(img_rois, yrois, centers_guess)])
-        sxys = 0.5 * (sxs + sys)
+        sxs = np.zeros(len(img_rois))
+        sys = np.zeros(len(img_rois))
+        szs = np.zeros(len(img_rois))
+        for ii in range(len(img_rois)):
+            cg = centers_guess[ii]
+            ir = img_rois[ii] * (img_rois[ii] >= 0)
+            sxs[ii] = np.sqrt(np.sum(ir * (xrois[ii] - cg[2]) ** 2) / np.sum(ir))
+            sys[ii] = np.sqrt(np.sum(ir * (yrois[ii] - cg[1]) ** 2) / np.sum(ir))
+
+            if data_is_2d:
+                szs[ii] = 1
+            else:
+                szs[ii] = np.sqrt(np.sum(ir * (zrois[ii] - cg[0]) ** 2) / np.sum(ir))
+
+        # sxs = np.array([np.sqrt(np.sum(ir * (xr - cg[2]) ** 2) / np.sum(ir))
+        #                 for ir, xr, cg in zip(img_rois, xrois, centers_guess)])
+        # sys = np.array([np.sqrt(np.sum(ir * (yr - cg[1]) ** 2) / np.sum(ir))
+        #                 for ir, yr, cg in zip(img_rois, yrois, centers_guess)])
 
         if data_is_2d:
             cz_guess = np.zeros(len(img_rois))
-            szs = np.ones(len(img_rois))
         else:
             cz_guess = centers_guess[:, 0]
-            szs = np.array([np.sqrt(np.sum(ir * (zr - cg[0]) ** 2) / np.sum(ir)) for ir, zr, cg in
-                            zip(img_rois, zrois, centers_guess)])
 
         # get initial parameter guesses
         init_params = np.stack((amps,
                                 centers_guess[:, 2], centers_guess[:, 1], cz_guess,
-                                sxys, szs, bgs), axis=1)
+                                0.5 * (sxs + sys), szs, bgs), axis=1)
+
+        if np.any(np.isnan(init_params)):
+            raise ValueError("one or more init_params was nan")
 
         if verbose:
             print("Prepared %d rois and estimated initial parameters in %0.2fs" %
@@ -1214,9 +1284,9 @@ def localize_beads(imgs: np.ndarray, dxy: float, dz: float, threshold: float, ro
             fixed_params[3] = True
 
         fit_params, fit_states, chi_sqrs, niters, fit_t = fit_gauss_rois(img_rois, (zrois, yrois, xrois),
-                                                                         init_params, max_number_iterations,
+                                                                         init_params, max_nfit_iterations,
                                                                          estimator="LSE",
-                                                                         sf=1, dc=dxy, angles=(0., 0., 0.),
+                                                                         sf=sf, dc=dxy, angles=(0., 0., 0.),
                                                                          fixed_params=fixed_params,
                                                                          use_gpu=use_gpu_fit, verbose=verbose)
 
@@ -1250,10 +1320,11 @@ def localize_beads(imgs: np.ndarray, dxy: float, dz: float, threshold: float, ro
            to_keep, conditions, condition_names, filter_settings,\
            fit_states, chi_sqrs, niters, imgs_filtered
 
+
 def plot_bead_locations(imgs: np.ndarray, center_lists: list[np.ndarray],
                         title: str = "", color_lists: list[str] = None,
                         color_limits: list[list[float]] = None, legend_labels: list[str] = None,
-                        weights: list[np.ndarray] = None, cbar_labels: list[str] = None,
+                        weights: list[np.ndarray] = None, cbar_labels: list[str] = None, coords: list = None,
                         vlims_percentile: tuple[float] = (0.01, 99.99), gamma: float = 1, **kwargs):
     """
     Plot center locations over 2D image or max projection of 3D image. Supports plotting multiple different sets
@@ -1308,19 +1379,33 @@ def plot_bead_locations(imgs: np.ndarray, center_lists: list[np.ndarray],
     else:
         img_max_proj = imgs
 
+    # get extent from coordinates
+    if coords is None:
+        xx, yy = np.meshgrid(range(img_max_proj.shape[1]), range(img_max_proj.shape[0]))
+    else:
+        yy, xx = coords
+
+    dx = xx[0, 1] - xx[0, 0]
+    dy = yy[1, 0] - yy[0, 0]
+
+    extent_xy = [xx.min() - 0.5 * dx, xx.max() + 0.5 * dx,
+                 yy.max() + 0.5 * dy, xx.min() - 0.5 * dy]
+
+    # create figure
     figh = plt.figure(**kwargs)
-    plt.suptitle(title)
+    figh.suptitle(title)
+    ax = figh.add_subplot(1, 1, 1)
 
     # plot image
     vmin = np.percentile(img_max_proj, vlims_percentile[0])
     vmax = np.percentile(img_max_proj, vlims_percentile[1])
 
-    plt.imshow(img_max_proj, norm=PowerNorm(gamma=gamma, vmin=vmin, vmax=vmax), cmap=plt.cm.get_cmap("bone"))
-    xlim = plt.xlim()
-    ylim = plt.ylim()
+    im = ax.imshow(img_max_proj, norm=PowerNorm(gamma=gamma, vmin=vmin, vmax=vmax), cmap=plt.cm.get_cmap("bone"), extent=extent_xy)
+    xlim = ax.get_xlim()
+    ylim = ax.get_ylim()
 
-    cbar = plt.colorbar()
-    cbar.ax.set_ylabel("Image intensity (counts), gamma=%0.2f" % gamma)
+    cbar = plt.colorbar(im)
+    cbar.ax.set_ylabel(f"Image intensity (counts), gamma={gamma:.2f}")
 
     # plot centers
     for ii in range(nlists):
@@ -1334,60 +1419,68 @@ def plot_bead_locations(imgs: np.ndarray, center_lists: list[np.ndarray],
         cmap_color = LinearSegmentedColormap.from_list("test", [[0.5, 0.5, 0.5], color_lists[ii]])
         cs = cmap_color((weights[ii] - vmin) / (vmax - vmin))
 
-        plt.scatter(center_lists[ii][:, 2], center_lists[ii][:, 1], facecolor='none', edgecolor=cs, marker='o')
+        ax.scatter(center_lists[ii][:, 2], center_lists[ii][:, 1], facecolor='none', edgecolor=cs, marker='o')
 
         cbar = plt.colorbar(plt.cm.ScalarMappable(norm=Normalize(vmin=vmin, vmax=vmax), cmap=cmap_color))
         cbar.ax.set_ylabel(cbar_labels[ii])
 
-    plt.xlim(xlim)
-    plt.ylim(ylim)
+    ax.set_xlim(xlim)
+    ax.set_ylim(ylim)
 
-    plt.legend(legend_labels)
+    ax.legend(legend_labels)
 
     return figh
 
 
-def autofit_psfs(imgs, psf_roi_size, dx, dz, wavelength, ni=1.5, model='vectorial', sf=1,
-                 threshold=100, min_spot_sep=(3, 3),
-                 filter_sigma_small=(1, 0.5, 0.5), filter_sigma_large=(3, 5, 5),
-                 sigma_bounds=((1, 1), (10, 10)), roi_size_loc=(13, 21, 21), fit_amp_thresh=100,
-                 dist_boundary_min=(0, 0), fit_dist_max_err=(np.inf, np.inf),
-                 num_localizations_to_plot=5, psf_percentiles=(20, 5), plot=True, gamma=0.5, save_dir=None,
+def autofit_psfs(imgs: np.ndarray, psf_roi_size: list[float], dx: float, dz: float, wavelength: float, ni: float = 1.5,
+                 model: str = 'vectorial', sf: int = 1, threshold: float = 100., min_spot_sep: tuple[float] = (0., 0.),
+                 filter_sigma_small: tuple[float] = (1, 0.5, 0.5), filter_sigma_large: tuple[float] = (3, 5, 5),
+                 sigma_bounds: tuple[tuple[float]] = ((0., 0.), (np.inf, np.inf)), roi_size_loc=(13, 21, 21),
+                 fit_amp_thresh: float = 100., dist_boundary_min: tuple[float] = (0., 0.),
+                 max_number_iterations: int = 100, fit_dist_max_err: tuple[float] = (np.inf, np.inf),
+                 num_localizations_to_plot: int = 5, psf_percentiles: tuple[float] = (5,),
+                 plot: bool = True, only_plot_good_fits: bool = True, plot_filtered_image: bool = False,
+                 use_gpu_filter: bool = False, gamma: float = 0.5, save_dir: str = None,
                  figsize=(18, 10), **kwargs):
     """
-    Find isolated points, fit PSFs, and report data. This is the main function of this module
+    Given a 2D or 3D image, identify and localize diffraction limited spots. Aggregate the results to create
+    an experimental point-spread function and fit the average PSF to a model function.
 
     :param imgs: nz x nx x ny image
     :param psf_roi_size: [nz, ny, nx] ROI to determine PSFs on. This is not necessarily the same as the size of the
     ROI's used during localization
-    :param float dx: pixel size in um
-    :param float dz: z-plane spacing in um
-    :param float wavelength: wavelength in um
-    :param float ni: index of refraction of medium
-    :param str model: "vectorial", "gibson-lanni", "born-wolf", or "gaussian". This model is used to fit the
+    :param dx: pixel size in um
+    :param dz: z-plane spacing in um
+    :param wavelength: wavelength in um
+    :param ni: index of refraction of medium
+    :param model: "vectorial", "gibson-lanni", "born-wolf", or "gaussian". This model is used to fit the
     averaged PSF's, but a gaussian model is always used for localization
-    :param int sf: sampling factor for oversampling along each dimension
-    :param float threshold: threshold pixel value to identify peaks. Note: this is applied to the filtered image,
+    :param sf: sampling factor for oversampling along each dimension
+    :param threshold: threshold pixel value to identify peaks. Note: this is applied to the filtered image,
     and is not directly comparable to the values in the raw image array
-    :param min_spot_sep: (sz, sxy) minimum spot separation between different beads, in pixels
-    :param filter_sigma_small: (sz, sy, sx) sigmas of Gaussian filter used to smooth image, in pixels
-    :param filter_sigma_large: (sz, sy, sx) sigmas of Gaussian filter used to removed background, in pixels
-     :param sigma_bounds: ((sz_min, sxy_min), (sz_max, sxy_max)) in pixels. exclude fits with sigmas that fall outside
+    :param min_spot_sep: (sz, sxy) minimum spot separation between different beads in um
+    :param filter_sigma_small: (sz, sy, sx) sigmas of Gaussian filter used to smooth image in um
+    :param filter_sigma_large: (sz, sy, sx) sigmas of Gaussian filter used to removed background in um
+     :param sigma_bounds: ((sz_min, sxy_min), (sz_max, sxy_max)) in um. exclude fits with sigmas that fall outside
     these ranges
-    :param roi_size_loc: (sz, sy, sx) size of ROI to used in localization, in pixels
+    :param roi_size_loc: (sz, sy, sx) size of ROI to used in localization, in um
     :param float fit_amp_thresh: only consider spots which have fit values larger tha this amplitude
     :param dist_boundary_min:
     :param fit_dist_max_err:
     :param int num_localizations_to_plot: number of ROI's to plot
     :param tuple psf_percentiles: calculate the averaged PSF from the smallest supplied percentage of spots. When
     a tuple is given, compute PSF's corresponding to each supplied percentage.
-    :param bool plot: whether or not to plot
+    :param bool plot: optionally plot diagnostics
+    :param bool only_plot_good_fits: when plotting ROI, plot only fits that passed all filtering tests or plot all fits
+    :param bool plot_filtered_image: plot ROI's against filtered image also
     :param float gamma: gamma to use when plotting
-    :param str save_dir:
+    :param str save_dir: directory to save diagnostic plots. If None, these will not be saved
     :param figsize: (sx, sy)
     :param **kwargs: passed through to plt.figure()
 
-    :return coords, fit_params, init_params, rois, to_keep, conditions, condition_names, filter_settings,\
+    :return coords, fit_params, init_params, rois, \
+           to_keep, conditions, condition_names, filter_settings,\
+           fit_states, chi_sqrs, niters, \
            psfs_real, psf_coords, otfs_real, otf_coords, psf_percentiles, fit_params_real:
     """
 
@@ -1402,44 +1495,17 @@ def autofit_psfs(imgs, psf_roi_size, dx, dz, wavelength, ni=1.5, model='vectoria
             os.mkdir(save_dir)
 
     # ###################################
-    # convert spot-finding parameters from pixels to distnace units
-    # ###################################
-    min_spot_sep = list(copy.deepcopy(min_spot_sep))
-    min_spot_sep[0] = min_spot_sep[0] * dz
-    min_spot_sep[1] = min_spot_sep[1] * dx
-
-    filter_sigma_small = list(copy.deepcopy(filter_sigma_small))
-    filter_sigma_small[0] = filter_sigma_small[0] * dz
-    filter_sigma_small[1] = filter_sigma_small[1] * dx
-    filter_sigma_small[2] = filter_sigma_small[2] * dx
-
-    filter_sigma_large = list(copy.deepcopy(filter_sigma_large))
-    filter_sigma_large[0] = filter_sigma_large[0] * dz
-    filter_sigma_large[1] = filter_sigma_large[1] * dx
-    filter_sigma_large[2] = filter_sigma_large[2] * dx
-
-    sigma_bounds = list(copy.deepcopy(sigma_bounds))
-    sigma_bounds[0] = list(sigma_bounds[0])
-    sigma_bounds[1] = list(sigma_bounds[1])
-    sigma_bounds[0][0] = sigma_bounds[0][0] * dz
-    sigma_bounds[0][1] = sigma_bounds[0][1] * dx
-    sigma_bounds[1][0] = sigma_bounds[1][0] * dz
-    sigma_bounds[1][1] = sigma_bounds[1][1] * dx
-
-    roi_size_loc = list(copy.deepcopy(roi_size_loc))
-    roi_size_loc[0] = roi_size_loc[0] * dz
-    roi_size_loc[1] = roi_size_loc[1] * dx
-    roi_size_loc[2] = roi_size_loc[2] * dx
-
-    # ###################################
     # do localization
     # ###################################
     z, y, x = get_coords(imgs.shape, (dz, dx, dx))
 
-    coords, fit_params, init_params, rois, to_keep, conditions, condition_names, filter_settings = \
+    coords, fit_params, init_params, rois,\
+    to_keep, conditions, condition_names, filter_settings,\
+    fit_states, chi_sqrs, niters, imgs_filtered = \
         localize_beads(imgs, dx, dz, threshold, roi_size_loc, filter_sigma_small, filter_sigma_large,
-                                min_spot_sep, sigma_bounds, fit_amp_thresh, fit_dist_max_err=fit_dist_max_err,
-                                dist_boundary_min=dist_boundary_min, use_gpu_filter=False)
+                       min_spot_sep, sigma_bounds, fit_amp_thresh, fit_dist_max_err=fit_dist_max_err,
+                       dist_boundary_min=dist_boundary_min, max_nfit_iterations=max_number_iterations,
+                       use_gpu_filter=use_gpu_filter)
 
     no_psfs_found = not np.any(to_keep)
     if no_psfs_found:
@@ -1448,12 +1514,38 @@ def autofit_psfs(imgs, psf_roi_size, dx, dz, wavelength, ni=1.5, model='vectoria
     # ###################################
     # plot individual localizations
     # ###################################
-    ind_to_plot = np.arange(len(to_keep), dtype=int)[to_keep][:num_localizations_to_plot]
-    results = joblib.Parallel(n_jobs=-1, verbose=10, timeout=None)(
-        joblib.delayed(plot_gauss_roi)(fit_params[ind], rois[ind], imgs, coords, init_params[ind],
-                                                figsize=figsize, prefix="localization_roi_%d" % ind, save_dir=save_dir)
-        for ind in ind_to_plot
-    )
+    if plot:
+        print("plotting ROI's")
+        tstart_plot_roi = time.perf_counter()
+
+        if only_plot_good_fits:
+            ind_to_plot = np.arange(len(to_keep), dtype=int)[to_keep][:num_localizations_to_plot]
+        else:
+            ind_to_plot = np.arange(len(to_keep), dtype=int)[:num_localizations_to_plot]
+
+        results = joblib.Parallel(n_jobs=-1, verbose=10, timeout=None)(
+            joblib.delayed(plot_gauss_roi)(fit_params[ind], rois[ind], imgs, coords, init_params[ind],
+                                           figsize=figsize,
+                                           prefix="localization_roi_%d" % ind,
+                                           title="filter conditions = " + " ".join(
+                                                ["%d," % c for c in conditions[ind]]),
+                                           save_dir=save_dir)
+            for ind in ind_to_plot
+        )
+
+        if plot_filtered_image:
+            results = joblib.Parallel(n_jobs=-1, verbose=10, timeout=None)(
+                joblib.delayed(plot_gauss_roi)(fit_params[ind], rois[ind], imgs_filtered, coords,
+                                               init_params[ind], same_color_scale=False,
+                                               figsize=figsize,
+                                               prefix="localization_roi_%d_filtered" % ind,
+                                               title="filter conditions = " + " ".join(
+                                                    ["%d," % c for c in conditions[ind]]),
+                                               save_dir=save_dir)
+                for ind in ind_to_plot
+            )
+
+        print("plotting took %0.2fs" % (time.perf_counter() - tstart_plot_roi))
 
     # ###################################
     # plot fit statistics
@@ -1470,7 +1562,10 @@ def autofit_psfs(imgs, psf_roi_size, dx, dz, wavelength, ni=1.5, model='vectoria
     # get and plot experimental PSFs
     # ###################################
     nps = len(psf_percentiles)
-    psfs_real = np.zeros((nps,) + tuple(psf_roi_size))
+    psf_roi_size_pix = np.round(np.array(psf_roi_size) / np.array([dz, dx, dx])).astype(int)
+    psf_roi_size_pix += (1 - np.mod(psf_roi_size_pix, 2))
+
+    psfs_real = np.zeros((nps,) + tuple(psf_roi_size_pix))
     otfs_real = np.zeros(psfs_real.shape, dtype=complex)
     fit_params_real = np.zeros((nps, 6))
     psf_coords = None
@@ -1508,13 +1603,17 @@ def autofit_psfs(imgs, psf_roi_size, dx, dz, wavelength, ni=1.5, model='vectoria
     # plot localization positions
     # ###################################
     if plot and not no_psfs_found:
-        centers = np.stack((fit_params[:, 3][to_keep] / dz,
-                            fit_params[:, 2][to_keep] / dx,
-                            fit_params[:, 1][to_keep] / dx), axis=1)
+        centers_all = np.stack((fit_params[:, 3],
+                                fit_params[:, 2],
+                                fit_params[:, 1]), axis=1)
 
-        figh = plot_bead_locations(imgs, centers, weights=fit_params[:, 4], cbar_labels=["sigma"],
-                                            title="Max intensity projection and NA from 2D fit versus position",
-                                            figsize=figsize, **kwargs)
+        extent = [x.min() - 0.5 * dx, x.max() + 0.5 * dx, y.max() + 0.5 * dx, y.min() - 0.5 * dx]
+
+        figh = plot_bead_locations(imgs, [centers_all, centers_all[to_keep]],
+                                   weights=[np.ones(len(centers_all)), fit_params[to_keep, 4]],
+                                   cbar_labels=["all fits", r"kept fits, $\sigma_{xy} (\mu m)$"],
+                                   title="Max intensity projection and size from 2D fit versus position",
+                                   extent=extent, gamma=gamma, figsize=figsize)
 
         if saving:
             fname = os.path.join(save_dir, "sigma_versus_position.png")
@@ -1525,6 +1624,7 @@ def autofit_psfs(imgs, psf_roi_size, dx, dz, wavelength, ni=1.5, model='vectoria
         data = {"coords": coords, "fit_params": fit_params, "init_params": init_params,
                 "rois": rois, "to_keep": to_keep, "conditions": conditions,
                 "condition_names": condition_names, "filter_settings": filter_settings,
+                "fit_states": fit_states, "chi_sqrs": chi_sqrs, "niterations": niters,
                 "psfs_real": psfs_real, "psf_coords": psf_coords, "otfs_real": otfs_real, "otf_coords": otf_coords,
                 "psf_percentiles": psf_percentiles, "fit_params_real": fit_params_real}
 
@@ -1532,5 +1632,7 @@ def autofit_psfs(imgs, psf_roi_size, dx, dz, wavelength, ni=1.5, model='vectoria
         with open(fname, "wb") as f:
             pickle.dump(data, f)
 
-    return coords, fit_params, init_params, rois, to_keep, conditions, condition_names, filter_settings, \
+    return coords, fit_params, init_params, rois, \
+           to_keep, conditions, condition_names, filter_settings,\
+           fit_states, chi_sqrs, niters, \
            psfs_real, psf_coords, otfs_real, otf_coords, psf_percentiles, fit_params_real
