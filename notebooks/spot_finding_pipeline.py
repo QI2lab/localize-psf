@@ -2,13 +2,14 @@
 """
 Pipeline to find spot in a single non-skewed xyz image tile.
 The global plan is:
-  - spot detection working on single non-skewed tile, no GPU, no multiprocess, no coordinates change, no file handling
-    - extract single ct xyz tile with spots
-  - add multiple tiles (x, y, z vary), "stich" results with orthogonal change of coordinates
-  - add multiple time steps, channels (need different parameters per channel)
-  - add Dask support per xyztc tile and merge results
-  - add GPU support per tile? Manage conflict with multi-processes tile handling.
-  - add support for skewed tiles
+  - [x] spot detection working on single non-skewed tile, no GPU, no multiprocess, no coordinates change, no file handling
+    - [x] extract single ct xyz tile with spots
+  - [x] add multiple tiles (x, y, z vary), "stich" results with orthogonal change of coordinates
+  - [ ] add multiple time steps, channels (need different parameters per channel)
+  - [x] add Dask support per xyztc tile and merge results
+  - [ ] add GPU support per tile? Manage conflict with multi-processes tile handling.
+  - [ ] add support for skewed tiles
+    - [ ] extract tilted tile
 """
 
 # %%
@@ -51,7 +52,7 @@ from image_post_processing import deskew
 # ### Extract data
 
 # %%
-dir_load = Path('../../../from_server')
+dir_load = Path('../../../from_server/example_image_deskewed')
 round = 1
 channel = 2
 tile = 0
@@ -1328,7 +1329,7 @@ client.close()
 # %% [markdown]
 # We need a method to autoatically select the best parameters combination to filter spots.  
 # That requires a performance metrics.  
-# We can first match spots that are within a given distance (related to PSF), we can use one distance for the xy plane, and another one for the z axis. We will need to adapt that for tilted configuration. Points can ne only matched to a single other point, select the closest one.
+# We can first match spots that are within a given distance (related to PSF), we can use one distance for the xy plane, and another one for the z axis. We will need to adapt that for tilted configuration. Points can be only matched to a single other point, select the closest one.
 # Then can compute true and false positives and negatives.
 
 # %%
@@ -1468,5 +1469,14 @@ def match_spots(ref, target, thresh_z=15, thresh_xy=5):
     matched_ids_single, target_single = remove_multiple_links(matched_ids, target, dist_z, dist_xy)
     return matched_ids_single, target_single
 
+def evaluate_spot_detection_performance(nb_ref, nb_pred, matched_ids):
+
+    # matched_ids is contained in the sets of ref spots and pred spots.
+    TP = len(matched_ids)
+    FP = nb_pred - len(matched_ids)
+    FN = nb_ref - len(matched_ids)
+    
+    F1 = TP / (TP + 0.5 * (FP + FN))
+    return F1
 
 # %%
