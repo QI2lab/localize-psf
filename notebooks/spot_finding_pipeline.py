@@ -9,7 +9,7 @@ The global plan is:
   - [x] add Dask support per xyztc tile and merge results
   - [ ] add GPU support per tile? Manage conflict with multi-processes tile handling.
   - [ ] add support for skewed tiles
-    - [ ] extract tilted tile
+    - [x] extract tilted tile
 """
 
 # %%
@@ -26,6 +26,7 @@ import time
 import os
 import sys
 import joblib
+import gc
 
 from tifffile import tifffile
 import zarr
@@ -33,7 +34,7 @@ import dask.array as da
 from dask_image.imread import imread
 from dask import delayed
 from skimage.io.collection import alphanumeric_key
-import pycromanager
+from pycromanager import Dataset
 import napari
 from napari.qt.threading import thread_worker
 from magicgui import magicgui
@@ -47,6 +48,9 @@ from localize_psf import localize
 import localize_skewed
 import image_post_processing as ipp
 from image_post_processing import deskew
+
+# %% [markdown]
+# ## On single deskewed tile
 
 # %% [markdown]
 # ### Extract data
@@ -1479,4 +1483,557 @@ def evaluate_spot_detection_performance(nb_ref, nb_pred, matched_ids):
     F1 = TP / (TP + 0.5 * (FP + FN))
     return F1
 
+
+# %% [markdown]
+# We will implement the automated parameters selection in the future, the priority is detecting spots in the native tilted plane.
+
+# %% [markdown]
+# ## Spot detection in tilted plane
+
+# %% [markdown]
+# ### Extract data
+
 # %%
+def open_NDTiff(path_dataset, channels=None, z_levels=None, squeeze=True):
+    """
+    Open an NDTiff image.
+
+    Parameters
+    ----------
+    path_dataset : str
+        Path of the image.
+    channels : None or list(int)
+        If None, load all channels, else load a list of channels.
+    z_levels : None or array
+        If None, load all z slices, else load a list of slices.
+    
+    Returns:
+    img : ndarray
+        A numpy ndimage.
+    """
+
+    dataset = Dataset(path_dataset)
+    # use metadata to guess how to load the image
+    meta = dataset.axes
+    c = np.array([x for x in meta['c']])  # array([1, 2, 3])
+    chan = np.array([x for x in meta['channel']])
+    if chan.size == 1:
+        chan_dict = {x: chan[0] for x in c}
+    elif chan.size == c.size:
+        shift = int(np.unique(c.min() - chan))
+        chan_dict = {c[i]: chan[i] for i in range(len(c))}
+    else:
+        raise("`c` and `channel` don't match.")
+    
+    if z_levels is None:
+        z_levels = np.array([x for x in meta['z']])
+
+    # load one image to get more info
+    sample = dataset.read_image(z=int(np.median(z_levels)), c=c[0], channel=chan_dict[c[0]])
+    nb_z = z_levels.size
+    nb_y, nb_x = sample.shape
+
+    # iterativelly load all z planes of all channels
+    if channels is None:
+        channels = list(c) # convert to list for downstream compatibility
+    else:
+        # detect what could go wrong
+        if isinstance(channels, int):
+            channels = [channels]
+        warn_channels = [x for x in channels if x not in c]
+        if len(warn_channels) > 0:
+            print("WARNING these channels are not in the dataset:")
+            print(warn_channels)
+        channels = [x for x in channels if x in c]
+        if len(channels) == 0:
+            print("WARNING there is no requested channel in the dataset, returning")
+            return
+    nb_ch = len(channels)
+    img = np.zeros((nb_ch, nb_z, nb_y, nb_x), dtype=sample.dtype)
+    for i, channel_id in enumerate(channels):
+        print("    channel id: {}".format(channel_id))
+        for z_id, z in enumerate(z_levels):
+            img[i, z_id, :, :] = dataset.read_image(z=z, c=channel_id, channel=chan_dict[channel_id])
+    
+    if squeeze:
+        img = np.squeeze(img)
+    return img
+
+
+# %%
+dir_load = Path('../../../from_server/example_image_tilted')
+path_im = dir_load / '16plex_lung_r0000_y0000_z0001_1'
+
+channel = [2]
+
+start_x = 1200
+start_y = 900
+size_xy = 512
+
+img = open_NDTiff(
+    path_im.as_posix(),
+    channels=channel,
+    squeeze=True)
+
+# np.squeeze in open_NDTiff exchanged z and y axes
+img = np.swapaxes(img, 0, 1)
+print(img.shape)
+img = img[:, start_y:start_y+size_xy, start_x:start_x+size_xy]
+mini = img.min()
+maxi = img.max()
+
+# %%
+viewer = napari.Viewer()
+# viewer.add_image(img_high_pass, name='img_high_pass')
+# viewer.add_image(img_low_pass, name='img_low_pass')
+viewer.add_image(img, name='img')
+
+# %%
+from localize_psf import data_io
+
+scan_data_path = dir_load / "scan_metadata.csv"
+scan_data = data_io.read_metadata(scan_data_path)
+
+nt = scan_data["num_t"]
+nyp = scan_data["y_pixels"]
+nxp = scan_data["x_pixels"]
+dc = scan_data["pixel_size"] / 1000
+dstage = scan_data["scan_step"] / 1000
+theta = scan_data["theta"] * np.pi / 180
+normal = np.array([0, -np.sin(theta), np.cos(theta)])  # normal of camera pixel
+
+num_r = scan_data['num_r']
+num_y = scan_data['num_y']
+num_z = scan_data['num_z']
+num_ch = scan_data['num_ch']
+num_images = scan_data['scan_axis_positions']
+excess_images = scan_data['excess_scan_positions']
+nimgs_per_vol = num_images + excess_images
+
+# trapezoid volume
+volume_um3 = (dstage * nimgs_per_vol) * (dc * np.sin(theta) * nyp) * (dc * nxp)
+
+# ###############################
+# load/set parameters for all datasets
+# ###############################
+chunk_size_planes = 1000
+chunk_size_x = 300
+# chunk_size_planes = 300
+# chunk_size_x = 150
+chunk_overlap = 10
+channel_to_use = [False, True, True]
+excitation_wavelengths = np.array([0.488, 0.561, 0.635])
+emission_wavelengths = np.array([0.515, 0.600, 0.680])
+thresholds = np.array([np.nan, 100, 25])
+fit_thresholds = np.array([np.nan, 100, 25])
+na = 1.
+ni = 1.4
+
+# %% [markdown]
+# ### DoG filter
+
+# %%
+ch = 2
+# Peter's code
+
+# sigma_xy = 0.22 * emission_wavelengths[ch] / na
+# sigma_z = np.sqrt(6) / np.pi * ni * emission_wavelengths[ch] / na ** 2
+sigma_xy = psf.na2sxy(na, emission_wavelengths[ch])
+sigma_z = psf.na2sz(na, emission_wavelengths[ch], ni)
+
+# difference of gaussian filer
+filter_sigma_small = (0.5 * sigma_z, 0.25 * sigma_xy, 0.25 * sigma_xy)
+filter_sigma_large = (3 * sigma_z, 3 * sigma_xy, 3 * sigma_xy)
+# fit roi size
+roi_size = (5 * sigma_z, 12 * sigma_xy, 12 * sigma_xy)
+# assume points closer together than this come from a single bead
+min_spot_sep = (3 * sigma_z, 3 * sigma_xy)
+# exclude points with sigmas outside these ranges
+sigmas_min = (0.25 * sigma_z, 0.25 * sigma_xy)
+sigmas_max = (3 * sigma_z, 4 * sigma_xy)
+
+# %%
+print(f"  - dc: {np.round(dc, 3)}  ")
+print(f"  - theta: {np.round(theta, 3)}  ")
+print(f"  - dstage: {np.round(dstage, 3)}  ")
+print(f"  - sigma_xy: {np.round(sigma_xy, 3)}  ")
+print(f"  - sigma_z: {np.round(sigma_z, 3)}  ")
+print(f"  - sigma_xy_small: {np.round(sigmas_min[1], 3)}  ")
+print(f"  - sigma_xy_large: {np.round(sigmas_max[1], 3)}  ")
+print(f"  - sigma_z_small: {np.round(sigmas_min[0], 3)}  ")
+print(f"  - sigma_z_large: {np.round(sigmas_max[0], 3)}  ")
+
+# %%
+ks = localize_skewed.get_filter_kernel_skewed(filter_sigma_small, dc, theta, dstage, sigma_cutoff=2)
+kl = localize_skewed.get_filter_kernel_skewed(filter_sigma_large, dc, theta, dstage, sigma_cutoff=2)
+# imgs_hp = localize.filter_convolve(img, ks, use_gpu=True)
+# imgs_lp = localize.filter_convolve(img, kl, use_gpu=True)
+imgs_hp = localize.filter_convolve(img, np.flip(np.swapaxes(ks, 0, 1), axis=0), use_gpu=True)
+imgs_lp = localize.filter_convolve(img, np.flip(np.swapaxes(kl, 0, 1), axis=0), use_gpu=True)
+imgs_filtered = imgs_hp - imgs_lp
+
+# %%
+
+viewer = napari.Viewer()
+# viewer.add_image(ks, name='kernel small', colormap='green', blending='additive')
+# viewer.add_image(kl, name='kernel large', colormap='red', blending='additive')
+# viewer.add_image(np.flip(kl, axis=1), name='kernel large flipped', colormap='blue', blending='additive')
+# viewer.add_image(np.swapaxes(kl, 0, 1), name='kernel large swap 0-1', blending='additive')
+viewer.add_image(np.flip(np.swapaxes(ks, 0, 1), axis=0), name='kernel small swap 0-1 flip 0', blending='additive')  # that's the good one!
+viewer.add_image(np.flip(np.swapaxes(kl, 0, 1), axis=0), name='kernel large swap 0-1 flip 0', blending='additive')  # that's the good one!
+# but the big kernel looks really big compared to tilted spots
+viewer.add_image(img, name='img', blending='additive')
+viewer.add_image(imgs_filtered, name='imgs_filtered')
+
+# %%
+# Choose by hand size of spots
+
+# size of spots in pixels
+sx = sy = 0.7
+sz = 2
+# FWHM = 2.355 x sigma
+sigma_xy = sx / 2.355
+sigma_z = sz / 2.355
+# to reproduce LoG with Dog we need sigma_big = 1.6 * sigma_small
+sigma_xy_small = sigma_xy / 1.6**(1/2)
+sigma_xy_large = sigma_xy * 1.6**(1/2)
+sigma_z_small = sigma_z / 1.6**(1/2)
+sigma_z_large = sigma_z * 1.6**(1/2)
+
+filter_sigma_small = (sigma_z_small, sigma_xy_small, sigma_xy_small)
+filter_sigma_large = (sigma_z_large, sigma_xy_large, sigma_xy_large)
+
+print(f"  - sx: {np.round(sx, 3)}  ")
+print(f"  - sz: {np.round(sz, 3)}  ")
+print(f"  - sigma_xy: {np.round(sigma_xy, 3)}  ")
+print(f"  - sigma_z: {np.round(sigma_z, 3)}  ")
+print(f"  - sigma_xy_small: {np.round(sigma_xy_small, 3)}  ")
+print(f"  - sigma_xy_large: {np.round(sigma_xy_large, 3)}  ")
+print(f"  - sigma_z_small: {np.round(sigma_z_small, 3)}  ")
+print(f"  - sigma_z_large: {np.round(sigma_z_large, 3)}  ")
+
+# %%
+# Using Peter's functions for spot size, but with
+# standard DoG parameters
+
+# Peter's function
+sigma_xy = psf.na2sxy(na, emission_wavelengths[ch])
+sigma_z = psf.na2sz(na, emission_wavelengths[ch], ni)
+# to reproduce LoG with Dog we need sigma_big = 1.6 * sigma_small
+sigma_xy_small = sigma_xy / 1.6**(1/2)
+sigma_xy_large = sigma_xy * 1.6**(1/2)
+sigma_z_small = sigma_z / 1.6**(1/2)
+sigma_z_large = sigma_z * 1.6**(1/2)
+
+filter_sigma_small = (sigma_z_small, sigma_xy_small, sigma_xy_small)
+filter_sigma_large = (sigma_z_large, sigma_xy_large, sigma_xy_large)
+
+print(f"  - sigma_xy: {np.round(sigma_xy, 3)}  ")
+print(f"  - sigma_z: {np.round(sigma_z, 3)}  ")
+print(f"  - sigma_xy_small: {np.round(sigma_xy_small, 3)}  ")
+print(f"  - sigma_xy_large: {np.round(sigma_xy_large, 3)}  ")
+print(f"  - sigma_z_small: {np.round(sigma_z_small, 3)}  ")
+print(f"  - sigma_z_large: {np.round(sigma_z_large, 3)}  ")
+
+# %%
+# pixel_sizes = 2# / 0.115
+# dstage = .4
+
+# kernel_small = localize_skewed.get_filter_kernel_skewed(filter_sigma_small, pixel_sizes, theta, dstage=dstage, sigma_cutoff=3)
+# kernel_large = localize_skewed.get_filter_kernel_skewed(filter_sigma_large, pixel_sizes, theta, dstage=dstage, sigma_cutoff=3)
+kernel_small = localize_skewed.get_filter_kernel_skewed(filter_sigma_small, dc, theta, dstage, sigma_cutoff=3)
+kernel_large = localize_skewed.get_filter_kernel_skewed(filter_sigma_large, dc, theta, dstage, sigma_cutoff=3)
+kernel_small = np.flip(np.swapaxes(kernel_small, 0, 1), axis=0)
+kernel_large = np.flip(np.swapaxes(kernel_large, 0, 1), axis=0)
+
+
+viewer = napari.Viewer()
+viewer.add_image(kernel_small, name='kernel small', colormap='green', blending='additive')
+viewer.add_image(kernel_large, name='kernel large', colormap='red', blending='additive')
+viewer.add_image(img, name='img', blending='additive')
+
+# # %%Can we skip the second convulotion with an "normalized" kernel?
+# im_fct = scipy.signal.fftconvolve(img, kernel_small, mode="same") / scipy.signal.fftconvolve(np.ones(img.shape), kernel_small, mode="same")
+# kernel_small_normalized = kernel_small - kernel_small.mean()
+# im_normalized = scipy.signal.fftconvolve(img, kernel_small_normalized, mode="same")
+
+
+# viewer = napari.Viewer()
+# viewer.add_image(im_fct, name='im_fct')
+# viewer.add_image(im_normalized, name='im_normalized')
+
+# %%
+# img_high_pass = localize.filter_convolve(img, kernel_small, use_gpu=False)
+# img_low_pass = localize.filter_convolve(img, kernel_large, use_gpu=False)
+img_high_pass = localize.filter_convolve(img, np.flip(kernel_small, axis=1), use_gpu=False)
+img_low_pass = localize.filter_convolve(img, np.flip(kernel_large, axis=1), use_gpu=False)
+img_filtered = img_high_pass - img_low_pass
+del img_high_pass
+del img_low_pass
+gc.collect()
+# %%
+viewer = napari.Viewer()
+# viewer.add_image(img_high_pass, name='img_high_pass')
+# viewer.add_image(img_low_pass, name='img_low_pass')
+# viewer.add_image(img, name='img')
+viewer.add_image(img_filtered, name='img_filtered')
+# %% [markdown]
+# Original tilted image appear to have empty spaces, or 0 layers, between xy planes.  
+# That impairs DoG, need to fix it, otherwise that will also impair peak finding and spot fitting.
+
+# %% [markdown]
+# ### Threshold DoG and local max
+
+# %%
+# threshold found with Napari
+dog_thresh = 336
+img_filtered[img_filtered < dog_thresh] = 0
+
+# %%
+# footprint = localize.get_max_filter_footprint(min_separations=min_separations, drs=pixel_sizes)
+# # fit roi size
+roi_size = (5 * sigma_z, 12 * sigma_xy, 12 * sigma_xy)
+# # assume points closer together than this come from a single bead
+min_spot_sep = np.array((3 * sigma_z, 3 * sigma_xy))
+dz_min, dxy_min = min_spot_sep
+footprint = localize_skewed.get_skewed_footprint((dz_min, dxy_min, dxy_min), dc, dstage, theta)
+# min_separations = footprint.shape # (10, 3, 3)
+# array of size nz, ny, nx of True
+
+# %%
+# we could remove the thresholding within each find_peak_candidates call
+# no: ndimage.maximum_filter returns same image size with real values, need image == im_max
+# thus need to filter with threshold to avoid zeros or low values
+# TODO: use gradient on whole image could speed up global process
+centers_guess_inds, amps = localize.find_peak_candidates(img_filtered, footprint, threshold=dog_thresh, use_gpu_filter=False)
+
+# %%
+centers_guess_inds
+
+# %%
+viewer = napari.Viewer()
+viewer.add_image(img, name='img')
+viewer.add_image(img_filtered, name='img_filtered')
+viewer.add_points(centers_guess_inds, name='local maxis', blending='additive', size=3, face_color='r')
+
+# %% [markdown]
+# ### Fit gaussian
+
+# %%
+print("roi small:", kernel_small.shape)
+print("roi large:", kernel_large.shape)
+
+# %%
+# fit_roi_sizes = np.array([1.3, 1, 1]) * np.array([sz, sy, sx])
+fit_roi_sizes = 4 * np.array(kernel_small.shape) #np.array([sz, sy, sx])
+# This method gives ROIs orthogonal to spots:
+# roi_size_realspace = (5 * sigma_z, 12 * sigma_xy, 12 * sigma_xy)
+# fit_roi_sizes = np.array(localize_skewed.get_skewed_roi_size(roi_size_realspace, theta, dc, dstage, ensure_odd=True))
+# min_fit_roi_sizes = fit_roi_sizes * 0.7
+min_fit_roi_sizes = fit_roi_sizes * 0.5
+
+
+# average multiple points too close together
+# quite long and not so efficient to fuse points
+# either discard or tweak parameters
+roi_coords, roi_sizes = get_roi_coordinates(
+    centers = centers_guess_inds, 
+    sizes = fit_roi_sizes, 
+    max_coords_val = np.array(img.shape) - 1, 
+    min_sizes = [0, 0, 0],
+)
+centers_guess = roi_coords[:, 0, :] + (roi_sizes / 2)
+centers_guess = centers_guess.astype(int)
+inds = np.ravel_multi_index(centers_guess.transpose(), img_filtered.shape)
+weights = imgs_filtered.ravel()[inds]
+# weights = img_filtered[centers_guess]
+centers_guess, inds_comb = localize.filter_nearby_peaks(centers_guess, dxy_min, dz_min, weights=weights,
+                                                        mode="average")
+
+amps = amps[inds_comb]
+print("Found %d points separated by dxy > %0.5g and dz > %0.5g" %
+      (len(centers_guess), dxy_min, dz_min))
+
+# %%
+centers_guess
+
+# %%
+roi_coords, roi_sizes = get_roi_coordinates(
+    centers = centers_guess_inds, 
+    sizes = fit_roi_sizes, 
+    max_coords_val = np.array(img.shape) - 1, 
+    min_sizes = min_fit_roi_sizes,
+)
+nb_rois = roi_coords.shape[0]
+
+# %%
+nb_rois
+
+# %%
+viewer = napari.Viewer()
+viewer.add_image(img, name='img')
+viewer.add_image(img_filtered, name='img_filtered')
+viewer.add_points(roi_coords[:, 0, :], name='ROI start', blending='additive', size=3, face_color='r')
+viewer.add_points(roi_coords[:, 1, :], name='ROI end', blending='additive', size=3, face_color='g')
+
+# %%
+# viewer = napari.Viewer()
+# # all_rois = np.stack(extract_ROI(img, roi_coords[i]) for i in range(nb_rois))
+# # viewer.add_image(all_rois, name='all rois')
+# for i in range(nb_rois):
+#     roi = extract_ROI(img, roi_coords[i])
+#     viewer.add_image(roi, name=f'roi {i}', blending='additive')
+
+
+# %%
+im_fitted = img
+viewer = napari.Viewer()
+for i in range(20):
+    roi = extract_ROI(im_fitted, roi_coords[i])
+    viewer.add_image(roi, name=f'roi {i}', visible=False)
+
+# %%
+i = 6
+# im_fitted = img_high_pass - img_low_pass
+im_fitted = img
+
+roi = extract_ROI(im_fitted, roi_coords[i])
+# roi_gauss = extract_ROI(img_high_pass, roi_coords[i])
+
+viewer = napari.Viewer()
+viewer.add_image(roi, name=f'roi {i}')
+# viewer.add_image(roi_gauss, name='roi gauss')
+
+# %%
+# centers_guess = (roi_sizes / 2)
+centers_guess = roi_sizes / 2
+
+# %%
+init_params = np.array([
+    amps[i], 
+    centers_guess[i, 2],
+    centers_guess[i, 1],
+    centers_guess[i, 0],
+    sigma_xy, 
+    sigma_z, 
+    roi.min(),
+])
+print(init_params)
+
+# %% [markdown]
+# Do we finally use `get_roi_mask` to set to 0 or minimum of image the corners of the ROI?
+
+# %%
+# theta already defined as 30 * np.pi / 180
+
+fit_results = localize.fit_gauss_roi(
+    roi, 
+    (localize.get_coords(roi_sizes[i], drs=[1, 1, 1])), 
+    init_params,
+#     estimator="LSE",
+#     model="gaussian",
+    sf=1, 
+    dc=dc, 
+    angles=(0., theta, 0.),
+#     use_gpu=False,
+)
+fit_results
+
+# %%
+amplitude, center_x, center_y, center_z, sigma_xy, sigma_z, offset = fit_results['fit_params']
+
+# %%
+viewer = napari.Viewer()
+viewer.add_image(roi, name='roi')
+viewer.add_image(roi_gauss, name='roi gauss')
+viewer.add_points([center_z, center_y, center_x], name='fitted center', blending='additive', size=2, face_color='r')
+
+# %%
+# # using img_high_pass or img_filtered gives really bad results
+# # I'd like to understand why fitted centered are all shifted
+# im_fitted = img #img_high_pass - img_low_pass # img
+
+# fit_results_rois = np.zeros((nb_rois, 8))
+# for i in range(nb_rois):
+#     # extract ROI
+#     roi = extract_ROI(im_fitted, roi_coords[i])
+#     # fit gaussian in ROI
+#     init_params = np.array([
+#         amps[i], 
+#         centers_guess[i, 2],
+#         centers_guess[i, 1],
+#         centers_guess[i, 0],
+#         sigma_xy, 
+#         sigma_z, 
+#         roi.min(),
+#     ])
+#     fit_results_roi = localize.fit_gauss_roi(
+#         roi, 
+#         (localize.get_coords(roi_sizes[i], drs=[1, 1, 1])), 
+#         init_params,
+#     )
+#     # amplitude, center_x, center_y, center_z, sigma_xy, sigma_z, offset
+#     fit_results_rois[i, :7] = fit_results_roi['fit_params']
+#     fit_results_rois[i, 7] = fit_results_roi['chi_squared']
+# # add origin coordinates of each ROI
+# centers = fit_results_rois[:, 1:4] + roi_coords[:, 0, :]
+
+# %%
+# using img_high_pass or img_filtered gives really bad results
+# I'd like to understand why fitted centered are all shifted
+im_fitted = img #img_high_pass - img_low_pass # img
+
+amplitudes = []
+centers = []
+sigmas = []
+chi_squareds = []
+all_res = []
+for i in range(nb_rois):
+    # extract ROI
+    roi = extract_ROI(im_fitted, roi_coords[i])
+    # fit gaussian in ROI
+    init_params = np.array([
+        amps[i], 
+        centers_guess[i, 2],
+        centers_guess[i, 1],
+        centers_guess[i, 0],
+        sigma_xy, 
+        sigma_z, 
+        roi.min(),
+    ])
+    fit_results = localize.fit_gauss_roi(
+        roi, 
+        (localize.get_coords(roi_sizes[i], drs=[1, 1, 1])), 
+        init_params,
+        fixed_params=np.full_like(init_params, False),
+    )
+    amplitude, center_x, center_y, center_z, sigma_xy, sigma_z, offset = fit_results['fit_params']
+    amplitudes.append(amplitude)
+    centers.append([center_z, center_y, center_x])
+    sigmas.append([sigma_xy, sigma_z])
+    chi_squareds.append(fit_results['chi_squared'])
+    all_res.append(fit_results['fit_params'])
+#     print(fit_results)
+# add origin coordinates of each ROI
+centers = np.array(centers) + roi_coords[:, 0, :]
+
+# %%
+np.array(all_res)[:,-4:]
+# np.array(all_res)[:,:4]
+
+# %%
+viewer = napari.Viewer()
+viewer.add_image(img, name='img')
+viewer.add_image(img_filtered, name='img_filtered')
+# viewer.add_image(im_fitted, name='im_fitted')
+viewer.add_points(centers_guess_inds, name='local maxis', blending='additive', size=3, face_color='r')
+viewer.add_points(centers, name='fitted centers', blending='additive', size=3, face_color='g')
+# viewer.add_points(centers, name='fitted centers', blending='additive', size=3, face_color=chi_squareds, face_colormap=cmap); # napari colormap doesn't work
+# viewer.add_points(centers, name='fitted centers chi squared', blending='additive', size=3, face_color=chi_colors)
+# viewer.add_points(centers, name='fitted centers sigma xy', blending='additive', size=3, face_color=sigma_xy_colors)
+
+# %% [markdown]
+# ## End
+
+# %%
+gc.collect()
