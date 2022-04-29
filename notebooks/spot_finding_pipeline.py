@@ -1561,24 +1561,35 @@ def open_NDTiff(path_dataset, channels=None, z_levels=None, squeeze=True):
 
 
 # %%
-dir_load = Path('../../../from_server/example_image_tilted')
-path_im = dir_load / '16plex_lung_r0000_y0000_z0001_1'
+dir_load = Path('../../../from_server/example_image_tilted_z0')
+path_im = dir_load / '16plex_lung_r0000_y0000_z0000_1'
 
 channel = [2]
 
-start_x = 1200
-start_y = 900
-size_xy = 512
-
-img = open_NDTiff(
+im = open_NDTiff(
     path_im.as_posix(),
     channels=channel,
     squeeze=True)
-
+print(im.shape)
 # np.squeeze in open_NDTiff exchanged z and y axes
-img = np.swapaxes(img, 0, 1)
-print(img.shape)
-img = img[:, start_y:start_y+size_xy, start_x:start_x+size_xy]
+# im = np.swapaxes(im, -3, -2)
+# print(im.shape)
+
+# %%
+start_x = 800
+start_y = 1500
+start_z = 0
+size_x = 512
+size_y = 800
+size_z = 256
+
+# There is a difference of definition between z and y for the microscope and for python:
+# tilted xy images are aquired while the stage is moving
+# successive images are stacked in a third "z" dimension
+# but in the physical space this is the y direction, the physical z is the y axis of the image
+
+# img = im[start_z:start_z+size_z, start_y:start_y+size_y, start_x:start_x+size_x]
+img = im[start_y:start_y+size_y, start_z:start_z+size_z, start_x:start_x+size_x]
 mini = img.min()
 maxi = img.max()
 
@@ -1736,6 +1747,87 @@ print(f"  - sigma_z_small: {np.round(sigma_z_small, 3)}  ")
 print(f"  - sigma_z_large: {np.round(sigma_z_large, 3)}  ")
 
 # %%
+from importlib import reload
+reload(localize_skewed)
+
+
+# %%
+def get_filter_kernel_skewed(sigmas, dc, theta, dstage, sigma_cutoff=2):
+    pixel_sizes = (dc, dc, dc)
+    kernel = localize.get_filter_kernel(sigmas, pixel_sizes, sigma_cutoff)
+    kernel = ipp.deskew(kernel, theta, distance=dstage, pixel_size=dc)
+    return kernel
+
+
+# %%
+# filtering
+def get_filter_kernel_skewed(sigmas, dc, theta, dstage, sigma_cutoff=2):
+    """
+    Get gaussian filter convolution kernel in skewed coordinates
+
+    :param sigmas: (sz, sy, sx) in the same units as dc and stage
+    :param dc: pixel size
+    :param theta: angle in radians
+    :param dstage: stage step
+    :param sigma_cutoff: number of standard deviations to include in the filter. This parameter determines the fitler size
+    :return kernel:
+    """
+    # normalize everything to camera pixel size
+    sigma_x_pix = sigmas[2] / dc
+    sigma_y_pix = sigmas[2] / dc
+    sigma_z_pix = sigmas[0] / dc
+    nk_x = 2 * int(np.round(sigma_x_pix * sigma_cutoff)) + 1
+    nk_y = 2 * int(np.round(sigma_y_pix * sigma_cutoff)) + 1
+    nk_z = 2 * int(np.round(sigma_z_pix * sigma_cutoff)) + 1
+    # determine how large the OPM geometry ROI needs to be to fit the desired filter
+    roi_sizes = get_skewed_roi_size([nk_z, nk_y, nk_x], theta, 1, dstage / dc, ensure_odd=True)
+
+    # get coordinates to evaluate kernel at
+    xk, yk, zk = get_skewed_coords(roi_sizes, 1, dstage / dc, theta)
+    xk = xk - np.mean(xk)
+    yk = yk - np.mean(yk)
+    zk = zk - np.mean(zk)
+
+    kernel = np.exp(-xk ** 2 / 2 / sigma_x_pix ** 2 - yk ** 2 / 2 / sigma_y_pix ** 2 - zk ** 2 / 2 / sigma_z_pix ** 2)
+    kernel = kernel / np.sum(kernel)
+
+    return kernel
+
+
+# %%
+sigmas = filter_sigma_small
+sigma_cutoff = 3
+
+# normalize everything to camera pixel size
+sigma_x_pix = sigmas[2] / dc
+sigma_y_pix = sigmas[2] / dc
+sigma_z_pix = sigmas[0] / dc
+print('sigma_x_pix:', sigma_x_pix)
+print('sigma_y_pix:', sigma_y_pix)
+print('sigma_z_pix:', sigma_z_pix)
+nk_x = 2 * int(np.round(sigma_x_pix * sigma_cutoff)) + 1
+nk_y = 2 * int(np.round(sigma_y_pix * sigma_cutoff)) + 1
+nk_z = 2 * int(np.round(sigma_z_pix * sigma_cutoff)) + 1
+print('nk_x:', nk_x)
+print('nk_y:', nk_y)
+print('nk_z:', nk_z)
+# determine how large the OPM geometry ROI needs to be to fit the desired filter
+roi_sizes = localize_skewed.get_skewed_roi_size([nk_z, nk_y, nk_x], theta, 1, dstage / dc, ensure_odd=True)
+print('roi_sizes:', roi_sizes)
+
+# get coordinates to evaluate kernel at
+xk, yk, zk = localize_skewed.get_skewed_coords(roi_sizes, 1, dstage / dc, theta)
+print('xk shape:', xk.shape)
+print('yk shape:', yk.shape)
+print('zk shape:', zk.shape)
+# xk = xk - np.mean(xk)
+# yk = yk - np.mean(yk)
+# zk = zk - np.mean(zk)
+
+# %%
+zk.shape
+
+# %%
 # pixel_sizes = 2# / 0.115
 # dstage = .4
 
@@ -1743,13 +1835,23 @@ print(f"  - sigma_z_large: {np.round(sigma_z_large, 3)}  ")
 # kernel_large = localize_skewed.get_filter_kernel_skewed(filter_sigma_large, pixel_sizes, theta, dstage=dstage, sigma_cutoff=3)
 kernel_small = localize_skewed.get_filter_kernel_skewed(filter_sigma_small, dc, theta, dstage, sigma_cutoff=3)
 kernel_large = localize_skewed.get_filter_kernel_skewed(filter_sigma_large, dc, theta, dstage, sigma_cutoff=3)
-kernel_small = np.flip(np.swapaxes(kernel_small, 0, 1), axis=0)
-kernel_large = np.flip(np.swapaxes(kernel_large, 0, 1), axis=0)
+# kernel_small = get_filter_kernel_skewed(filter_sigma_small, dc, theta, dstage, sigma_cutoff=3)
+# kernel_large = get_filter_kernel_skewed(filter_sigma_large, dc, theta, dstage, sigma_cutoff=3)
+# print(kernel_large.sum())
+# kernel_small = np.flip(np.swapaxes(kernel_small, 0, 1), axis=0)
+# kernel_large = np.flip(np.swapaxes(kernel_large, 0, 1), axis=0)
+kernel_small = np.flip(kernel_small, axis=0)
+kernel_large = np.flip(kernel_large, axis=0)
 
+# pixel_sizes = (dc, dc, dc)
+# kernel_small_straight = localize.get_filter_kernel(filter_sigma_small, pixel_sizes, sigma_cutoff=2)
+# kernel_large_straight = localize.get_filter_kernel(filter_sigma_large, pixel_sizes, sigma_cutoff=2)
 
 viewer = napari.Viewer()
 viewer.add_image(kernel_small, name='kernel small', colormap='green', blending='additive')
 viewer.add_image(kernel_large, name='kernel large', colormap='red', blending='additive')
+viewer.add_image(kernel_small_straight, name='kernel small traight', colormap='green', blending='additive')
+viewer.add_image(kernel_large_straight, name='kernel large traight', colormap='red', blending='additive')
 viewer.add_image(img, name='img', blending='additive')
 
 # # %%Can we skip the second convulotion with an "normalized" kernel?
@@ -1762,11 +1864,112 @@ viewer.add_image(img, name='img', blending='additive')
 # viewer.add_image(im_fct, name='im_fct')
 # viewer.add_image(im_normalized, name='im_normalized')
 
+# %% [markdown]
+# #### Make hand tilted gaussian
+
 # %%
-# img_high_pass = localize.filter_convolve(img, kernel_small, use_gpu=False)
-# img_low_pass = localize.filter_convolve(img, kernel_large, use_gpu=False)
-img_high_pass = localize.filter_convolve(img, np.flip(kernel_small, axis=1), use_gpu=False)
-img_low_pass = localize.filter_convolve(img, np.flip(kernel_large, axis=1), use_gpu=False)
+pixel_sizes = (dc, dc, dc)
+sigmas_small = np.array(filter_sigma_small)
+sigmas_large = np.array(filter_sigma_large)
+kernel_small_straight = localize.get_filter_kernel(sigmas_small, pixel_sizes, sigma_cutoff=3)
+kernel_large_straight = localize.get_filter_kernel(sigmas_large, pixel_sizes, sigma_cutoff=3)
+kernel_small_tilted = scipy.ndimage.rotate(kernel_small_straight, angle=30, axes=(1, 0), reshape=True)
+kernel_large_tilted = scipy.ndimage.rotate(kernel_large_straight, angle=30, axes=(1, 0), reshape=True)
+
+viewer = napari.Viewer()
+viewer.add_image(kernel_small_tilted, name='kernel small tilted', colormap='green', blending='additive')
+viewer.add_image(kernel_large_tilted, name='kernel large tilted', colormap='red', blending='additive')
+viewer.add_image(img, name='img', blending='additive')
+
+# %% [markdown]
+# Need to take into account stage displacement, which "elongates" the image in one direction.
+
+# %%
+dilation_coef = dstage / dc
+dilation_matrix = np.diag([dilation_coef, 1, 1])
+
+kernel_small_dilated = scipy.ndimage.affine_transform(kernel_small_tilted, dilation_matrix)
+kernel_large_dilated = scipy.ndimage.affine_transform(kernel_large_tilted, dilation_matrix)
+
+viewer = napari.Viewer()
+viewer.add_image(kernel_small_tilted, name='kernel small tilted', colormap='green', blending='additive')
+viewer.add_image(kernel_large_tilted, name='kernel large tilted', colormap='red', blending='additive')
+viewer.add_image(kernel_small_dilated, name='kernel small dilated', colormap='bop blue', blending='additive')
+viewer.add_image(kernel_large_dilated, name='kernel large dilated', colormap='bop orange', blending='additive')
+viewer.add_image(img, name='img', blending='additive')
+
+
+# %% [markdown]
+# The gaussian match the spots' size and orientation, but now we have again this pattern after the shear transformation.  
+# We may need to generate a gaussian with a bigger sigma_z and rotate it by a higher angle to have an equivalent kernel, but without stripes.
+
+# %%
+def shear_sigma_theta(sigma_0, theta_0, coef):
+    """
+    Compute new hypothenuse and angle given by sigma and theta
+    after dilating the opposite side of theta by a coefficient.
+    """
+    # side that is elongated
+    L0 = sigma_0 * np.sin(theta_0)
+    # angle contacting the hypothenuse, opposite to sheared side.
+    d = sigma_0 * np.cos(theta_0)
+    # elongated side
+    L1 = coef * L0
+    # elongated hypothenuse
+    sigma_1 = (L1**2 + d**2)**0.5
+    # new angle
+    theta_1 = np.arcsin(L1 / sigma_1)
+    
+    return sigma_1, theta_1
+
+
+# %%
+1 / np.sin(30/180*np.pi)
+
+# %%
+# need fator of more or less 1.5 to match closer the tilt of spots
+dilation_coef = dstage / dc / np.sin(30/180*np.pi) # * 1.5
+sigma_z_small_elongated, theta_elongated = shear_sigma_theta(filter_sigma_small[0], theta, dilation_coef)
+sigma_z_large_elongated, _ = shear_sigma_theta(filter_sigma_large[0], theta, dilation_coef)
+
+theta_elongated = np.abs(theta_elongated * 180 / np.pi)
+print(f"dilation_coef: {dilation_coef}")
+print(f"theta_elongated: {theta_elongated}")
+
+# %%
+# naive tilt
+kernel_small_straight = localize.get_filter_kernel(sigmas_small, pixel_sizes, sigma_cutoff=3)
+kernel_large_straight = localize.get_filter_kernel(sigmas_large, pixel_sizes, sigma_cutoff=3)
+kernel_small_raw_tilted = scipy.ndimage.rotate(kernel_small_straight, angle=30, axes=(1, 0), reshape=True)
+kernel_large_raw_tilted = scipy.ndimage.rotate(kernel_large_straight, angle=30, axes=(1, 0), reshape=True)
+
+# shear
+sigmas_small_elongated = np.array(sigmas_small)
+sigmas_small_elongated[0] = sigma_z_small_elongated
+sigmas_large_elongated = np.array(sigmas_large)
+sigmas_large_elongated[0] = sigma_z_large_elongated
+
+kernel_small_straight = localize.get_filter_kernel(sigmas_small_elongated, pixel_sizes, sigma_cutoff=3)
+kernel_large_straight = localize.get_filter_kernel(sigmas_large_elongated, pixel_sizes, sigma_cutoff=3)
+kernel_small_tilted = scipy.ndimage.rotate(kernel_small_straight, angle=theta_elongated, axes=(1, 0), reshape=True)
+kernel_large_tilted = scipy.ndimage.rotate(kernel_large_straight, angle=theta_elongated, axes=(1, 0), reshape=True)
+
+viewer = napari.Viewer()
+viewer.add_image(kernel_small_raw_tilted, name='kernel small raw tilted', colormap='green', blending='additive')
+viewer.add_image(kernel_large_raw_tilted, name='kernel large raw tilted', colormap='red', blending='additive')
+viewer.add_image(kernel_small_tilted, name='kernel small tilted', colormap='bop blue', blending='additive')
+viewer.add_image(kernel_large_tilted, name='kernel large tilted', colormap='bop orange', blending='additive')
+viewer.add_image(img, name='img', blending='additive')
+
+# %%
+kernel_small = kernel_small_tilted
+kernel_large = kernel_large_tilted
+
+# %%
+img_high_pass = localize.filter_convolve(img, kernel_small, use_gpu=False)
+img_low_pass = localize.filter_convolve(img, kernel_large, use_gpu=False)
+# img_high_pass = localize.filter_convolve(img, np.flip(kernel_small, axis=1), use_gpu=False)
+# img_low_pass = localize.filter_convolve(img, np.flip(kernel_large, axis=1), use_gpu=False)
 img_filtered = img_high_pass - img_low_pass
 del img_high_pass
 del img_low_pass
@@ -1775,7 +1978,7 @@ gc.collect()
 viewer = napari.Viewer()
 # viewer.add_image(img_high_pass, name='img_high_pass')
 # viewer.add_image(img_low_pass, name='img_low_pass')
-# viewer.add_image(img, name='img')
+viewer.add_image(img, name='img')
 viewer.add_image(img_filtered, name='img_filtered')
 # %% [markdown]
 # Original tilted image appear to have empty spaces, or 0 layers, between xy planes.  
@@ -1786,7 +1989,7 @@ viewer.add_image(img_filtered, name='img_filtered')
 
 # %%
 # threshold found with Napari
-dog_thresh = 336
+dog_thresh = 3
 img_filtered[img_filtered < dog_thresh] = 0
 
 # %%
@@ -1797,18 +2000,35 @@ roi_size = (5 * sigma_z, 12 * sigma_xy, 12 * sigma_xy)
 min_spot_sep = np.array((3 * sigma_z, 3 * sigma_xy))
 dz_min, dxy_min = min_spot_sep
 footprint = localize_skewed.get_skewed_footprint((dz_min, dxy_min, dxy_min), dc, dstage, theta)
+print(footprint.shape)
 # min_separations = footprint.shape # (10, 3, 3)
 # array of size nz, ny, nx of True
+
+# %%
+viewer = napari.Viewer()
+viewer.add_image(np.flip(footprint, axis=0), name='footprint', blending='additive')
+viewer.add_image(kernel_small_raw_tilted, name='kernel small raw tilted', colormap='green', blending='additive')
+viewer.add_image(kernel_large_raw_tilted, name='kernel large raw tilted', colormap='red', blending='additive')
+viewer.add_image(kernel_small_tilted, name='kernel small tilted', colormap='bop blue', blending='additive')
+viewer.add_image(kernel_large_tilted, name='kernel large tilted', colormap='bop orange', blending='additive')
+viewer.add_image(img, name='img', blending='additive')
+
+# %% [markdown]
+# The footprint needs to be flipped.  
+# It's a big one, maybe try a smaller one latter.
 
 # %%
 # we could remove the thresholding within each find_peak_candidates call
 # no: ndimage.maximum_filter returns same image size with real values, need image == im_max
 # thus need to filter with threshold to avoid zeros or low values
 # TODO: use gradient on whole image could speed up global process
-centers_guess_inds, amps = localize.find_peak_candidates(img_filtered, footprint, threshold=dog_thresh, use_gpu_filter=False)
+centers_guess_inds, amps = localize.find_peak_candidates(img_filtered, np.flip(footprint, axis=0), threshold=dog_thresh, use_gpu_filter=False)
 
 # %%
 centers_guess_inds
+
+# %%
+print(centers_guess_inds.shape)
 
 # %%
 viewer = napari.Viewer()
@@ -1820,17 +2040,20 @@ viewer.add_points(centers_guess_inds, name='local maxis', blending='additive', s
 # ### Fit gaussian
 
 # %%
+roi_size_realspace = (5 * sigma_z, 12 * sigma_xy, 12 * sigma_xy)
+fit_roi_sizes = np.array(localize_skewed.get_skewed_roi_size(roi_size_realspace, theta, dc, dstage, ensure_odd=True))
 print("roi small:", kernel_small.shape)
 print("roi large:", kernel_large.shape)
+print("Peter's fit_roi_sizes:", fit_roi_sizes)
 
 # %%
 # fit_roi_sizes = np.array([1.3, 1, 1]) * np.array([sz, sy, sx])
-fit_roi_sizes = 4 * np.array(kernel_small.shape) #np.array([sz, sy, sx])
+fit_roi_sizes = 1 * np.array(kernel_small.shape) #np.array([sz, sy, sx])
 # This method gives ROIs orthogonal to spots:
 # roi_size_realspace = (5 * sigma_z, 12 * sigma_xy, 12 * sigma_xy)
 # fit_roi_sizes = np.array(localize_skewed.get_skewed_roi_size(roi_size_realspace, theta, dc, dstage, ensure_odd=True))
 # min_fit_roi_sizes = fit_roi_sizes * 0.7
-min_fit_roi_sizes = fit_roi_sizes * 0.5
+min_fit_roi_sizes = fit_roi_sizes * 0.75
 
 
 # average multiple points too close together
@@ -1845,7 +2068,7 @@ roi_coords, roi_sizes = get_roi_coordinates(
 centers_guess = roi_coords[:, 0, :] + (roi_sizes / 2)
 centers_guess = centers_guess.astype(int)
 inds = np.ravel_multi_index(centers_guess.transpose(), img_filtered.shape)
-weights = imgs_filtered.ravel()[inds]
+weights = img_filtered.ravel()[inds]
 # weights = img_filtered[centers_guess]
 centers_guess, inds_comb = localize.filter_nearby_peaks(centers_guess, dxy_min, dz_min, weights=weights,
                                                         mode="average")
