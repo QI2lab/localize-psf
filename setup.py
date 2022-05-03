@@ -16,7 +16,7 @@ required_pkgs = ['numpy',
 # optional required packages
 # e.g. `pip install -e .[gpu]`
 extras = {'gpu': ['cupy'], # todo: also need to include https://github.com/QI2lab/Gpufit with extras['gpu']
-          'psfmodels': ['psfmodels @ git+https://git@github.com/tlambert03/PSFmodels-py@master#egg=psfmodels'] # often have trouble installing this, so make optional
+          'psfmodels': ['psfmodels @ git+https://git@github.com/tlambert03/PSFmodels-py@main#egg=psfmodels'] # often have trouble installing this, so make optional
           }
 
 setup(
