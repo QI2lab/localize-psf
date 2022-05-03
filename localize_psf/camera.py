@@ -19,7 +19,7 @@ def adc2photons(img, gain_map, background_map):
     return photons
 
 
-def simulated_img(ground_truth, gains, offsets, readout_noise_sds, psf=None, photon_shot_noise=True, bin_size=1):
+def simulated_img(ground_truth, gains, offsets, readout_noise_sds, psf=None, photon_shot_noise=True, bin_size=1, apodization=1):
     """
     Convert ground truth image to simulated camera image including the effects of
     photon shot noise and camera readout noise.
@@ -39,7 +39,7 @@ def simulated_img(ground_truth, gains, offsets, readout_noise_sds, psf=None, pho
 
     # optional blur image with PSF
     if psf is not None:
-        img_blurred = fit_psf.blur_img_psf(ground_truth, psf)
+        img_blurred = fit_psf.blur_img_psf(ground_truth, psf, apodization=apodization).real
     else:
         img_blurred = ground_truth
 
@@ -47,7 +47,8 @@ def simulated_img(ground_truth, gains, offsets, readout_noise_sds, psf=None, pho
     img_blurred[img_blurred < 0] = 0
 
     # resample image by binning
-    img_blurred = bin(img_blurred, (1, bin_size, bin_size), mode='sum')
+    bin_size_list = (1,) * (img_blurred.ndim - 2) + (bin_size, bin_size)
+    img_blurred = bin(img_blurred, bin_size_list, mode='sum')
 
     # add shot noise
     if photon_shot_noise:

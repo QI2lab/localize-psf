@@ -29,7 +29,7 @@ except ImportError:
     psfmodels_available = False
 
 
-def blur_img_otf(ground_truth, otf):
+def blur_img_otf(ground_truth, otf, apodization=1):
     """
     Blur image with OTF
 
@@ -37,13 +37,13 @@ def blur_img_otf(ground_truth, otf):
     :param otf: optical transfer function evalated at the FFT frequencies (with f=0 near the center of the array)
     :return img_blurred:
     """
-    gt_ft = fft.fftshift(fft.fft2(fft.ifftshift(ground_truth)))
-    img_blurred = fft.fftshift(fft.ifft2(fft.ifftshift(gt_ft * otf)))
+    gt_ft = fft.fftshift(fft.fftn(fft.ifftshift(ground_truth)))
+    img_blurred = fft.fftshift(fft.ifftn(fft.ifftshift(gt_ft * otf * apodization)))
 
     return img_blurred
 
 
-def blur_img_psf(ground_truth, psf):
+def blur_img_psf(ground_truth, psf, apodization):
     """
     Blur image with PSF
 
@@ -54,7 +54,7 @@ def blur_img_psf(ground_truth, psf):
     # todo: allow PSF of different size than image
     otf, _ = psf2otf(psf)
 
-    return blur_img_otf(ground_truth, otf)
+    return blur_img_otf(ground_truth, otf, apodization)
 
 
 # tools for converting between different otf/psf representations
