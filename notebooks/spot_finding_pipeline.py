@@ -40,6 +40,8 @@ from napari.qt.threading import thread_worker
 from magicgui import magicgui
 # from matplotlib.colors import PowerNorm, LinearSegmentedColormap, Normalize
 from tiler import Tiler
+from tysserand import tysserand as ty
+# from mosna import mosna as mo
 
 import localize_psf.rois as roi_fns
 from localize_psf import fit
@@ -85,7 +87,7 @@ maxi = img.max()
 
 # %% [markdown]
 # ### Parameters from Peter's code
-#
+# 
 # Code is:
 # ```python                   
 # ###############################
@@ -95,7 +97,7 @@ maxi = img.max()
 # sigma_z = np.sqrt(6) / np.pi * ni * emission_wavelengths[ch] / na ** 2
 # sigma_xy = psf.na2sxy(na, emission_wavelengths[ch])
 # sigma_z = psf.na2sz(na, emission_wavelengths[ch], ni)
-#
+# 
 # difference of gaussian filer
 # filter_sigma_small = (0.5 * sigma_z, 0.25 * sigma_xy, 0.25 * sigma_xy)
 # filter_sigma_large = (3 * sigma_z, 3 * sigma_xy, 3 * sigma_xy)
@@ -107,7 +109,7 @@ maxi = img.max()
 # sigmas_min = (0.25 * sigma_z, 0.25 * sigma_xy)
 # sigmas_max = (3 * sigma_z, 4 * sigma_xy)
 # ```
-#
+# 
 # With na=1.0 and ni=1.4  
 # For ch 0:  
 #     - emission_wavelengths: 0.515  
@@ -119,7 +121,7 @@ maxi = img.max()
 #     - min_spot_sep: [1.686 0.368]  
 #     - sigmas_min: [0.141 0.031]  
 #     - sigmas_max: [1.686 0.491]  
-#
+# 
 # For ch 1:  
 #     - emission_wavelengths: 0.6  
 #     - sigma_xy: 0.143  
@@ -130,7 +132,7 @@ maxi = img.max()
 #     - min_spot_sep: [1.965 0.429]  
 #     - sigmas_min: [0.164 0.036]  
 #     - sigmas_max: [1.965 0.572]  
-#
+# 
 # For ch 2:  
 #     - emission_wavelengths: 0.68  
 #     - sigma_xy: 0.162  
@@ -141,7 +143,8 @@ maxi = img.max()
 #     - min_spot_sep: [2.227 0.486]  
 #     - sigmas_min: [0.186 0.04 ]  
 #     - sigmas_max: [2.227 0.648]  
-#
+# 
+
 # %% [markdown]
 # ### DoG filter
 
@@ -161,6 +164,7 @@ sigma_z_large = sigma_z * 1.6**(1/2)
 
 filter_sigma_small = (sigma_z_small, sigma_xy_small, sigma_xy_small)
 filter_sigma_large = (sigma_z_large, sigma_xy_large, sigma_xy_large)
+
 # %%
 print(f"  - sx: {np.round(sx, 3)}  ")
 print(f"  - sz: {np.round(sz, 3)}  ")
@@ -180,7 +184,7 @@ kernel_large = localize.get_filter_kernel(filter_sigma_large, pixel_sizes, sigma
 # viewer.add_image(kernel_small, name='kernel small', colormap='green', blending='additive')
 # viewer.add_image(kernel_large, name='kernel large', colormap='red', blending='additive')
 
-# # %%Can we skip the second convulotion with an "normalized" kernel?
+# %%Can we skip the second convulotion with an "normalized" kernel?
 # im_fct = scipy.signal.fftconvolve(img, kernel_small, mode="same") / scipy.signal.fftconvolve(np.ones(img.shape), kernel_small, mode="same")
 # kernel_small_normalized = kernel_small - kernel_small.mean()
 # im_normalized = scipy.signal.fftconvolve(img, kernel_small_normalized, mode="same")
@@ -195,6 +199,7 @@ kernel_large = localize.get_filter_kernel(filter_sigma_large, pixel_sizes, sigma
 img_high_pass = localize.filter_convolve(img, kernel_small, use_gpu=False)
 img_low_pass = localize.filter_convolve(img, kernel_large, use_gpu=False)
 img_filtered = img_high_pass - img_low_pass
+
 # %%
 
 viewer = napari.Viewer()
@@ -202,6 +207,7 @@ viewer.add_image(img_high_pass, name='img_high_pass')
 viewer.add_image(img_low_pass, name='img_low_pass')
 viewer.add_image(img, name='img')
 viewer.add_image(img_filtered, name='img_filtered')
+
 # %% [markdown]
 # ### Threshold DoG and local max
 
@@ -217,11 +223,12 @@ footprint = localize.get_max_filter_footprint(min_separations=min_separations, d
 # array of size nz, ny, nx of True
 
 # %%
+# to test:
 # maxis = scipy.ndimage.maximum_filter(img_filtered, footprint)
-maxis = scipy.ndimage.maximum_filter(img_filtered, footprint=np.ones(min_separations))
+# maxis = scipy.ndimage.maximum_filter(img_filtered, footprint=np.ones(min_separations))
 
 # %%
-np.unique(maxis)
+# np.unique(maxis)
 
 # %%
 footprint.shape
@@ -242,6 +249,512 @@ viewer.add_image(img, name='img')
 viewer.add_image(img_filtered, name='img_filtered')
 viewer.add_points(centers_guess_inds, name='local maxis', blending='additive', size=3, face_color='r')
 
+# %% [markdown]
+# ### Merge peaks
+
+# %% [markdown]
+# Here there is not multiple local maxima per spot, so we will make some artificially.
+
+# %%
+nb_peaks = len(centers_guess_inds)
+sampled_peaks = centers_guess_inds[np.random.choice(nb_peaks, size=int(1.5 * nb_peaks))]
+max_shift_z = 20
+max_shift_xy = 5
+nb_samples = len(sampled_peaks)
+z_shifts = np.random.choice(np.arange(-max_shift_z, max_shift_z+1), size=(nb_samples, 1))#.reshape((nb_samples, -1))
+xy_shifts = np.random.choice(np.arange(-max_shift_xy, max_shift_xy+1), size=(nb_samples, 2))
+peaks_shift = np.hstack([z_shifts, xy_shifts])
+shifted_samples = sampled_peaks + peaks_shift
+centers_guess_inds_duplic = np.vstack([centers_guess_inds, shifted_samples])
+
+# make sure new spots are not out of the image
+for i in range(3):
+    centers_guess_inds_duplic[centers_guess_inds_duplic[:, i] < 0, i] = 0
+    centers_guess_inds_duplic[centers_guess_inds_duplic[:, i] >= img.shape[i], i] = img.shape[i] -1 
+
+# %%
+viewer = napari.Viewer()
+viewer.add_image(img, name='img')
+viewer.add_points(centers_guess_inds, name='local maxis', blending='additive', size=3, face_color='r')
+viewer.add_points(centers_guess_inds_duplic, name='centers_guess_inds_duplic', blending='additive', size=3, face_color='g')
+
+# %% [markdown]
+# #### Peaks merging functions
+
+# %% [markdown]
+# The idea is to not loop through all peaks, and compute for each of them the distances with all other peaks, but instead build a kNN or radial distance graph.  
+# Then we will compute distances along the z axis and in the xy plane, and use 2 distance thresholds to define peaks that are 'nearby'.  
+# Then we cut the graph: we trim edges between non nearby peaks.  
+# Then we merge peaks that are in the same connected cluster.   
+# 
+# kNN graph may be problematic, as we may choose a too low k producing oversplit clusters, for instance if 2 pairs of points are in the same spot, but within each pair distances are smaller than across pairs, and we took k=1.  
+# Thus we will use the radial distance method, taking the longest distance, the one along the z axis, to build an over connected graph that we will then cut with the bi-distance criterion.
+
+# %%
+def compute_distances(source, target, method='xy_z_orthog', dist_fct='euclidian', tilt_vector=None):
+    """
+    Parameters
+    ----------
+    source : ndarray
+        Coordinates of the first set of points.
+    target : ndarray
+        Coordinates of the second set of points.
+    method : str
+        Method used to compute distances. If 'xyz', standard distances are computed considering all axes
+        simultaneously. If 'xy_z_orthog' 2 distances are computed, for the xy pkane and along the z axis 
+        respectively. If 'xy_z_tilted' 2 distances are computed for the tilted plane and  its normal axis.
+    
+    Example
+    -------
+    >>> source = np.array([[0, 0, 0], [1, 0, 0], [0, 1, 0]])
+    >>> target = np.array([[0, 0, 0], [-3, 0, 2], [0, 0, 10]])
+    >>> distance(source, target)
+        (array([0, 4, 0]), array([0., 2., 5.]))
+    >>> distance(source, target, dist_fct='L1')
+        (array([0, 4, 0]), array([0, 2, 7]))
+    
+    """
+    if method == 'xyz':
+        if dist_fct == 'euclidian':
+            dist = np.sqrt(np.sum((source - target)**2, axis=1))
+        elif dist_fct == 'L1':
+            dist = np.sum((source - target), axis=1)
+        else:
+            dist = dist_fct(source, target, axis=1)
+        return dist
+    elif method == 'xy_z_orthog':
+        if dist_fct == 'euclidian':
+            dist_xy = np.sqrt(np.sum((source[:, 1:] - target[:, 1:])**2, axis=1))
+            dist_z = np.abs(source[:, 0] - target[:, 0])
+        elif dist_fct == 'L1':
+            dist_xy = np.sum(np.abs((source[:, 1:]  - target[:, 1:])), axis=1)
+            dist_z = np.abs(source[:, 0] - target[:, 0])
+        else:
+            dist_xy = dist_fct(source[:, 1:], target[:, 1:], axis=1)
+            dist_z = dist_fct(source[:, 0], target[:, 0])
+        return dist_z, dist_xy
+    elif method == 'xy_z_tilted':
+        raise NotImplementedError("Method 'xy_z_tilted' will be implemented soon")
+
+
+def cut_graph_bidistance(dist_z, dist_xy, max_z, max_xy, pairs=None):
+    """
+    Apply 2 thresholds on distances, along the z axis and in the xy plane,
+    to cut a graph of closest neighbors, i.e. to trim edges.
+
+    Parameters
+    ----------
+    dist_z : array
+        Distances between nodes along the z axis.
+    dist_xy : array
+        Distances between nodes in the xy plane.
+    max_z : float
+        Distance threshold along the z axis.
+    max_xy : float
+        Distance threshold in the xy plane.
+    pairs : ndarray, optionnal
+        Array of pairs of nodes' indices defining the network, of shape nb_nodes x 2.
+        If not None, this array is filtered and returned in addition to the boolean filter.
+    
+    Returns
+    -------
+    select : array
+        Boolean filter used to select pairs of nodes considered as close to each other.
+    filtered_pairs : ndarray
+        Filtered array of pairs of nodes' indices that are close to each other.
+    """
+
+    select = np.logical_and(dist_z <= max_z, dist_xy  <= max_xy)
+    if pairs is not None:
+        filtered_pairs = pairs[select, :]
+        return select, pairs
+    else:
+        return select
+
+
+def find_neighbors(pairs, n):
+    """
+    Return the list of neighbors of a node in a network defined 
+    by edges between pairs of nodes. 
+    
+    Parameters
+    ----------
+    pairs : array_like
+        Pairs of nodes' id that define the network's edges.
+    n : int
+        The node for which we look for the neighbors.
+        
+    Returns
+    -------
+    neigh : array_like
+        The indices of neighboring nodes.
+    """
+    
+    left_neigh = pairs[pairs[:,1] == n, 0]
+    right_neigh = pairs[pairs[:,0] == n, 1]
+    neigh = np.hstack( (left_neigh, right_neigh) ).flatten()
+    
+    return neigh
+
+
+def neighbors_k_order(pairs, n, order):
+    """
+    Return the list of up the kth neighbors of a node 
+    in a network defined by edges between pairs of nodes
+    
+    Parameters
+    ----------
+    pairs : array_like
+        Pairs of nodes' id that define the network's edges.
+    n : int
+        The node for which we look for the neighbors.
+    order : int
+        Max order of neighbors.
+        
+    Returns
+    -------
+    all_neigh : list
+        The list of lists of 1D array neighbor and the corresponding order
+    
+    
+    Examples
+    --------
+    >>> pairs = np.array([[0, 10],
+                        [0, 20],
+                        [0, 30],
+                        [10, 110],
+                        [10, 210],
+                        [10, 310],
+                        [20, 120],
+                        [20, 220],
+                        [20, 320],
+                        [30, 130],
+                        [30, 230],
+                        [30, 330],
+                        [10, 20],
+                        [20, 30],
+                        [30, 10],
+                        [310, 120],
+                        [320, 130],
+                        [330, 110]])
+    >>> neighbors_k_order(pairs, 0, 2)
+    [[array([0]), 0],
+     [array([10, 20, 30]), 1],
+     [array([110, 120, 130, 210, 220, 230, 310, 320, 330]), 2]]
+    """
+    
+    # all_neigh stores all the unique neighbors and their oder
+    all_neigh = [[np.array([n]), 0]]
+    unique_neigh = np.array([n])
+    
+    for k in range(order):
+        # detected neighbor nodes at the previous order
+        last_neigh = all_neigh[k][0]
+        k_neigh = []
+        for node in last_neigh:
+            # aggregate arrays of neighbors for each previous order neighbor
+            neigh = np.unique(find_neighbors(pairs, node))
+            k_neigh.append(neigh)
+        # aggregate all unique kth order neighbors
+        if len(k_neigh) > 0:
+            k_unique_neigh = np.unique(np.concatenate(k_neigh, axis=0))
+            # select the kth order neighbors that have never been detected in previous orders
+            keep_neigh = np.in1d(k_unique_neigh, unique_neigh, invert=True)
+            k_unique_neigh = k_unique_neigh[keep_neigh]
+            # register the kth order unique neighbors along with their order
+            all_neigh.append([k_unique_neigh, k+1])
+            # update array of unique detected neighbors
+            unique_neigh = np.concatenate([unique_neigh, k_unique_neigh], axis=0)
+        else:
+            break
+        
+    return all_neigh
+
+
+def flatten_neighbors(all_neigh):
+    """
+    Convert the list of neighbors 1D arrays with their order into
+    a single 1D array of neighbors.
+
+    Parameters
+    ----------
+    all_neigh : list
+        The list of lists of 1D array neighbor and the corresponding order.
+
+    Returns
+    -------
+    flat_neigh : array_like
+        The indices of neighboring nodes.
+        
+    Examples
+    --------
+    >>> all_neigh = [[np.array([0]), 0],
+                     [np.array([10, 20, 30]), 1],
+                     [np.array([110, 120, 130, 210, 220, 230, 310, 320, 330]), 2]]
+    >>> flatten_neighbors(all_neigh)
+    array([  0,  10,  20,  30, 110, 120, 130, 210, 220, 230, 310, 320, 330])
+        
+    Notes
+    -----
+    Code from the mosna library https://github.com/AlexCoul/mosna
+    """
+    
+    list_neigh = []
+    for neigh, order in all_neigh:
+        list_neigh.append(neigh)
+    flat_neigh = np.concatenate(list_neigh, axis=0)
+
+    return flat_neigh
+
+
+def merge_nodes(coords, weight):
+    """
+    Merge nodes coordinates by averaging them.
+
+    Parameters
+    ----------
+    coords : ndarray
+        Coordinates of nodes, array of shape nb_nodes x 3.
+    weight : array
+        Weight of nodes for coordinates averaging, 
+        array fo shape nb_nodes x 1.
+
+    Returns
+    -------
+    merged_coords : ndarray
+        Coordinates of merged nodes.
+    
+    Examples
+    --------
+    >>> coords = np.array([[0, 0, 0], [2, -4, 8]])
+    >>> weight = np.array([1, 1]).reshape((len(coords), -1))
+    >>> merge_nodes(coords, weight)
+    array([ 1., -2.,  4.])
+    """
+
+    tot_weight = weight.sum()
+    merged_coords = np.sum(coords * weight, axis=0) / weight.sum()
+    return merged_coords
+
+
+def merge_cluster_nodes(coords, pairs, weights=None, split_big_clust=False, cluster_size=None):
+    """
+    Merge nodes that are in the same connected cluster, for all cluster in a graph.
+
+    Parameters
+    ----------
+    coords : ndarray
+        Coordinates of nodes, array of shape nb_nodes x 3.
+    pairs : ndarray
+        Array of pairs of nodes' indices defining the network, of shape nb_nodes x 2.
+    weight : array
+        Weight of nodes for coordinates averaging. The image intensity at nodes
+        coordinates can be used as weights.
+
+    Returns
+    -------
+    merged_coords : ndarray
+        Coordinates of merged nodes.
+    """
+
+    nb_nodes = len(coords)
+    if weights is None:
+        weights = np.ones(nb_nodes)
+    # make list of nodes indices on which we will iterate
+    iter_nodes = np.arange(nb_nodes)
+    # variable storing new merged coordinates
+    merged_coords = []
+    # for each node, detect all its connected neighbors, even indirectly
+    for i in np.arange(nb_nodes):
+        # check if we have processed all nodes
+        if i >= len(iter_nodes):
+            break
+        else:
+            node_id = iter_nodes[i]
+            detected_neighbors = flatten_neighbors(neighbors_k_order(pairs, node_id, nb_nodes))
+            # delete these coordinates nodes indices to avoid reprocessing the same neighbors
+            select = np.isin(iter_nodes, detected_neighbors, assume_unique=True, invert=True)
+            iter_nodes = iter_nodes[select]
+            # merge nodes coordinates
+            if len(detected_neighbors) == 1:
+                merged_coords.append(coords[node_id])
+            else:
+                # detect if cluster likely contains multiple spots
+                if split_big_clust:
+                    if cluster_size is None:
+                        raise ValueError("`cluster_size` has to be given to split big clusters")
+                    # work on it latter, for now use small distance thresholds
+                    # actually merge peaks
+                    cluster_coords = merge_nodes(coords[detected_neighbors], 
+                                                 weights[detected_neighbors].reshape(-1, 1))
+                else:
+                    cluster_coords = merge_nodes(coords[detected_neighbors], 
+                                                 weights[detected_neighbors].reshape(-1, 1))
+                merged_coords.append(cluster_coords)
+    merged_coords = np.vstack(merged_coords)
+    return merged_coords
+
+
+def filter_nearby_peaks(coords, max_z, max_xy, weight_img=None,
+                        split_big_clust=False, cluster_size=None):
+    """
+    Merge nearby peaks in an image by building a radial distance graph and cutting it given
+    distance thresholds in the xy plane and along the z axis.
+
+    Parameters
+    ----------
+    coords : ndarray
+        Coordinates of nodes, array of shape nb_nodes x 3.
+    max_z : float
+        Distance threshold along the z axis.
+    max_xy : float
+        Distance threshold in the xy plane.
+    weight_img : ndarray
+        Image used to find peaks, now used to weight peaks coordinates during merge.
+        If None, equal weight is given to peaks coordinates.
+    split_big_clust : bool
+        If True, cluster big enough to contain multiple objects of interest (like spots)
+        are split into sub-clusters.
+    cluster_size : list | array
+        The threshold z and x/y size of clusters above which they are split.
+    
+    Returns
+    -------
+    merged_coords : ndarray
+        The coordinates of merged peaks.
+    """
+
+    # build the radial distance network using the bigest radius: max distance along z axis
+    pairs = ty.build_rdn(coords=coords, r=max_z)
+    source = coords[pairs[:, 0]]
+    target = coords[pairs[:, 1]]
+    # compute the 2 distances arrays
+    dist_z, dist_xy = compute_distances(source, target)
+    # perform grph cut from the 2 distance thresholds
+    _, pairs = cut_graph_bidistance(dist_z, dist_xy, max_z, max_xy, pairs=pairs)
+
+    if weight_img is not None:
+        # need ravel_multi_index to get pixel values of weight_img at several 3D coordinates
+        amplitudes_id = np.ravel_multi_index(coords.transpose(), weight_img.shape)
+        weights = weight_img.ravel()[amplitudes_id]
+    else:
+        weights = None  # array of ones will be generated in merge_cluster_nodes
+    # merge nearby nodes coordinates
+    merged_coords = merge_cluster_nodes(coords, pairs, weights,
+                                        split_big_clust=split_big_clust, 
+                                        cluster_size=cluster_size)
+
+    return merged_coords
+
+
+# %%
+max_z = 10
+max_xy = 3
+pairs = ty.build_rdn(coords=centers_guess_inds_duplic, r=max_z)
+
+# %%
+pairs.shape
+
+# %%
+centers_guess_inds_duplic.shape
+
+# %%
+source = centers_guess_inds_duplic[pairs[:, 0]]
+target = centers_guess_inds_duplic[pairs[:, 1]]
+
+dist_z, dist_xy = compute_distances(source, target)
+
+# %%
+select, pairs = cut_graph_bidistance(dist_z, dist_xy, max_z, max_xy, pairs=pairs)
+print(pairs.shape)
+
+# %%
+viewer = napari.Viewer()
+viewer.add_image(img, name='img')
+viewer.add_points(centers_guess_inds, name='local maxis', blending='additive', size=3, face_color='r')
+viewer.add_points(centers_guess_inds_duplic, name='centers_guess_inds_duplic', blending='additive', size=3, face_color='g')
+
+napari_coords = ty.convert_nodes_tys_to_nap(centers_guess_inds_duplic)
+# napari_edges = ty.convert_edges_tys_to_nap(centers_guess_inds_duplic, pairs)
+
+def make_annotation_dict(coords, pairs=None,
+                         nodes_class=None,
+                         nodes_class_color_mapper=None,
+                         ):
+    """
+    Create a dictionnary of annotations from tysserand network objects.
+    """
+
+    annotations = {}
+    new_nodes = ty.convert_nodes_tys_to_nap(coords)
+    annotations['nodes_coords'] = new_nodes
+    if nodes_class is not None:
+        annotations['nodes_class'] = nodes_class
+    if nodes_class_color_mapper is not None:
+        annotations['nodes_class_color_mapper'] = nodes_class_color_mapper
+    if pairs is not None:
+        annotations['edges_coords'] = pairs # convert_edges_tys_to_nap(new_nodes, pairs)
+    return annotations
+
+# annotations = make_annotation_dict(
+#     napari_coords, pairs=napari_edges,
+# )
+annotations = ty.make_annotation_dict(
+    napari_coords, pairs=pairs,
+)
+ty.add_annotations(viewer, annotations)
+
+# %%
+# need ravel_multi_index to get pixel values of img at several 3D coordinates
+amps_id = np.ravel_multi_index(centers_guess_inds_duplic.transpose(), img.shape)
+amps = img.ravel()[amps_id]
+
+merged_coords = merge_cluster_nodes(centers_guess_inds_duplic, pairs, weights=amps)
+print(merged_coords)
+print(merged_coords.shape)
+
+# %%
+# the function doesn't output pairs, run cells above to get it
+# merged_coords = filter_nearby_peaks(centers_guess_inds_duplic, max_z=15, max_xy=4, weight_img=img)
+
+viewer = napari.Viewer()
+viewer.add_image(img, name='img')
+viewer.add_points(centers_guess_inds, name='local maxis', blending='additive', size=3, face_color='r')
+viewer.add_points(centers_guess_inds_duplic, name='centers_guess_inds_duplic', blending='additive', size=3, face_color='g')
+viewer.add_points(merged_coords, name='merged_coords', blending='additive', size=3, face_color='b')
+
+napari_coords = ty.convert_nodes_tys_to_nap(centers_guess_inds_duplic)
+annotations = ty.make_annotation_dict(
+    napari_coords, pairs=pairs,
+)
+ty.add_edges(viewer, annotations)
+
+# %% [markdown]
+# ### Try Peter's function
+
+# %%
+max_z = 10
+max_xy = 3
+
+# need ravel_multi_index to get pixel values of img at several 3D coordinates
+amps_id = np.ravel_multi_index(centers_guess_inds_duplic.transpose(), img.shape)
+amps = img.ravel()[amps_id]
+
+# %%
+
+centers_merged, inds_comb = localize.filter_nearby_peaks(centers_guess_inds_duplic, max_xy, max_z, weights=amps,
+                                                         mode="average")
+
+amps_merged = amps[inds_comb]
+print("Found %d points separated by dxy > %0.5g and dz > %0.5g" %
+      (len(centers_merged), max_xy, max_z))
+
+# %%
+viewer = napari.Viewer()
+viewer.add_image(img, name='img')
+viewer.add_points(centers_guess_inds, name='local maxis', blending='additive', size=3, face_color='r')
+viewer.add_points(centers_guess_inds_duplic, name='centers_guess_inds_duplic', blending='additive', size=3, face_color='g')
+viewer.add_points(centers_merged, name='centers_merged', blending='additive', size=3, face_color='b')
 
 # %% [markdown]
 # ### Fit gaussian
@@ -315,7 +828,6 @@ def extract_ROI(img, coords):
     roi = img[z0:z1, y0:y1, x0:x1]
     return roi
 
-
 # %%
 # centers = centers_guess_inds
 # size = 2 * np.array([sz, sy, sx])
@@ -366,7 +878,6 @@ viewer.add_points(roi_coords[:, 1, :], name='ROI end', blending='additive', size
 # for i in range(nb_rois):
 #     roi = extract_ROI(img, roi_coords[i])
 #     viewer.add_image(roi, name=f'roi {i}', blending='additive')
-
 
 # %%
 i = 0
@@ -603,7 +1114,6 @@ viewer.add_image(img_filtered, name='img_filtered')
 viewer.add_points(centers_guess_inds, name='local maxis', blending='additive', size=3, face_color='r')
 viewer.add_points(centers, name='fitted centers', blending='additive', size=3, face_color='g')
 
-
 # %% [markdown]
 # Still not perfect, probably need the RANSAC version of it.  
 # But how do we define the most accurate method if it's not with gaussian fitting?...
@@ -684,7 +1194,6 @@ np.arange(start=0, stop=total_size, step=chunk_size)
 print(data[coords[0, 0]: coords[0, 1]])
 print(data[coords[1, 0]: coords[1, 1]])
 
-
 # %%
 tiler = Tiler(
     data_shape=(5, 5),
@@ -732,7 +1241,6 @@ from dask import delayed
 
 client = Client(n_workers=4)
 
-
 # %%
 def sub_function_1(arg=None):
     if arg is None:
@@ -749,7 +1257,6 @@ def global_function(fct, fct_arg=None):
         return fct()
     else:
         return fct(**fct_arg)
-
 
 # %%
 
@@ -999,7 +1506,6 @@ def merge_spots_coords(all_coords):
     """
     return np.vstack(all_coords)
 
-
 # %%
 # size of spots in pixels
 sx = sy = 5
@@ -1047,6 +1553,7 @@ print(rois_coords.shape)
 # %%
 spots_coords = center_method(tile, rois_coords, amps, **center_kwargs)
 print(spots_coords)
+
 # %%
 viewer = napari.Viewer()
 viewer.add_image(img, name='img')
@@ -1107,7 +1614,7 @@ for tile_id, tile in tiler.iterate(img):
 
 tiled_spots_coords =  np.vstack(tiled_spots_coords)
 
-# %% Compare with the monolithic detection
+# %%
 
 # get spots ROIs coordinates in the tile
 rois_coords, amps = roi_method(img, **roi_kwargs)
@@ -1124,13 +1631,14 @@ whole_spots_coords = center_method(img, rois_coords, amps, **center_kwargs)
 # There are 3 more points in  the tilted version, apparently near the overlapping regions. Maybe the DoG is too sensitive to
 # end of tiles. The points can be easily filtered out as they are clearly not on a real spot.
 
-# %% Use Dask
+# %%
 def get_tile_coords_ori(tiler, tile_id):
     return tiler.get_tile_bbox(tile_id=tile_id)[0]
 
 from dask.distributed import Client
 from dask import delayed
-# %% Use Dask
+
+# %%
 nb_cores = os.cpu_count()
 client = Client(n_workers=nb_cores)
 # cluster = LocalCluster(n_workers=4, threads_per_worker=2)
@@ -1152,10 +1660,10 @@ for tile_id, tile in tiler.iterate(img):
 
 aggregated_spots_coords =  delayed(merge_spots_coords)(tiled_spots_coords)
 aggregated_spots_coords.visualize()
+
 # %%
 coords = aggregated_spots_coords.compute()
 client.close()
-
 
 # %%
 coords.shape
@@ -1176,7 +1684,6 @@ filter_params = {
     'filter_chi_squared': 200,
     'filter_dist_center': 3,
 }
-
 
 # %%
 def make_filter_spots(filter_vars, filter_params):
@@ -1229,7 +1736,6 @@ def make_filter_spots(filter_vars, filter_params):
 
 def apply_filter_spots(spots_coords, spot_select):
     return spots_coords[spot_select, :]
-
 
 # %%
 def estimate_center_gauss(img, roi_coords, amps, sigma_xy, sigma_z, return_fit_vars=True):
@@ -1323,7 +1829,6 @@ coords = aggregated_spots_coords.compute()
 print(f'Found {coords.shape[0]} spots')
 client.close()
 
-
 # %%
 # It's working! I just need to select appropriate filter thresholds.
 
@@ -1337,7 +1842,7 @@ client.close()
 # Then can compute true and false positives and negatives.
 
 # %%
-def match_closest_points(ref, target):
+def match_closest_points(ref, target, k=1):
     """
     
     Example
@@ -1351,10 +1856,10 @@ def match_closest_points(ref, target):
     kdt_ref = KDTree(ref)
 
     # closest node id and discard computed distances ('_,')
-    _, matched_ids = kdt_ref.query(x=target, k=1)
+    _, matched_ids = kdt_ref.query(x=target, k=k)
     return matched_ids
 
-def compute_distances(source, target, method='xy_z_flat', dist_fct='euclidian', tilt_vector=None):
+def compute_distances(source, target, method='xy_z_orthog', dist_fct='euclidian', tilt_vector=None):
     """
     Parameters
     ----------
@@ -1364,8 +1869,8 @@ def compute_distances(source, target, method='xy_z_flat', dist_fct='euclidian', 
         Coordinates of the second set of points.
     method : str
         Method used to compute distances. If 'xyz', standard distances are computed considering all axes
-        simultaneously. If 'xy_z_flat' 2 distances are computed, for the xy pkane and along the z axis 
-        respectively. If 'xy_z_tilted' 2 distances are computed for thetilted plane and axis.
+        simultaneously. If 'xy_z_orthog' 2 distances are computed, for the xy pkane and along the z axis 
+        respectively. If 'xy_z_tilted' 2 distances are computed for the tilted plane and  its normal axis.
     
     Example
     -------
@@ -1385,7 +1890,7 @@ def compute_distances(source, target, method='xy_z_flat', dist_fct='euclidian', 
         else:
             dist = dist_fct(source, target, axis=1)
         return dist
-    elif method == 'xy_z_flat':
+    elif method == 'xy_z_orthog':
         if dist_fct == 'euclidian':
             dist_xy = np.sqrt(np.sum((source[:, 1:] - target[:, 1:])**2, axis=1))
             dist_z = np.abs(source[:, 0] - target[:, 0])
@@ -1397,7 +1902,7 @@ def compute_distances(source, target, method='xy_z_flat', dist_fct='euclidian', 
             dist_z = dist_fct(source[:, 0], target[:, 0])
         return dist_z, dist_xy
     elif method == 'xy_z_tilted':
-        pass
+        raise NotImplementedError("Method 'xy_z_tilted' will be implemented soon")
 
 
 def make_counts_array(data, return_all=True):
@@ -1462,7 +1967,7 @@ def match_spots(ref, target, thresh_z=15, thresh_xy=5):
     # match all target points to reference points
     matched_ids = match_closest_points(ref, target)
     # compute separately distances in plane and along z axis
-    dist_z, dist_xy = compute_distances(ref[matched_ids], target, method='xy_z_flat', dist_fct='euclidian')
+    dist_z, dist_xy = compute_distances(ref[matched_ids], target, method='xy_z_orthog', dist_fct='euclidian')
     # threshold on both distances
     select = np.logical_and(dist_z < thresh_z, dist_xy < thresh_xy)
     matched_ids = matched_ids[select]
@@ -1482,7 +1987,6 @@ def evaluate_spot_detection_performance(nb_ref, nb_pred, matched_ids):
     
     F1 = TP / (TP + 0.5 * (FP + FN))
     return F1
-
 
 # %% [markdown]
 # We will implement the automated parameters selection in the future, the priority is detecting spots in the native tilted plane.
@@ -1558,7 +2062,6 @@ def open_NDTiff(path_dataset, channels=None, z_levels=None, squeeze=True):
     if squeeze:
         img = np.squeeze(img)
     return img
-
 
 # %%
 dir_load = Path('../../../from_server/example_image_tilted_z0')
@@ -1750,14 +2253,12 @@ print(f"  - sigma_z_large: {np.round(sigma_z_large, 3)}  ")
 from importlib import reload
 reload(localize_skewed)
 
-
 # %%
 def get_filter_kernel_skewed(sigmas, dc, theta, dstage, sigma_cutoff=2):
     pixel_sizes = (dc, dc, dc)
     kernel = localize.get_filter_kernel(sigmas, pixel_sizes, sigma_cutoff)
     kernel = ipp.deskew(kernel, theta, distance=dstage, pixel_size=dc)
     return kernel
-
 
 # %%
 # filtering
@@ -1792,7 +2293,6 @@ def get_filter_kernel_skewed(sigmas, dc, theta, dstage, sigma_cutoff=2):
     kernel = kernel / np.sum(kernel)
 
     return kernel
-
 
 # %%
 sigmas = filter_sigma_small
@@ -1854,7 +2354,7 @@ viewer.add_image(kernel_small_straight, name='kernel small traight', colormap='g
 viewer.add_image(kernel_large_straight, name='kernel large traight', colormap='red', blending='additive')
 viewer.add_image(img, name='img', blending='additive')
 
-# # %%Can we skip the second convulotion with an "normalized" kernel?
+# %%Can we skip the second convulotion with an "normalized" kernel?
 # im_fct = scipy.signal.fftconvolve(img, kernel_small, mode="same") / scipy.signal.fftconvolve(np.ones(img.shape), kernel_small, mode="same")
 # kernel_small_normalized = kernel_small - kernel_small.mean()
 # im_normalized = scipy.signal.fftconvolve(img, kernel_small_normalized, mode="same")
@@ -1898,7 +2398,6 @@ viewer.add_image(kernel_small_dilated, name='kernel small dilated', colormap='bo
 viewer.add_image(kernel_large_dilated, name='kernel large dilated', colormap='bop orange', blending='additive')
 viewer.add_image(img, name='img', blending='additive')
 
-
 # %% [markdown]
 # The gaussian match the spots' size and orientation, but now we have again this pattern after the shear transformation.  
 # We may need to generate a gaussian with a bigger sigma_z and rotate it by a higher angle to have an equivalent kernel, but without stripes.
@@ -1921,7 +2420,6 @@ def shear_sigma_theta(sigma_0, theta_0, coef):
     theta_1 = np.arcsin(L1 / sigma_1)
     
     return sigma_1, theta_1
-
 
 # %%
 1 / np.sin(30/180*np.pi)
@@ -1974,15 +2472,60 @@ img_filtered = img_high_pass - img_low_pass
 del img_high_pass
 del img_low_pass
 gc.collect()
+
 # %%
 viewer = napari.Viewer()
 # viewer.add_image(img_high_pass, name='img_high_pass')
 # viewer.add_image(img_low_pass, name='img_low_pass')
 viewer.add_image(img, name='img')
 viewer.add_image(img_filtered, name='img_filtered')
+
 # %% [markdown]
-# Original tilted image appear to have empty spaces, or 0 layers, between xy planes.  
-# That impairs DoG, need to fix it, otherwise that will also impair peak finding and spot fitting.
+# Jump to section Threshold DoG or run next section about squeezing the image.
+
+# %% [markdown]
+# #### Squeeze image
+
+# %% [markdown]
+# Since the image is kind of elongated in the z (and y) direction, a different way than making smooth tilted gaussian kernel is to "squeeze back" the image, hoping to get smooth spots, or spots with less intensity modulation along their longest axis, to avoid detecting several local maxima per spot.
+
+# %%
+dilation_coef = dstage / dc
+dilation_matrix = np.diag([1/dilation_coef, 1, 1])
+
+img_squeezed = scipy.ndimage.affine_transform(img, dilation_matrix)
+
+# %%
+viewer = napari.Viewer()
+viewer.add_image(img, name='img', blending='additive')
+viewer.add_image(img_squeezed, name='img squeezed', blending='additive')
+
+# %% [markdown]
+# We still "cubes" within spots, but there is no intensity fluctuation along spots.
+
+# %%
+# naive tilt
+kernel_small_straight = localize.get_filter_kernel(sigmas_small, pixel_sizes, sigma_cutoff=3)
+kernel_large_straight = localize.get_filter_kernel(sigmas_large, pixel_sizes, sigma_cutoff=3)
+kernel_small_raw_tilted = scipy.ndimage.rotate(kernel_small_straight, angle=30, axes=(1, 0), reshape=True)
+kernel_large_raw_tilted = scipy.ndimage.rotate(kernel_large_straight, angle=30, axes=(1, 0), reshape=True)
+
+viewer = napari.Viewer()
+viewer.add_image(kernel_small_raw_tilted, name='kernel small raw tilted', colormap='green', blending='additive')
+viewer.add_image(kernel_large_raw_tilted, name='kernel large raw tilted', colormap='red', blending='additive')
+viewer.add_image(img_squeezed, name='img squeezed', blending='additive')
+
+# %%
+
+
+# %%
+
+
+# %%
+
+
+# %%
+
 
 # %% [markdown]
 # ### Threshold DoG and local max
@@ -2093,9 +2636,13 @@ nb_rois = roi_coords.shape[0]
 nb_rois
 
 # %%
+centers_guess
+
+# %%
 viewer = napari.Viewer()
 viewer.add_image(img, name='img')
 viewer.add_image(img_filtered, name='img_filtered')
+# viewer.add_points(centers_guess, name='centers_guess', blending='additive', size=3, face_color='r')
 viewer.add_points(roi_coords[:, 0, :], name='ROI start', blending='additive', size=3, face_color='r')
 viewer.add_points(roi_coords[:, 1, :], name='ROI end', blending='additive', size=3, face_color='g')
 
@@ -2106,7 +2653,6 @@ viewer.add_points(roi_coords[:, 1, :], name='ROI end', blending='additive', size
 # for i in range(nb_rois):
 #     roi = extract_ROI(img, roi_coords[i])
 #     viewer.add_image(roi, name=f'roi {i}', blending='additive')
-
 
 # %%
 im_fitted = img
@@ -2260,3 +2806,5 @@ viewer.add_points(centers, name='fitted centers', blending='additive', size=3, f
 
 # %%
 gc.collect()
+
+
