@@ -1,2 +1,4 @@
 __pycache__
 *.egg-info
+dask-worker-space
+.ipynb_checkpoints
