@@ -550,7 +550,8 @@ def fit_xform_img(mat_obj: np.ndarray, mat_img: np.ndarray, init_params: list[fl
 
     :param mat_obj: matrix in object space
     :param mat_img: matrix in image space
-    :param init_params: let t by the affine transformation matrix, then the initial parameters are
+    :param init_params: let t by the affine transformation matrix which acts on object space coordinates to prouce
+    image space coordinates. Then the initial parameters are
     [amplitude, background, t[0, 0], t[0, 1], t[0, 2], t[1, 0], t[1, 1], t[1, 2]]
     :param fixed_params:
     :bounds bounds:
