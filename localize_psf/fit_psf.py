@@ -43,7 +43,7 @@ def blur_img_otf(ground_truth, otf, apodization=1):
     return img_blurred
 
 
-def blur_img_psf(ground_truth, psf, apodization):
+def blur_img_psf(ground_truth, psf, apodization=1):
     """
     Blur image with PSF
 
