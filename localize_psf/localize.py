@@ -214,7 +214,7 @@ def get_max_filter_footprint(min_separations, drs):
     return footprint
 
 
-def find_peak_candidates(imgs, footprint, threshold, use_gpu_filter=CUPY_AVAILABLE):
+def find_peak_candidates(imgs, footprint, threshold, mask=None, use_gpu_filter=CUPY_AVAILABLE):
     """
     Find peak candidates in image using maximum filter
 
@@ -223,17 +223,19 @@ def find_peak_candidates(imgs, footprint, threshold, use_gpu_filter=CUPY_AVAILAB
     This can be obtained from get_max_filter_footprint()
     :param float threshold: only pixels with values greater than or equal to the threshold will be considered
     :param bool use_gpu_filter: whether or not to do maximum filter on GPU
-    :return centers_guess_inds: np.array([[i0, i1, i2], ...]) array indices of local maxima
+    :return centers_guess_inds, img_vals: np.array([[i0, i1, i2], ...]) array indices of local maxima
     """
+    if mask is None:
+        mask = np.ones(imgs.shape, dtype=bool)
 
     if use_gpu_filter:
         img_max_filtered = cp.asnumpy(
             cupyx.scipy.ndimage.maximum_filter(cp.asarray(imgs, dtype=cp.float32), footprint=cp.asarray(footprint)))
         # need to compare imgs as float32 because img_max_filtered will be ...
-        is_max = np.logical_and(imgs.astype(np.float32) == img_max_filtered, imgs >= threshold)
+        is_max = np.logical_and.reduce((imgs.astype(np.float32) == img_max_filtered, imgs >= threshold, mask))
     else:
         img_max_filtered = scipy.ndimage.maximum_filter(imgs, footprint=footprint)
-        is_max = np.logical_and(imgs == img_max_filtered, imgs >= threshold)
+        is_max = np.logical_and.reduce((imgs == img_max_filtered, imgs >= threshold, mask))
 
     amps = imgs[is_max]
     centers_guess_inds = np.argwhere(is_max)
