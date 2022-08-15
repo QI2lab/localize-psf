@@ -1045,6 +1045,213 @@ def plot_gauss_roi(fit_params, roi, imgs, coords=None, init_params=None,
     return figh_interp
 
 
+# filter fit parameters
+class filter:
+    """
+    Filter fit results to identfy "good" and "bad" fits
+    """
+    def __init__(self, fn, condition_names):
+        self._fn = fn
+        self.condition_names = condition_names
+
+    def filter(self, fit_params, *args, **kwargs):
+        """
+        Filter function requis parameters and can optionally accept other arguments, e.g. if want
+        to comapre fit_params with initial parameters or etc.
+
+        filter functions are free to ignore all parameters besides fit_params,
+        but must accept arbitrary number of arguments
+        @param fit_params:
+        @param args: additional arguments which must all be arrays and must all have first dimensions of the same length
+        @param kwargs: key-word arguments, which should be objects which apply to all points. This matter mostly
+        if you want to us the __mul__ method. When applying filters where order matters, each element of *args
+        will be reduced to an array which only keeps those elements that passed the previous filter, but
+        **kwargs will not be touched
+        @return:
+        """
+
+        if fit_params.ndim == 1:
+            fit_params = np.expand_dims(fit_params, axis=0)
+
+        conditions = self._fn(fit_params, *args, **kwargs)
+
+        if conditions.ndim == 1:
+            conditions = np.expand_dims(conditions, axis=0)
+
+        return conditions
+
+    def __add__(self, other):
+        """
+        return new filter which concatenates the results from two other filters
+        @param other:
+        @return:
+        """
+
+        def both_filter(fit_params, *args, **kwargs):
+            c1 = self.filter(fit_params, *args, **kwargs)
+            c2 = other.filter(fit_params, *args, **kwargs)
+
+            conditions = np.concatenate((c1, c2), axis=1)
+
+            return conditions
+
+        return filter(both_filter, self.condition_names + other.condition_names)
+
+    def __mul__(self, other):
+        """
+        apply rightmost filter first, then apply left filter to only those points which succeeded.
+        @param other:
+        @return:
+        """
+
+        def sequential_filter(fit_params, *args, **kwargs):
+            c1 = other.filter(fit_params, *args, **kwargs)
+            tk1 = np.logical_and.reduce(c1, axis=1)
+
+            args_red = [a[tk1] for a in args]
+            c2_reduced = self.filter(fit_params[tk1], *args_red, **kwargs)
+
+            # set array on full space
+            c2 = np.zeros((c1.shape[0], c2_reduced.shape[1]), dtype=bool)
+            c2[tk1, :] = c2_reduced
+
+            conditions = np.concatenate((c1, c2), axis=1)
+
+            return conditions
+
+        return filter(sequential_filter, other.condition_names + self.condition_names)
+
+
+class no_filter(filter):
+    def __init__(self):
+        self.condition_names = ["none"]
+
+    def filter(self, fit_params, *args, **kwargs):
+        conditions = np.ones((len(fit_params), 1), dtype=bool)
+        return conditions
+
+
+class range_filter(filter):
+    """
+    Filter based on value being in a certain range
+    """
+    def __init__(self, low, high, index, name):
+        self.low = low
+        self.high = high
+        self.index = index
+        self.condition_names = [f"{name:s} too small", f"{name:s} too large"]
+
+    def filter(self, fit_params, *args, **kwargs):
+        conditions = np.stack((fit_params[:, self.index] >= self.low, fit_params[:, self.index] <= self.high), axis=1)
+
+        return conditions
+
+
+class proximity_filter(filter):
+    """
+    Filter spots based on proximity to some other array. e.g. based on the distance from the initial guess position
+    to the final fit position
+    """
+    def __init__(self, indices, min_dist, max_dist, name):
+        self.indices = tuple(indices)
+        self.min_dist = min_dist
+        self.max_dist = max_dist
+        self.condition_names = [f"{name:s} deviation too small", f"{name:s} deviation too large"]
+
+    def filter(self, fit_params, ref_params, *args, **kwargs):
+        dists = np.linalg.norm(ref_params[:, self.indices] - fit_params[:, self.indices], axis=1)
+        conditions = np.stack((dists >= self.min_dist, dists <= self.max_dist), axis=1)
+
+        return conditions
+
+
+class unique_filter(filter):
+    """
+    Filter spots so that only keep one in a certain area, to avoid one spot being picked up multiple times by max filter
+    """
+    def __init__(self, dxy_min_dist, dz_min_dist, name="unique"):
+        self.dxy_min_dist = dxy_min_dist
+        self.dz_min_dist = dz_min_dist
+        self.condition_names = [f"{name:s}"]
+
+    def filter(self, fit_params, *args, **kwargs):
+        _, unique_inds = filter_nearby_peaks(fit_params[:, (3, 2, 1)], self.dxy_min_dist,
+                                             self.dz_min_dist, mode="keep-one")
+        conditions = np.zeros((fit_params.shape[0], 1), dtype=bool)
+        conditions[unique_inds] = True
+
+# todo: this works, but don't want to add sklearn dependency
+# class lda_filter(filter):
+#     def __init__(self, params_good, params_bad, name="LDA"):
+#         self.condition_names = [f"{name}"]
+#         self.lda_classifier = lda(n_components=1)
+#         xtrain = np.concatenate((params_good, params_bad), axis=0)
+#         ytrain = np.concatenate((np.ones(len(params_good)), np.zeros(len(params_bad))))
+#         self.lda_classifier.fit(xtrain, ytrain)
+#
+#     def filter(self, fit_params, *args):
+#
+#         conditions = np.expand_dims(self.lda_classifier.predict(fit_params).astype(bool), axis=1)
+#
+#         return conditions
+
+
+def get_param_filter(coords: tuple[np.ndarray], fit_dist_max_err: tuple[float], min_spot_sep: tuple[float],
+                     sigma_bounds: tuple[tuple[float], tuple[float]], amp_bounds: tuple[float] = (0, 0),
+                     dist_boundary_min: tuple[float] = (0, 0)):
+    """
+    Simple composite filter testing bounds of fit parameters
+    @param coords:
+    @param fit_dist_max_err:
+    @param min_spot_sep:
+    @param sigma_bounds:
+    @param amp_bounds:
+    @param dist_boundary_min:
+    @return filter:
+    """
+
+    z, y, x = coords
+
+    # in bounds
+    dz_min, dxy_min = dist_boundary_min
+
+    filter_in_bounds = range_filter(x.min() + dxy_min, x.max() - dxy_min, 1, "x-position") + \
+                       range_filter(y.min() + dxy_min, y.max() - dxy_min, 2, "y-position") + \
+                       range_filter(z.min() + dz_min, z.max() - dz_min, 3, "z-position")
+
+    # size
+    (sz_min, sxy_min), (sz_max, sxy_max) = sigma_bounds
+
+    filter_size = range_filter(sxy_min, sxy_max, 4, "xy-size") + \
+                  range_filter(sz_min, sz_max, 5, "z-size")
+
+    # amplitude
+    filter_amp = range_filter(amp_bounds[0], amp_bounds[1], 0, "amplitude")
+
+    # proximity to initial guess
+    # maximum distance between fit center and guess center
+    z_err_fit_max, xy_fit_err_max = fit_dist_max_err
+
+    filter_proximity = proximity_filter((1, 2), 0, xy_fit_err_max, "xy") + \
+                       proximity_filter((3,), 0, z_err_fit_max, "z")
+
+    #
+    dz, dxy = min_spot_sep
+    # def unique_fn(fps, refps=None):
+    #     _, unique_inds = filter_nearby_peaks(fps[:, (3, 2, 1)], dxy, dz, mode="keep-one")
+    #     conditions = np.zeros((fps.shape[0], 1), dtype=bool)
+    #     conditions[unique_inds] = True
+    #
+    #     return conditions
+
+    filter_unique = unique_filter(dxy, dz)
+
+    # full filter
+    filter_combined = filter_unique * (filter_in_bounds + filter_size + filter_amp + filter_proximity)
+
+    return filter_combined
+
+
 def filter_localizations(fit_params: np.ndarray, init_params: np.ndarray, coords: tuple[np.ndarray],
                          fit_dist_max_err: tuple[float], min_spot_sep: tuple[float],
                          sigma_bounds: tuple[tuple[float], tuple[float]], amp_min: float = 0,
@@ -1066,15 +1273,17 @@ def filter_localizations(fit_params: np.ndarray, init_params: np.ndarray, coords
     :param dist_boundary_min: (dz_min, dxy_min)
     :return to_keep, conditions, condition_names, filter_settings:
     """
+    # todo: deprecate this and replace with the filter class objects as did in localize_beads_generic
 
-    filter_settings = {"fit_dist_max_err": fit_dist_max_err, "min_spot_sep": min_spot_sep,
-                       "sigma_bounds": sigma_bounds, "amp_min": amp_min, "dist_boundary_min": dist_boundary_min}
+    filter_settings = {"fit_dist_max_err": fit_dist_max_err,
+                       "min_spot_sep": min_spot_sep,
+                       "sigma_bounds": sigma_bounds,
+                       "amp_min": amp_min,
+                       "dist_boundary_min": dist_boundary_min}
 
     z, y, x = coords
-    centers_guess = np.concatenate((init_params[:, 3][:, None], init_params[:, 2][:, None],
-                                    init_params[:, 1][:, None]), axis=1)
-    centers_fit = np.concatenate((fit_params[:, 3][:, None], fit_params[:, 2][:, None],
-                                  fit_params[:, 1][:, None]), axis=1)
+    centers_guess = init_params[:, (3, 2, 1)]
+    centers_fit = fit_params[:, (3, 2, 1)]
 
     # ###################################################
     # only keep points if size and position were reasonable
@@ -1146,16 +1355,16 @@ def filter_localizations(fit_params: np.ndarray, init_params: np.ndarray, coords
     return to_keep, conditions, condition_names, filter_settings
 
 
-def localize_beads(imgs: np.ndarray, dxy: float, dz: float, threshold: float,
-                   roi_size: tuple[float] = (4, 2, 2),
-                   filter_sigma_small: tuple[float] = (1, 0.1, 0.1),
-                   filter_sigma_large: tuple[float] = (10, 5, 5),
-                   min_spot_sep: tuple[float] = (0, 0),
-                   sigma_bounds: tuple[tuple[float], tuple[float]] = ((0, 0), (np.inf, np.inf)),
-                   fit_amp_min: float = 0, fit_dist_max_err: tuple[float] = (np.inf, np.inf),
-                   dist_boundary_min: tuple[float] = (0, 0), max_nfit_iterations: int = 100,
-                   fit_filtered_images: bool = False, sf: int=1,
-                   use_gpu_fit: bool = GPUFIT_AVAILABLE, use_gpu_filter: bool = CUPY_AVAILABLE, verbose: bool = True):
+def localize_beads_generic(imgs: np.ndarray, drs: tuple[float], threshold: float,
+                           roi_size: tuple[float] = (4, 2, 2),
+                           filter_sigma_small: tuple[float] = (1, 0.1, 0.1),
+                           filter_sigma_large: tuple[float] = (10, 5, 5),
+                           min_spot_sep: tuple[float] = (0, 0),
+                           filter=None, mask=None,
+                           max_nfit_iterations: int = 100,
+                           fit_filtered_images: bool = False, sf: int=1,
+                           use_gpu_fit: bool = GPUFIT_AVAILABLE, use_gpu_filter: bool = CUPY_AVAILABLE,
+                           verbose: bool = True):
     """
     Given an image consisting of diffraction limited spots and background, identify the diffraction limit spots using
     the following procedure
@@ -1173,10 +1382,13 @@ def localize_beads(imgs: np.ndarray, dxy: float, dz: float, threshold: float,
     @param threshold: threshold used for identifying spots. This is applied after filtering of image
     @param roi_size: (sz, sy, sx) in um
     @param filter_sigma_small: (sz, sy, sx) small sigmas to be used in difference-of-Gaussian filter. Roughly speaking,
-    features which are smaller than these sigmas will be high pass filtered out.
+    features which are smaller than these sigmas will be high pass filtered out. To turn off this filter, set to None
     @param filter_sigma_large: (sz, sy, sx) large sigmas to be used in difference-of-Gaussian filter. Roughly speaking,
-    features which are large than these sigmas will be low pass filtered out.
+    features which are large than these sigmas will be low pass filtered out. To turn off this filter, set to None
     @param min_spot_sep: (dz, dxy) minimum separation allowed between adjacent peaks
+    @param filter: filter will be applied with args = [fit_params, ref_params, chi_sqrs, niters, rois]
+    and kwargs "image" and "image_filtered"
+    @param mask: optionally boolean array of same size as image which indicates where to search for peaks
     @param sigma_bounds: ((sz_min, sxy_min), (sz_max, sxy_max))
     @param fit_amp_min: minimum amplitude value for fit to be kept
     @param fit_dist_max_err: (dz_max, dxy_max) maximum distance between guess value and fit value
@@ -1187,36 +1399,46 @@ def localize_beads(imgs: np.ndarray, dxy: float, dz: float, threshold: float,
     @param bool use_gpu_fit: whether or not to do spot fitting on the GPU
     @param bool use_gpu_filter: whether or not to do difference-of-Gaussian filtering on GPU
     @param bool verbose: whether or not to print information
-    @return coords, fit_params, init_params, rois, to_keep, conditions, condition_names, filter_settings,
-    fit_states, chi_sqrs, niters, imgs_filtered:
-    coords = (z, y, x)
+    @return coords, fit_results, imgs_filtered: coords = (z, y, x)
     """
-
-    # make sure inputs correct types
-    roi_size = np.array(roi_size, copy=True)
-    min_spot_sep = np.array(min_spot_sep, copy=True)
-    filter_sigma_large = np.array(filter_sigma_large, copy=True)
-    filter_sigma_small = np.array(filter_sigma_small, copy=True)
-    dist_boundary_min = np.array(dist_boundary_min, copy=True)
-
     # check if is 2D
+    data_is_2d = (imgs.ndim == 2)
+
     if imgs.ndim == 2:
         imgs = np.expand_dims(imgs, axis=0)
 
-    data_is_2d = imgs.shape[0] == 1
+    if mask is not None and mask.ndim == 2:
+        mask = np.expand_dims(mask, axis=0)
 
+    # ###################################
+    # process inputs
+    # ###################################
+    dz, dy, dx = drs
+    if data_is_2d:
+        dz = 1  # dz not meaningful in this case
+
+    roi_size = np.array(roi_size, copy=True)
     if data_is_2d:
         roi_size[0] = 1
-        filter_sigma_large[0] = 0
-        filter_sigma_small[0] = 0
+
+    min_spot_sep = np.array(min_spot_sep, copy=True)
+    if data_is_2d:
         min_spot_sep[0] = 0
-        dist_boundary_min[0] = 0
-        dz = 1 # dz not meaningful in this case
+
+    if filter_sigma_large is not None:
+        filter_sigma_large = np.array(filter_sigma_large, copy=True)
+        if data_is_2d:
+            filter_sigma_large[0] = 0
+
+    if filter_sigma_small is not None:
+        filter_sigma_small = np.array(filter_sigma_small, copy=True)
+        if data_is_2d:
+            filter_sigma_small[0] = 0
 
     # unpack arguments
-    z, y, x = get_coords(imgs.shape, (dz, dxy, dxy))
+    z, y, x = get_coords(imgs.shape, (dz, dy, dx))
     dz_min_sep, dxy_min_sep = min_spot_sep
-    roi_size_pix = roi_fns.get_roi_size(roi_size, dxy, dz, ensure_odd=True)
+    roi_size_pix = roi_fns.get_roi_size(roi_size, 0.5 * (dx + dy), dz, ensure_odd=True)
 
     # ###################################
     # filter images
@@ -1225,10 +1447,18 @@ def localize_beads(imgs: np.ndarray, dxy: float, dz: float, threshold: float,
 
     # imgs = cp.asnumpy(cupyx.scipy.ndimage.median_filter(cp.array(imgs), size=(3, 3, 3)))
 
-    ks = get_filter_kernel(filter_sigma_small, (dz, dxy, dxy))
-    kl = get_filter_kernel(filter_sigma_large, (dz, dxy, dxy))
-    imgs_hp = filter_convolve(imgs, ks, use_gpu=use_gpu_filter)
-    imgs_lp = filter_convolve(imgs, kl, use_gpu=use_gpu_filter)
+    if filter_sigma_small is not None:
+        ks = get_filter_kernel(filter_sigma_small, (dz, dy, dx))
+        imgs_hp = filter_convolve(imgs, ks, use_gpu=use_gpu_filter)
+    else:
+        imgs_hp = imgs
+
+    if filter_sigma_large is not None:
+        kl = get_filter_kernel(filter_sigma_large, (dz, dy, dx))
+        imgs_lp = filter_convolve(imgs, kl, use_gpu=use_gpu_filter)
+    else:
+        imgs_lp = 0
+
     imgs_filtered = imgs_hp - imgs_lp
 
     if verbose:
@@ -1239,8 +1469,10 @@ def localize_beads(imgs: np.ndarray, dxy: float, dz: float, threshold: float,
     # ###################################
     tstart = time.perf_counter()
 
-    footprint = get_max_filter_footprint((dz_min_sep, dxy_min_sep, dxy_min_sep), (dz, dxy, dxy))
-    centers_guess_inds, amps = find_peak_candidates(imgs_filtered, footprint, threshold)
+    footprint = get_max_filter_footprint((dz_min_sep, dxy_min_sep, dxy_min_sep), (dz, dy, dx))
+    centers_guess_inds, amps = find_peak_candidates(imgs_filtered, footprint, threshold, mask=mask)
+
+    # todo: could autothreshold by trying to fit # of points versus
 
     # real coordinates
     centers_guess = np.stack((z[centers_guess_inds[:, 0], 0, 0],
@@ -1338,7 +1570,7 @@ def localize_beads(imgs: np.ndarray, dxy: float, dz: float, threshold: float,
         fit_params, fit_states, chi_sqrs, niters, fit_t = fit_gauss_rois(img_rois, (zrois, yrois, xrois),
                                                                          init_params, max_nfit_iterations,
                                                                          estimator="LSE",
-                                                                         sf=sf, dc=dxy, angles=(0., 0., 0.),
+                                                                         sf=sf, dc=0.5 * (dx + dy), angles=(0., 0., 0.),
                                                                          fixed_params=fixed_params,
                                                                          use_gpu=use_gpu_fit, verbose=verbose)
 
@@ -1349,17 +1581,26 @@ def localize_beads(imgs: np.ndarray, dxy: float, dz: float, threshold: float,
         # ###################################################
         # filter fits
         # ###################################################
-        to_keep, conditions, condition_names, filter_settings = \
-            filter_localizations(fit_params, init_params, (z, y, x), fit_dist_max_err, min_spot_sep,
-                                 sigma_bounds, fit_amp_min, dist_boundary_min)
+        if filter is None:
+            filter = no_filter()
+
+        # add any other parameters which could be useful for the filter function to accept
+        # filter functions are free to ignore all parameters besides fit_params,
+        # but must accept arbitrary number of arguments
+        # todo: maybe want to change to **kwargs instead of *args
+        conditions = filter.filter(fit_params, init_params, chi_sqrs, niters, rois, image=imgs, image_filtered=imgs_filtered)
+
+        to_keep = np.logical_and.reduce(conditions, axis=1)
+        condition_names = filter.condition_names
+        filter_settings = {}
 
         if verbose:
             print("Identified %d likely candidates" % np.sum(to_keep))
 
     else:
-        fit_params = np.zeros((0, 7))
-        init_params = np.zeros((0, 7))
-        rois = np.zeros((0, 6))
+        fit_params = np.zeros((0, 7), dtype=float)
+        init_params = np.zeros((0, 7), dtype=float)
+        rois = np.zeros((0, 6), dtype=int)
         to_keep = None
         conditions = None
         condition_names = None
@@ -1368,9 +1609,50 @@ def localize_beads(imgs: np.ndarray, dxy: float, dz: float, threshold: float,
         chi_sqrs = None
         niters = None
 
-    return (z, y, x), fit_params, init_params, rois,\
-           to_keep, conditions, condition_names, filter_settings,\
-           fit_states, chi_sqrs, niters, imgs_filtered
+    fit_results = {"fit_params": fit_params,
+                   "init_params": init_params,
+                   "rois": rois,
+                   "to_keep": to_keep,
+                   "conditions": conditions,
+                   "condition_names": condition_names,
+                   "filter_settings": filter_settings,
+                   "fit_states": fit_states,
+                   "chi_sqrs": chi_sqrs,
+                   "niters": niters}
+
+    return (z, y, x), fit_results, imgs_filtered
+
+
+def localize_beads(imgs: np.ndarray, dxy: float, dz: float, threshold: float,
+                   roi_size: tuple[float] = (4, 2, 2),
+                   filter_sigma_small: tuple[float] = (1, 0.1, 0.1),
+                   filter_sigma_large: tuple[float] = (10, 5, 5),
+                   min_spot_sep: tuple[float] = (0, 0),
+                   sigma_bounds: tuple[tuple[float], tuple[float]] = ((0, 0), (np.inf, np.inf)),
+                   fit_amp_min: float = 0, fit_dist_max_err: tuple[float] = (np.inf, np.inf),
+                   dist_boundary_min: tuple[float] = (0, 0), max_nfit_iterations: int = 100,
+                   fit_filtered_images: bool = False, sf: int=1,
+                   use_gpu_fit: bool = GPUFIT_AVAILABLE, use_gpu_filter: bool = CUPY_AVAILABLE,
+                   verbose: bool = True):
+    """
+    Wrapper around localize_beads_generic() which also takes all filter parameters as arguments. Mostly for
+    historical convenience. Avoids the need to instantiate a separate filter object.
+
+    For a description of the parameters see localize_beads_generic() and get_param_filter()
+    """
+
+    shape = imgs.shape
+    if imgs.ndim == 2:
+        shape = (1,) + shape
+        dz = 1.
+
+    coords = get_coords(shape, (dz, dxy, dxy))
+    filter = get_param_filter(coords, fit_dist_max_err, min_spot_sep,
+                              sigma_bounds, (fit_amp_min, np.inf), dist_boundary_min)
+
+    return localize_beads_generic(imgs, (dz, dxy, dxy), threshold, roi_size, filter_sigma_small, filter_sigma_large,
+                                  min_spot_sep, filter, max_nfit_iterations, fit_filtered_images, sf,
+                                  use_gpu_fit, use_gpu_filter, verbose)
 
 
 def plot_bead_locations(imgs: np.ndarray, center_lists: list[np.ndarray],
@@ -1551,13 +1833,24 @@ def autofit_psfs(imgs: np.ndarray, psf_roi_size: list[float], dx: float, dz: flo
     # ###################################
     z, y, x = get_coords(imgs.shape, (dz, dx, dx))
 
-    coords, fit_params, init_params, rois,\
-    to_keep, conditions, condition_names, filter_settings,\
-    fit_states, chi_sqrs, niters, imgs_filtered = \
-        localize_beads(imgs, dx, dz, threshold, roi_size_loc, filter_sigma_small, filter_sigma_large,
-                       min_spot_sep, sigma_bounds, fit_amp_thresh, fit_dist_max_err=fit_dist_max_err,
-                       dist_boundary_min=dist_boundary_min, max_nfit_iterations=max_number_iterations,
-                       use_gpu_filter=use_gpu_filter)
+    coords, fit_results, imgs_filtered = localize_beads(imgs, dx, dz, threshold, roi_size_loc,
+                                                        filter_sigma_small, filter_sigma_large,
+                                                        min_spot_sep, sigma_bounds, fit_amp_thresh,
+                                                        fit_dist_max_err=fit_dist_max_err,
+                                                        dist_boundary_min=dist_boundary_min,
+                                                        max_nfit_iterations=max_number_iterations,
+                                                        use_gpu_filter=use_gpu_filter)
+
+    fit_params = fit_results["fit_params"]
+    init_params = fit_results["init_params"]
+    rois = fit_results["rois"]
+    to_keep = fit_results["to_keep"]
+    conditions = fit_results["conditions"]
+    condition_names = fit_results["condition_names"]
+    filter_settings = fit_results["filter_settings"]
+    fit_states = fit_results["fit_states"]
+    chi_sqrs = fit_results["chi_sqrs"]
+    niters = fit_results["niters"]
 
     no_psfs_found = not np.any(to_keep)
     if no_psfs_found:
@@ -1673,6 +1966,7 @@ def autofit_psfs(imgs: np.ndarray, psf_roi_size: list[float], dx: float, dz: flo
             plt.close(figh)
 
     if saving:
+        # todo: use zarr
         data = {"coords": coords, "fit_params": fit_params, "init_params": init_params,
                 "rois": rois, "to_keep": to_keep, "conditions": conditions,
                 "condition_names": condition_names, "filter_settings": filter_settings,
