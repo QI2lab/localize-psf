@@ -19,7 +19,8 @@ def adc2photons(img, gain_map, background_map):
     return photons
 
 
-def simulated_img(ground_truth, gains, offsets, readout_noise_sds, psf=None, photon_shot_noise=True, bin_size=1, apodization=1):
+def simulated_img(ground_truth, gains, offsets, readout_noise_sds, psf=None, photon_shot_noise=True,
+                  bin_size=1, apodization=1, saturation=None):
     """
     Convert ground truth image to simulated camera image including the effects of
     photon shot noise and camera readout noise.
@@ -32,9 +33,9 @@ def simulated_img(ground_truth, gains, offsets, readout_noise_sds, psf=None, pho
     :param bool photon_shot_noise: turn on/off photon shot-noise
     :param int bin_size: bin pixels before applying Poisson/camera noise. This is to allow defining a pattern on a
     finer pixel grid.
-
-    :return img:
-    :return snr:
+    :param apodization
+    :param saturation:
+    :return img, snr:
     """
 
     # optional blur image with PSF
@@ -60,7 +61,13 @@ def simulated_img(ground_truth, gains, offsets, readout_noise_sds, psf=None, pho
     readout_noise = np.random.standard_normal(img_shot_noise.shape) * readout_noise_sds
 
     # convert from photons to ADU
-    img = gains * img_shot_noise + readout_noise + offsets
+    # todo: is this the appropriate way to convert to integer, or does it introduce some bias?
+    img = np.round(gains * img_shot_noise + readout_noise + offsets).astype(int)
+    img[img < 0] = 0
+
+    if saturation is not None:
+        img[img > saturation] = saturation
+
 
     # spatially resolved signal-to-noise ratio
     # get noise from adding in quadrature, assuming photon number large enough ~gaussian
