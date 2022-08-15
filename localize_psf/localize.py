@@ -810,8 +810,10 @@ def fit_gauss_rois(img_rois, coords_rois, init_params, max_number_iterations=100
     return fit_params, fit_states, chi_sqrs, niters, fit_t
 
 
-def plot_gauss_roi(fit_params, roi, imgs, coords, init_params=None, same_color_scale=True,
-                   fit_fn=None,
+def plot_gauss_roi(fit_params, roi, imgs, coords=None, init_params=None,
+                   fit_fn=None, param_names=("A", "cx", "cy", "cz", "sxy", "sz", "bg"),
+                   string=None,
+                   same_color_scale=True, vmin=None, vmax=None, cmap="bone",
                    figsize=(16, 8), prefix="", save_dir=None):
     """
     Plot results obtained from fitting functions fit_gauss_roi() or fit_gauss_rois()
@@ -823,13 +825,22 @@ def plot_gauss_roi(fit_params, roi, imgs, coords, init_params=None, same_color_s
     :param bool same_color_scale: whether or not to use same color scale for data and fits
     :param fit_fn: function used for fitting. Must have arguments (x, y, z, dc, fit_params, sf=1). Default
      fit function is psf.gaussian3d_psf()
+    :param param_names: names of the parameters used in the fit function
+    :param vmin:
+    :param vmax:
+    :param cmap:
     :param figsize: (sx, sz)
     :param str prefix: prefix prepended before save name
     :param str save_dir: if None, do not save results
-    :return:
+    :return figh:
     """
+
     if fit_fn is None:
         fit_fn = psf.gaussian3d_psf
+
+    nz, ny, nx = imgs.shape
+    if coords is None:
+        coords = np.meshgrid(range(nz), range(ny), range(nx), indexing="ij")
 
     z, y, x = coords
     # extract useful coordinate info
@@ -838,7 +849,9 @@ def plot_gauss_roi(fit_params, roi, imgs, coords, init_params=None, same_color_s
     if z.shape[0] > 1:
         dz = z[1, 0, 0] - z[0, 0, 0]
     else:
-        dz = dc
+        # dz = dc
+        dz = dc * (roi[5] - roi[4] + 1) / 10
+
 
     if init_params is not None:
         center_guess = np.array([init_params[3], init_params[2], init_params[1]])
@@ -847,18 +860,32 @@ def plot_gauss_roi(fit_params, roi, imgs, coords, init_params=None, same_color_s
 
     # get ROI and coordinates
     img_roi = roi_fns.cut_roi(roi, imgs)
-    # x_roi = x[:, :, roi[4]:roi[5]]
-    # y_roi = y[:, roi[2]:roi[3], :]
-    # z_roi = z[roi[0]:roi[1], :, :]
     x_roi = roi_fns.cut_roi(roi, x)
     y_roi = roi_fns.cut_roi(roi, y)
     z_roi = roi_fns.cut_roi(roi, z)
 
-    vmin_roi = np.percentile(img_roi[np.logical_not(np.isnan(img_roi))], 1)
-    vmax_roi = np.percentile(img_roi[np.logical_not(np.isnan(img_roi))], 99.9)
+    if vmin is None:
+        vmin = np.percentile(img_roi[np.logical_not(np.isnan(img_roi))], 1)
+
+    if vmax is None:
+        vmax = np.percentile(img_roi[np.logical_not(np.isnan(img_roi))], 99.9)
 
     # git fit
     img_fit = fit_fn(x_roi, y_roi, z_roi, dc, fit_params, sf=1)
+
+    # set extents
+    extent_yx = [y_roi[0, 0, 0] - 0.5 * dc, y_roi[0, -1, 0] + 0.5 * dc,
+                 x_roi[0, 0, 0] - 0.5 * dc, x_roi[0, 0, -1] + 0.5 * dc]
+
+    extent_zx = [z_roi[0, 0, 0] - 0.5 * dz, z_roi[-1, 0, 0] + 0.5 * dz,
+                 x_roi[0, 0, 0] - 0.5 * dc, x_roi[0, 0, -1] + 0.5 * dc]
+
+    extent_yz = [y_roi[0, 0, 0] - 0.5 * dc, y_roi[0, -1, 0] + 0.5 * dc,
+                 z_roi[0, 0, 0] - 0.5 * dz, z_roi[-1, 0, 0] + 0.5 * dz]
+
+    wx = extent_yx[3] - extent_yx[2]
+    wy = extent_yx[1] - extent_yx[0]
+    wz = extent_zx[1] - extent_zx[0]
 
     # ################################
     # plot results interpolated on regular grid
@@ -866,74 +893,79 @@ def plot_gauss_roi(fit_params, roi, imgs, coords, init_params=None, same_color_s
     figh_interp = plt.figure(figsize=figsize)
     st_str = f"Fit, max projections, interpolated, ROI = {roi}"
 
-    st_str += f"\n{'fit': <10}" + "A=%3.3f, cx=%3.5f, cy=%3.5f, cz=%3.5f, sxy=%3.5f, sz=%3.5f, bg=%3.3f" % tuple(fit_params)
+    st_str += f"\n{'fit': <10}" + ", ".join([f"{param_names[ii]:s}={fit_params[ii]:3.4f}" for ii in range(len(fit_params))])
     if init_params is not None:
-        st_str += f"\n{'guess': <10}" + "A=%3.3f, cx=%3.5f, cy=%3.5f, cz=%3.5f, sxy=%3.5f, sz=%3.5f, bg=%3.3f" % tuple(init_params)
+        st_str += f"\n{'guess': <10}" + ", ".join([f"{param_names[ii]:s}={init_params[ii]:3.4f}" for ii in range(len(fit_params))])
+
+    if string is not None:
+        st_str += "\n" + string
 
     figh_interp.suptitle(st_str)
 
-    grid = figh_interp.add_gridspec(2, 4)
+    grid = figh_interp.add_gridspec(nrows=2, height_ratios=[1, wz / wy], hspace=0,
+                                    ncols=7, width_ratios=[wz / wx, 1, 0.2, wz / wx, 1, 0.2, 0.2], wspace=0)
 
     # ################################
     # XY, data
     # ################################
     ax = figh_interp.add_subplot(grid[0, 1])
-    extent = [y_roi[0, 0, 0] - 0.5 * dc, y_roi[0, -1, 0] + 0.5 * dc,
-              x_roi[0, 0, 0] - 0.5 * dc, x_roi[0, 0, -1] + 0.5 * dc]
-    ax.imshow(np.nanmax(img_roi, axis=0).transpose(), vmin=vmin_roi, vmax=vmax_roi, origin="lower",
-               extent=extent, cmap="bone")
+    im = ax.imshow(np.nanmax(img_roi, axis=0).transpose(), vmin=vmin, vmax=vmax, origin="lower",
+               extent=extent_yx, cmap=cmap)
 
     ax.plot(center_fit[1], center_fit[2], 'mx')
     if init_params is not None:
         ax.plot(center_guess[1], center_guess[2], 'gx')
 
-    ax.set_ylim(extent[2:4])
-    ax.set_xlim(extent[0:2])
-    ax.set_xlabel("Y (um)")
-    ax.set_ylabel("X (um)")
-    ax.set_title("XY")
+    ax.set_ylim(extent_yx[2:4])
+    ax.set_xlim(extent_yx[0:2])
+    ax.set_xticks([])
+    ax.set_yticks([])
+    # ax.set_xlabel("Y (um)")
+    # ax.set_ylabel("X (um)")
+    # ax.set_title("XY")
 
     # ################################
     # XZ, data
     # ################################
     ax = figh_interp.add_subplot(grid[0, 0])
-    extent = [z_roi[0, 0, 0] - 0.5 * dz, z_roi[-1, 0, 0] + 0.5 * dz,
-              x_roi[0, 0, 0] - 0.5 * dc, x_roi[0, 0, -1] + 0.5 * dc]
-    ax.imshow(np.nanmax(img_roi, axis=1).transpose(), vmin=vmin_roi, vmax=vmax_roi, origin="lower",
-               extent=extent, cmap="bone")
+
+    ax.imshow(np.nanmax(img_roi, axis=1).transpose(), vmin=vmin, vmax=vmax, origin="lower",
+               extent=extent_zx, cmap=cmap)
     ax.plot(center_fit[0], center_fit[2], 'mx')
     if init_params is not None:
         ax.plot(center_guess[0], center_guess[2], 'gx')
-    ax.set_ylim(extent[2:4])
-    ax.set_xlim(extent[0:2])
-    ax.set_xlabel("Z (um)")
+    ax.set_ylim(extent_zx[2:4])
+    ax.set_xlim(extent_zx[0:2])
+
+    # ax.set_xlabel("Z (um)")
+    # ax.xaxis.set_label_position('top')
+    # ax.xaxis.tick_top()
+
     ax.set_ylabel("X (um)")
-    ax.set_title("XZ")
+    # ax.set_title("XZ")
 
     # ################################
     # YZ, data
     # ################################
     ax = figh_interp.add_subplot(grid[1, 1])
-    extent = [y_roi[0, 0, 0] - 0.5 * dc, y_roi[0, -1, 0] + 0.5 * dc,
-              z_roi[0, 0, 0] - 0.5 * dz, z_roi[-1, 0, 0] + 0.5 * dz]
     with warnings.catch_warnings():
         warnings.filterwarnings('ignore', r'All-NaN (slice|axis) encountered')
 
-        ax.imshow(np.nanmax(img_roi, axis=2), vmin=vmin_roi, vmax=vmax_roi, origin="lower", extent=extent, cmap="bone")
+        ax.imshow(np.nanmax(img_roi, axis=2), vmin=vmin, vmax=vmax, origin="lower", extent=extent_yz, cmap="bone")
 
     ax.plot(center_fit[1], center_fit[0], 'mx')
     if init_params is not None:
         ax.plot(center_guess[1], center_guess[0], 'gx')
 
-    ax.set_ylim(extent[2:4])
-    ax.set_xlim(extent[0:2])
+    ax.set_ylim(extent_yz[2:4])
+    ax.set_xlim(extent_yz[0:2])
     ax.set_xlabel("Y (um)")
     ax.set_ylabel("Z (um)")
-    ax.set_title("YZ")
+    # ax.set_title("YZ")
 
     if same_color_scale:
-        vmin_fit = vmin_roi
-        vmax_fit = vmax_roi
+        vmin_fit = vmin
+        vmax_fit = vmax
     else:
         vmin_fit = np.percentile(img_fit, 1)
         vmax_fit = np.percentile(img_fit, 99.9)
@@ -941,51 +973,69 @@ def plot_gauss_roi(fit_params, roi, imgs, coords, init_params=None, same_color_s
     # ################################
     # YX, fit
     # ################################
-    ax = figh_interp.add_subplot(grid[0, 3])
+    ax = figh_interp.add_subplot(grid[0, 4])
     extent = [y_roi[0, 0, 0] - 0.5 * dc, y_roi[0, -1, 0] + 0.5 * dc,
               x_roi[0, 0, 0] - 0.5 * dc, x_roi[0, 0, -1] + 0.5 * dc]
     ax.imshow(np.nanmax(img_fit, axis=0).transpose(), vmin=vmin_fit, vmax=vmax_fit,
-               origin="lower", extent=extent, cmap="bone")
+               origin="lower", extent=extent, cmap=cmap)
     ax.plot(center_fit[1], center_fit[2], 'mx')
     if init_params is not None:
         ax.plot(center_guess[1], center_guess[2], 'gx')
+
     ax.set_ylim(extent[2:4])
     ax.set_xlim(extent[0:2])
-    ax.set_xlabel("Y (um)")
-    ax.set_ylabel("X (um)")
+    ax.set_xticks([])
+    ax.set_yticks([])
+    # ax.set_xlabel("Y (um)")
+    # ax.set_ylabel("X (um)")
 
     # ################################
     # ZX, fit
     # ################################
-    ax = figh_interp.add_subplot(grid[0, 2])
+    ax = figh_interp.add_subplot(grid[0, 3])
     extent = [z_roi[0, 0, 0] - 0.5 * dz, z_roi[-1, 0, 0] + 0.5 * dz,
               x_roi[0, 0, 0] - 0.5 * dc, x_roi[0, 0, -1] + 0.5 * dc]
     ax.imshow(np.nanmax(img_fit, axis=1).transpose(), vmin=vmin_fit, vmax=vmax_fit,
-               origin="lower", extent=extent, cmap="bone")
+               origin="lower", extent=extent, cmap=cmap)
     ax.plot(center_fit[0], center_fit[2], 'mx')
     if init_params is not None:
         ax.plot(center_guess[0], center_guess[2], 'gx')
     ax.set_ylim(extent[2:4])
     ax.set_xlim(extent[0:2])
-    ax.set_xlabel("Z (um)")
+
+    # ax.set_xlabel("Z (um)")
+    # ax.xaxis.set_label_position('top')
+    # ax.xaxis.tick_top()
+
     ax.set_ylabel("X (um)")
 
     # ################################
     # YZ, fit
     # ################################
-    ax = figh_interp.add_subplot(grid[1, 3])
+    ax = figh_interp.add_subplot(grid[1, 4])
     extent = [y_roi[0, 0, 0] - 0.5 * dc, y_roi[0, -1, 0] + 0.5 * dc,
               z_roi[0, 0, 0] - 0.5 * dz, z_roi[-1, 0, 0] + 0.5 * dz]
     ax.imshow(np.nanmax(img_fit, axis=2), vmin=vmin_fit, vmax=vmax_fit,
-               origin="lower", extent=extent, cmap="bone")
+               origin="lower", extent=extent, cmap=cmap)
     ax.plot(center_fit[1], center_fit[0], 'mx')
     if init_params is not None:
         ax.plot(center_guess[1], center_guess[0], 'gx')
     ax.set_ylim(extent[2:4])
     ax.set_xlim(extent[0:2])
+
     ax.set_xlabel("Y (um)")
+
     ax.set_ylabel("Z (um)")
 
+    # ################################
+    # colorbar
+    # ################################
+    ax = figh_interp.add_subplot(grid[:, -1])
+    plt.colorbar(im, cax=ax)
+
+    # ################################
+    # saving
+    # ################################
     if save_dir is not None:
         figh_interp.savefig(os.path.join(save_dir, "%s.png" % prefix))
         plt.close(figh_interp)
