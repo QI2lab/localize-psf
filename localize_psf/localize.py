@@ -1175,38 +1175,30 @@ class unique_filter(filter):
         self.condition_names = [f"{name:s}"]
 
     def filter(self, fit_params, *args, **kwargs):
-        _, unique_inds = filter_nearby_peaks(fit_params[:, (3, 2, 1)], self.dxy_min_dist,
-                                             self.dz_min_dist, mode="keep-one")
+        _, unique_inds = filter_nearby_peaks(fit_params[:, (3, 2, 1)],
+                                             self.dxy_min_dist,
+                                             self.dz_min_dist,
+                                             mode="keep-one")
         conditions = np.zeros((fit_params.shape[0], 1), dtype=bool)
         conditions[unique_inds] = True
 
-# todo: this works, but don't want to add sklearn dependency
-# class lda_filter(filter):
-#     def __init__(self, params_good, params_bad, name="LDA"):
-#         self.condition_names = [f"{name}"]
-#         self.lda_classifier = lda(n_components=1)
-#         xtrain = np.concatenate((params_good, params_bad), axis=0)
-#         ytrain = np.concatenate((np.ones(len(params_good)), np.zeros(len(params_bad))))
-#         self.lda_classifier.fit(xtrain, ytrain)
-#
-#     def filter(self, fit_params, *args):
-#
-#         conditions = np.expand_dims(self.lda_classifier.predict(fit_params).astype(bool), axis=1)
-#
-#         return conditions
+        return conditions
 
 
-def get_param_filter(coords: tuple[np.ndarray], fit_dist_max_err: tuple[float], min_spot_sep: tuple[float],
-                     sigma_bounds: tuple[tuple[float], tuple[float]], amp_bounds: tuple[float] = (0, 0),
+def get_param_filter(coords: tuple[np.ndarray],
+                     fit_dist_max_err: tuple[float],
+                     min_spot_sep: tuple[float],
+                     sigma_bounds: tuple[tuple[float], tuple[float]],
+                     amp_bounds: tuple[float] = (0, 0),
                      dist_boundary_min: tuple[float] = (0, 0)):
     """
     Simple composite filter testing bounds of fit parameters
-    @param coords:
-    @param fit_dist_max_err:
-    @param min_spot_sep:
-    @param sigma_bounds:
-    @param amp_bounds:
-    @param dist_boundary_min:
+    @param coords: (z, y, x)
+    @param fit_dist_max_err: (dmax_z, dmax_xy) maximum distance between
+    @param min_spot_sep: (dz_min, dxy_min)
+    @param sigma_bounds: ((sz_min, sxy_min), (sz_max, sxy_max))
+    @param amp_bounds: (amp_min, amp_max)
+    @param dist_boundary_min: (dz_min, dxy_min)
     @return filter:
     """
 
