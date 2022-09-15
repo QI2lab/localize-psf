@@ -1229,13 +1229,6 @@ def get_param_filter(coords: tuple[np.ndarray],
 
     #
     dz, dxy = min_spot_sep
-    # def unique_fn(fps, refps=None):
-    #     _, unique_inds = filter_nearby_peaks(fps[:, (3, 2, 1)], dxy, dz, mode="keep-one")
-    #     conditions = np.zeros((fps.shape[0], 1), dtype=bool)
-    #     conditions[unique_inds] = True
-    #
-    #     return conditions
-
     filter_unique = unique_filter(dxy, dz)
 
     # full filter
@@ -1244,9 +1237,13 @@ def get_param_filter(coords: tuple[np.ndarray],
     return filter_combined
 
 
-def filter_localizations(fit_params: np.ndarray, init_params: np.ndarray, coords: tuple[np.ndarray],
-                         fit_dist_max_err: tuple[float], min_spot_sep: tuple[float],
-                         sigma_bounds: tuple[tuple[float], tuple[float]], amp_min: float = 0,
+def filter_localizations(fit_params: np.ndarray,
+                         init_params: np.ndarray,
+                         coords: tuple[np.ndarray],
+                         fit_dist_max_err: tuple[float],
+                         min_spot_sep: tuple[float],
+                         sigma_bounds: tuple[tuple[float], tuple[float]],
+                         amp_min: float = 0,
                          dist_boundary_min: tuple[float] = (0, 0)):
     """
     Given a list of fit parameters, return boolean arrays indicating which fits pass/fail given a variety
@@ -1347,19 +1344,24 @@ def filter_localizations(fit_params: np.ndarray, init_params: np.ndarray, coords
     return to_keep, conditions, condition_names, filter_settings
 
 
-def localize_beads_generic(imgs: np.ndarray, drs: tuple[float], threshold: float,
+def localize_beads_generic(imgs: np.ndarray,
+                           drs: tuple[float],
+                           threshold: float,
                            roi_size: tuple[float] = (4, 2, 2),
                            filter_sigma_small: tuple[float] = (1, 0.1, 0.1),
                            filter_sigma_large: tuple[float] = (10, 5, 5),
                            min_spot_sep: tuple[float] = (0, 0),
-                           filter=None, mask=None,
+                           filter=None,
+                           mask=None,
                            max_nfit_iterations: int = 100,
-                           fit_filtered_images: bool = False, sf: int=1,
-                           use_gpu_fit: bool = GPUFIT_AVAILABLE, use_gpu_filter: bool = CUPY_AVAILABLE,
+                           fit_filtered_images: bool = False,
+                           sf: int=1,
+                           use_gpu_fit: bool = GPUFIT_AVAILABLE,
+                           use_gpu_filter: bool = CUPY_AVAILABLE,
                            verbose: bool = True):
     """
-    Given an image consisting of diffraction limited spots and background, identify the diffraction limit spots using
-    the following procedure
+    Given an image consisting of diffraction limited features and background, identify the diffraction limited features
+    using the following procedure:
     (1) Obtain a filtered image using a difference-of-Gaussians filter
     (2) Identify candidate spots from the filtered image using a threshold and maximum filter
     (3) Fit candidate spots to a 2D or 3D Gaussian function. Note the fitting is done on the raw image, not the
@@ -1369,8 +1371,7 @@ def localize_beads_generic(imgs: np.ndarray, drs: tuple[float], threshold: float
     pixel units, set dxy=dz=1
 
     @param imgs: an image of size ny x nx or an image stack of size nz x ny x nx
-    @param dxy: xy-pixel spacing in um
-    @param dz: z-plane spacing in um
+    @param drs: (dz, dy, dx))
     @param threshold: threshold used for identifying spots. This is applied after filtering of image
     @param roi_size: (sz, sy, sx) in um
     @param filter_sigma_small: (sz, sy, sx) small sigmas to be used in difference-of-Gaussian filter. Roughly speaking,
@@ -1382,9 +1383,6 @@ def localize_beads_generic(imgs: np.ndarray, drs: tuple[float], threshold: float
     and kwargs "image" and "image_filtered"
     @param mask: optionally boolean array of same size as image which indicates where to search for peaks
     @param sigma_bounds: ((sz_min, sxy_min), (sz_max, sxy_max))
-    @param fit_amp_min: minimum amplitude value for fit to be kept
-    @param fit_dist_max_err: (dz_max, dxy_max) maximum distance between guess value and fit value
-    @param dist_boundary_min: (dz_min, dxy_min) filter out spots which are closer to the boundary than this
     @param max_nfit_iterations: maximum number of iterations in fitting function
     @param fit_filtered_images: whether to perform fitting on raw images or filtered images
     @param sf: oversampling factored used in PSF model to simulate pixelation
@@ -1535,8 +1533,12 @@ def localize_beads_generic(imgs: np.ndarray, drs: tuple[float], threshold: float
 
         # get initial parameter guesses
         init_params = np.stack((amps,
-                                centers_guess[:, 2], centers_guess[:, 1], cz_guess,
-                                0.5 * (sxs + sys), szs, bgs), axis=1)
+                                centers_guess[:, 2],
+                                centers_guess[:, 1],
+                                cz_guess,
+                                0.5 * (sxs + sys),
+                                szs,
+                                bgs), axis=1)
 
         if np.any(np.isnan(init_params)):
             raise ValueError("one or more init_params was nan")
@@ -1615,16 +1617,23 @@ def localize_beads_generic(imgs: np.ndarray, drs: tuple[float], threshold: float
     return (z, y, x), fit_results, imgs_filtered
 
 
-def localize_beads(imgs: np.ndarray, dxy: float, dz: float, threshold: float,
+def localize_beads(imgs: np.ndarray,
+                   dxy: float,
+                   dz: float,
+                   threshold: float,
                    roi_size: tuple[float] = (4, 2, 2),
                    filter_sigma_small: tuple[float] = (1, 0.1, 0.1),
                    filter_sigma_large: tuple[float] = (10, 5, 5),
                    min_spot_sep: tuple[float] = (0, 0),
                    sigma_bounds: tuple[tuple[float], tuple[float]] = ((0, 0), (np.inf, np.inf)),
-                   fit_amp_min: float = 0, fit_dist_max_err: tuple[float] = (np.inf, np.inf),
-                   dist_boundary_min: tuple[float] = (0, 0), max_nfit_iterations: int = 100,
-                   fit_filtered_images: bool = False, sf: int=1,
-                   use_gpu_fit: bool = GPUFIT_AVAILABLE, use_gpu_filter: bool = CUPY_AVAILABLE,
+                   fit_amp_min: float = 0,
+                   fit_dist_max_err: tuple[float] = (np.inf, np.inf),
+                   dist_boundary_min: tuple[float] = (0, 0),
+                   max_nfit_iterations: int = 100,
+                   fit_filtered_images: bool = False,
+                   sf: int=1,
+                   use_gpu_fit: bool = GPUFIT_AVAILABLE,
+                   use_gpu_filter: bool = CUPY_AVAILABLE,
                    verbose: bool = True):
     """
     Wrapper around localize_beads_generic() which also takes all filter parameters as arguments. Mostly for
@@ -1647,11 +1656,18 @@ def localize_beads(imgs: np.ndarray, dxy: float, dz: float, threshold: float,
                                   use_gpu_fit, use_gpu_filter, verbose)
 
 
-def plot_bead_locations(imgs: np.ndarray, center_lists: list[np.ndarray],
-                        title: str = "", color_lists: list[str] = None,
-                        color_limits: list[list[float]] = None, legend_labels: list[str] = None,
-                        weights: list[np.ndarray] = None, cbar_labels: list[str] = None, coords: list = None,
-                        vlims_percentile: tuple[float] = (0.01, 99.99), gamma: float = 1, **kwargs):
+def plot_bead_locations(imgs: np.ndarray,
+                        center_lists: list[np.ndarray],
+                        title: str = "",
+                        color_lists: list[str] = None,
+                        color_limits: list[list[float]] = None,
+                        legend_labels: list[str] = None,
+                        weights: list[np.ndarray] = None,
+                        cbar_labels: list[str] = None,
+                        coords: list = None,
+                        vlims_percentile: tuple[float] = (0.01, 99.99),
+                        gamma: float = 1,
+                        **kwargs):
     """
     Plot center locations over 2D image or max projection of 3D image. Supports plotting multiple different sets
     of center locations, and using different colors to indicate properties of the different centers e.g. sigma,
@@ -1758,16 +1774,34 @@ def plot_bead_locations(imgs: np.ndarray, center_lists: list[np.ndarray],
     return figh
 
 
-def autofit_psfs(imgs: np.ndarray, psf_roi_size: list[float], dx: float, dz: float, wavelength: float, ni: float = 1.5,
-                 model: str = 'vectorial', sf: int = 1, threshold: float = 100., min_spot_sep: tuple[float] = (0., 0.),
-                 filter_sigma_small: tuple[float] = (1, 0.5, 0.5), filter_sigma_large: tuple[float] = (3, 5, 5),
-                 sigma_bounds: tuple[tuple[float]] = ((0., 0.), (np.inf, np.inf)), roi_size_loc=(13, 21, 21),
-                 fit_amp_thresh: float = 100., dist_boundary_min: tuple[float] = (0., 0.),
-                 max_number_iterations: int = 100, fit_dist_max_err: tuple[float] = (np.inf, np.inf),
-                 num_localizations_to_plot: int = 5, psf_percentiles: tuple[float] = (5,),
-                 plot: bool = True, only_plot_good_fits: bool = True, plot_filtered_image: bool = False,
-                 use_gpu_filter: bool = False, gamma: float = 0.5, save_dir: str = None,
-                 figsize=(18, 10), **kwargs):
+def autofit_psfs(imgs: np.ndarray,
+                 psf_roi_size: list[float],
+                 dx: float,
+                 dz: float,
+                 wavelength: float,
+                 ni: float = 1.5,
+                 model: str = 'vectorial',
+                 sf: int = 1,
+                 threshold: float = 100.,
+                 min_spot_sep: tuple[float] = (0., 0.),
+                 filter_sigma_small: tuple[float] = (1, 0.5, 0.5),
+                 filter_sigma_large: tuple[float] = (3, 5, 5),
+                 sigma_bounds: tuple[tuple[float]] = ((0., 0.), (np.inf, np.inf)),
+                 roi_size_loc=(13, 21, 21),
+                 fit_amp_thresh: float = 100.,
+                 dist_boundary_min: tuple[float] = (0., 0.),
+                 max_number_iterations: int = 100,
+                 fit_dist_max_err: tuple[float] = (np.inf, np.inf),
+                 num_localizations_to_plot: int = 5,
+                 psf_percentiles: tuple[float] = (5,),
+                 plot: bool = True,
+                 only_plot_good_fits: bool = True,
+                 plot_filtered_image: bool = False,
+                 use_gpu_filter: bool = False,
+                 gamma: float = 0.5,
+                 save_dir: str = None,
+                 figsize=(18, 10),
+                 **kwargs):
     """
     Given a 2D or 3D image, identify and localize diffraction limited spots. Aggregate the results to create
     an experimental point-spread function and fit the average PSF to a model function.
