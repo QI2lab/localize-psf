@@ -10,8 +10,14 @@ import scipy.optimize
 from localize_psf import affine
 
 
-def fit_model(img: np.ndarray, model_fn, init_params: list[float], fixed_params: list[bool] = None,
-              sd: np.ndarray = None, bounds: tuple[tuple[float]] = None, model_jacobian=None, **kwargs) -> dict:
+def fit_model(img: np.ndarray,
+              model_fn,
+              init_params: list[float],
+              fixed_params: list[bool] = None,
+              sd: np.ndarray = None,
+              bounds: tuple[tuple[float]] = None,
+              model_jacobian=None,
+              **kwargs) -> dict:
     """
     Fit 2D model function to an image. Any Nan values in the image will be ignored. This function is a wrapper for
     for the non-linear least squares fit function scipy.optimize.least_squares() which additionally handles fixing
@@ -57,8 +63,12 @@ def fit_model(img: np.ndarray, model_fn, init_params: list[float], fixed_params:
     return results
 
 
-def fit_least_squares(model_fn, init_params: list[float], fixed_params: list[bool]=None,
-                      bounds: tuple[tuple[float]]=None, model_jacobian=None, **kwargs) -> dict:
+def fit_least_squares(model_fn,
+                      init_params: list[float],
+                      fixed_params: list[bool] = None,
+                      bounds: tuple[tuple[float]] = None,
+                      model_jacobian=None,
+                      **kwargs) -> dict:
     """
     Wrapper for non-linear least squares fit function scipy.optimize.least_squares which handles fixing parameters
     and calculating fit uncertainty.
@@ -78,6 +88,10 @@ def fit_least_squares(model_fn, init_params: list[float], fixed_params: list[boo
     :return results: dictionary object. Uncertainty can be obtained from the square rootsof the diagonals of the
      covariance matrix, but these will only be meaningful if variances were appropriately provided for the cost function
     """
+
+    # ###########################
+    # check input parameters
+    # ###########################
 
     # get default fixed parameters
     if fixed_params is None:
@@ -100,10 +114,12 @@ def fit_least_squares(model_fn, init_params: list[float], fixed_params: list[boo
     if np.any(np.isnan(bounds)):
         raise ValueError("bounds cannot include nans")
 
+    # ###########################
     # if some parameters are fixed, we need to hide them from the fit function to produce correct covariance, etc.
     # Idea: map the "reduced" (i.e. not fixed) parameters onto the full parameter list.
     # do this by looking at each parameter. If it is supposed to be "fixed" substitute the initial parameter. If not,
     # then get the next value from pfree. We find the right index of pfree by summing the number of previously unfixed parameters
+    # ###########################
     free_inds = [int(np.sum(np.logical_not(fixed_params[:ii]))) for ii in range(len(fixed_params))]
 
     def pfree2pfull(pfree):
@@ -120,7 +136,9 @@ def fit_least_squares(model_fn, init_params: list[float], fixed_params: list[boo
     init_params_free = pfull2pfree(init_params)
     bounds_free = (tuple(pfull2pfree(bounds[0])), tuple(pfull2pfree(bounds[1])))
 
+    # ###########################
     # non-linear least squares fit
+    # ###########################
     if model_jacobian is None:
         fit_info = scipy.optimize.least_squares(err_fn_pfree, init_params_free, bounds=bounds_free, **kwargs)
     else:
@@ -128,13 +146,17 @@ def fit_least_squares(model_fn, init_params: list[float], fixed_params: list[boo
                                                 jac=jac_fn_free, x_scale='jac', **kwargs)
     pfit = pfree2pfull(fit_info['x'])
 
+    # ###########################
     # calculate chi squared
+    # ###########################
     nfree_params = np.sum(np.logical_not(fixed_params))
     # red_chi_sq = np.sum(np.square(model_fn(pfit))) / (model_fn(init_params).size - nfree_params)
     # scipy.optimize.least_squares minimizes s = 0.5 * \sum |fn(x_i)|^2, so need a factor of two to correct their cost
     red_chi_sq = (2 * fit_info["cost"]) / (model_fn(init_params).size - nfree_params)
 
-    # calculate covariances
+    # ###########################
+    # calculate covariance amtrix
+    # ###########################
     try:
         jacobian = fit_info['jac']
         cov_free = red_chi_sq * np.linalg.inv(jacobian.transpose().dot(jacobian))
@@ -152,6 +174,9 @@ def fit_least_squares(model_fn, init_params: list[float], fixed_params: list[boo
                 if jj_free == nfree_params:
                     ii_free += 1
 
+    # ###########################
+    # store results
+    # ###########################
     result = {'fit_params': pfit, 'chi_squared': red_chi_sq, 'covariance': cov,
               'init_params': init_params, 'fixed_params': fixed_params, 'bounds': bounds,
               'cost': fit_info['cost'], 'optimality': fit_info['optimality'],
