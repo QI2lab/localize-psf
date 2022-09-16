@@ -4,8 +4,7 @@ Tools for working with point-spread functions and optical transfer functions.
 Functions for estimating PSF's from images of fluorescent beads (z-stacks or single planes). Useful for generating
 experimental PSF's from the average of many beads and fitting 2D and 3D PSF models to beads.
 """
-from pathlib import Path
-import copy
+import warnings
 import numpy as np
 import scipy.ndimage as ndi
 import scipy.special as sp
@@ -13,9 +12,7 @@ import scipy.integrate
 import scipy.interpolate
 import scipy.signal
 from scipy import fft
-import matplotlib.pyplot as plt
-from matplotlib.colors import PowerNorm
-from localize_psf import fit, affine, rois
+from localize_psf import affine, rois
 
 # most of the functions don't require this module, and it does not easily pip install,
 # so don't require it. Probably should enforce some reasonable behavior on the functions
@@ -305,6 +302,8 @@ def sz2na(sigma_z, wavelength, ni):
     """
     return np.sqrt(np.sqrt(6) / np.pi * ni * wavelength / sigma_z)
 
+
+# PSF models
 class psf_model:
     """
     TODO: should I include a fit method in this class?
@@ -612,6 +611,7 @@ class gaussian2d_psf_model(psf_model):
                              )
         return p2d
 
+
 class gaussian_lorentzian_psf_model(psf_model):
     """
     Gaussian-Lorentzian PSF model. One difficulty with the Gaussian PSF is the weight is not the same in every z-plane,
@@ -683,7 +683,7 @@ class gaussian_lorentzian_psf_model(psf_model):
         sz = sigmas[2]
 
         guess_params = np.concatenate((np.array([np.nanmax(img) - np.nanmean(img)]),
-                                       c1s[0].flip(),
+                                       np.flip(c1s),
                                        np.array([sxy]),
                                        np.array([sz]),
                                        np.array([np.nanmean(img)])
@@ -836,7 +836,7 @@ class model(psf_model):
         self.ni = ni
 
         allowed_models = ["gibson-lanni", "vectorial", "born-wolf", "gaussian"]
-        if self.model_name not in allowed_models:
+        if model_name not in allowed_models:
             raise ValueError(f"model={model_name:s} was not an allowed value. Allowed values are {allowed_models}")
 
         if not psfmodels_available and (model_name == "vectorial" or model_name == "gibson-lanni"):
@@ -996,7 +996,6 @@ def oversample_voxel(coords, drs, sf=3):
     return coords_upsample
 
 
-# main functions for fitting/plotting PSFs
 def get_psf_coords(ns, drs, broadast=False):
     """
     Get centered coordinates for PSFmodels style PSF's from step size and number of coordinates
@@ -1016,104 +1015,7 @@ def get_psf_coords(ns, drs, broadast=False):
     return coords
 
 
-# def fit_psfmodel(img, dxy, dz, wavelength, ni, sf=1, model='vectorial',
-#                  init_params=None, fixed_params=None, sd=None, bounds=None):
-#     """
-#     # todo: get rid of ... possibly incorporate code in model(). particularly jacobian optioned passed through
-#     to optimization function
-#
-#     3D non-linear least squares fit using one of the point spread function models from psfmodels package.
-#
-#     The x/y coordinates are assumed to match the convention of get_coords(), i.e. they are (arange(nx) / nx//2) * d
-#
-#     # todo: make sure ni implemented correctly. if want to use different ni, have to be careful because this will
-#     # todo: shift the focus position away from z=0
-#     # todo: make sure oversampling (sf) works correctly with all functions
-#
-#     :param img: nz x ny x nx image stack
-#     :param float dxy: dx and dy in um
-#     :param float dz: dz in um
-#     :param float wavelength: wavelength in um
-#     :param float ni: index of refraction
-#     :param sf:
-#     :param model: 'gaussian', 'gibson-lanni', or 'vectorial'
-#     :param init_params: [A, cx, cy, cz, NA, bg]
-#     :param list[bool] fixed_params:
-#     :param sd: standard deviations if img is derived from averaged pictures
-#     :param bounds:
-#     :return result, fit_fn: result is a dictionary object, and fit_fn takes arguments x and y
-#     """
-#
-#     # get coordinates
-#     z, y, x = get_psf_coords(img.shape, [dz, dxy, dxy])
-#     z = z[:, 0, 0]
-#
-#     # check size
-#     nz, ny, nx = img.shape
-#     if not ny == nx:
-#         raise ValueError('x- and y-size of img must be equal')
-#
-#     if not np.mod(nx, 2) == 1:
-#         raise ValueError('x- and y-size of img must be odd')
-#
-#     # get default initial parameters
-#     if init_params is None:
-#         init_params = [None] * 6
-#     else:
-#         init_params = copy.deepcopy(init_params)
-#
-#     # use default values for any params that are None
-#     if np.any([ip is None for ip in init_params]):
-#         # exclude nans
-#         to_use = np.logical_not(np.isnan(img))
-#
-#         bg = np.mean(img[to_use].ravel())
-#         amp = np.max(img[to_use].ravel()) - bg
-#
-#         cz, cy, cx = fit.get_moments(img, order=1, coords=(np.expand_dims(z, axis=(1, 2)), y, x))
-#
-#         # iz = np.argmin(np.abs(z - cz))
-#         # m2y, m2x = tools.get_moments(img[iz], order=2, coords=[y, x])
-#         # sx = np.sqrt(m2x - cx ** 2)
-#         # sy = np.sqrt(m2y - cy ** 2)
-#         # # from gaussian approximation
-#         # na_guess = 0.22 * wavelength / np.sqrt(sx * sy)
-#         na_guess = 1
-#
-#         ip_default = [amp, cx, cy, cz, na_guess, bg]
-#
-#         for ii in range(len(init_params)):
-#             if init_params[ii] is None:
-#                 init_params[ii] = ip_default[ii]
-#
-#     # set bounds
-#     if bounds is None:
-#         # allow for 2D fitting by making z bounds eps apart
-#         if z.min() == z.max():
-#             zlow = z.min() - 1e-12
-#             zhigh = z.max() + 1e-12
-#         else:
-#             zlow = z.min()
-#             zhigh = z.max()
-#
-#         # NA must be <= index of refraction
-#         bounds = ((0, x.min(), y.min(), zlow, 0, -np.inf),
-#                   (np.inf, x.max(), y.max(), zhigh, ni, np.inf))
-#
-#     # do fitting
-#     def model_fn(z, nx, dxy, p): return model_psf(nx, dxy, z, p, wavelength, ni, sf=sf, model=model)
-#
-#     result = fit.fit_model(img, lambda p: model_fn(z, nx, dxy, p), init_params,
-#                            fixed_params=fixed_params, sd=sd, bounds=bounds, jac='3-point', x_scale='jac')
-#
-#     # model function at fit parameters
-#     def fit_fn(z, nx, dxy): return model_fn(z, nx, dxy, result['fit_params'])
-#
-#     return result, fit_fn
-
-
-# get real PSF
-def get_exp_psf(imgs, coords, centers, roi_sizes, backgrounds=None):
+def average_exp_psfs(imgs, coords, centers, roi_sizes, backgrounds=None):
     """
     Get experimental psf from imgs by averaging many localizations (after pixel shifting).
 
@@ -1131,6 +1033,7 @@ def get_exp_psf(imgs, coords, centers, roi_sizes, backgrounds=None):
 
     z, y, x, = coords
     dz = z[1, 0, 0] - z[0, 0, 0]
+    dy = y[0, 1, 0] - y[0, 0, 0]
     dx = x[0, 0, 1] - x[0, 0, 0]
 
     # set up array to hold psfs
@@ -1140,11 +1043,11 @@ def get_exp_psf(imgs, coords, centers, roi_sizes, backgrounds=None):
 
     psf_shifted = np.zeros((nrois, roi_sizes[0], roi_sizes[1], roi_sizes[2])) * np.nan
     # coordinates
-    z_psf, y_psf, x_psf = get_psf_coords(roi_sizes, [dz, dx, dx])
+    z_psf, y_psf, x_psf = get_psf_coords(roi_sizes, [dz, dy, dx], broadast=True)
 
-    zc_pix_psf = np.argmin(np.abs(z_psf))
-    yc_pix_psf = np.argmin(np.abs(y_psf))
-    xc_pix_psf = np.argmin(np.abs(x_psf))
+    zc_pix_psf = np.argmin(np.abs(z_psf[:, 0, 0]))
+    yc_pix_psf = np.argmin(np.abs(y_psf[0, :, 0]))
+    xc_pix_psf = np.argmin(np.abs(x_psf[0, 0, :]))
 
     # loop over rois and shift psfs so they are centered
     for ii in range(nrois):
@@ -1156,18 +1059,18 @@ def get_exp_psf(imgs, coords, centers, roi_sizes, backgrounds=None):
         # cut roi from image
         roi_unc = rois.get_centered_roi((zc_pix, yc_pix, xc_pix), roi_sizes)
         roi = rois.get_centered_roi((zc_pix, yc_pix, xc_pix), roi_sizes, min_vals=[0, 0, 0], max_vals=imgs.shape)
-        img_roi = imgs[roi[0]:roi[1], roi[2]:roi[3], roi[4]:roi[5]]
+        img_roi = rois.cut_roi(roi, imgs)
 
-        zroi = z[roi[0]:roi[1], :, :]
-        yroi = y[:, roi[2]:roi[3], :]
-        xroi = x[:, :, roi[4]:roi[5]]
+        zroi = rois.cut_roi(roi, z)
+        yroi = rois.cut_roi(roi, y)
+        xroi = rois.cut_roi(roi, x)
 
         cx_pix_roi = (roi[5] - roi[4]) // 2
         cy_pix_roi = (roi[3] - roi[2]) // 2
         cz_pix_roi = (roi[1] - roi[0]) // 2
 
         xshift_pix = (xroi[0, 0, cx_pix_roi] - centers[ii, 2]) / dx
-        yshift_pix = (yroi[0, cy_pix_roi, 0] - centers[ii, 1]) / dx
+        yshift_pix = (yroi[0, cy_pix_roi, 0] - centers[ii, 1]) / dy
         zshift_pix = (zroi[cz_pix_roi, 0, 0] - centers[ii, 0]) / dz
 
         # get coordinates
@@ -1185,133 +1088,19 @@ def get_exp_psf(imgs, coords, centers, roi_sizes, backgrounds=None):
 
         psf_shifted[ii, zstart:zend, ystart:yend, xstart:xend] = img_roi_shifted - backgrounds[ii]
 
-    with np.errstate(divide='ignore', invalid='ignore'):
-        psf_mean = np.nanmean(psf_shifted, axis=0)
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", category=RuntimeWarning)
+
+        with np.errstate(divide='ignore', invalid='ignore'):
+            psf_mean = np.nanmean(psf_shifted, axis=0)
 
     # the above doesn't do a good enough job of normalizing PSF
     max_val = np.nanmax(psf_mean[psf_mean.shape[0]//2])
     psf_mean = psf_mean / max_val
 
     # get otf
-    otf_mean, ks = psf2otf(psf_mean, drs=(dz, dx, dx))
-    kz, ky, kx = ks
+    otf_mean, ks = psf2otf(psf_mean, drs=(dz, dy, dx))
+    kz, ky, kx = np.meshgrid(*ks, indexing="ij")
 
     return psf_mean, (z_psf, y_psf, x_psf), otf_mean, (kz, ky, kx)
-
-
-# other display functions
-# def plot_psf_fit(imgs, imgs_fit, coords, fit_params, fit_param_names=None, label="",
-#                  figsize=(18, 10), gamma=1, save_dir=None, **kwargs):
-#     """
-#     Plot PSF model compared with real data. Intended to be agnostic of fit parameters
-#
-#     # todo: can I combine this function with localize.plot_gauss_roi()?
-#     @param imgs:
-#     @param imgs_fit:
-#     @param coords:
-#     @param fit_params:
-#     @param fit_param_names:
-#     @param label:
-#     @param figsize:
-#     @param gamma:
-#     @param save_dir:
-#     @param kwargs:
-#     @return:
-#     """
-#
-#     # get image size and central pixels
-#     nz, ny, nx = imgs.shape
-#
-#     zc_pix = nz // 2
-#     yc_pix = ny // 2
-#     xc_pix = nx // 2
-#
-#     # get coordinates
-#     z, y, x, = coords
-#     dz = z[1, 0, 0] - z[0, 0, 0]
-#     dy = y[0, 1, 0] - y[0, 0, 0]
-#     dx = x[0, 0, 1] - x[0, 0, 0]
-#
-#     # other useful coordinate info
-#     extent_xy = [x[0, 0, 0] - 0.5 * dx, x[0, 0, -1] + 0.5 * dx,
-#                  y[0, -1, 0] + 0.5 * dy, y[0, 0, 0] - 0.5 * dy]
-#     extent_xz = [x[0, 0, 0] - 0.5 * dx, x[0, 0, -1] + 0.5 * dx,
-#                  z[-1, 0, 0] + 0.5 * dz, z[0, 0, 0] - 0.5 * dz]
-#     extent_zy = [z[0, 0, 0] - 0.5 * dz, z[-1, 0, 0] + 0.5 * dz,
-#                  y[0, -1, 0] + 0.5 * dy, y[0, 0, 0] - 0.5 * dy]
-#
-#     # plot results
-#     ttl_str = "%s\n" % label
-#     for ii in range(len(fit_params)):
-#         if fit_param_names is None:
-#             ttl_str += "%0.3f, " % fit_params[ii]
-#         else:
-#             ttl_str += "%s=%0.3f, " % (fit_param_names[ii], fit_params[ii])
-#
-#     figh = plt.figure(figsize=figsize, **kwargs)
-#     grid = plt.GridSpec(2, 4, wspace=0.5, hspace=0.5)
-#     plt.suptitle(ttl_str)
-#
-#     # XY-plane
-#     ax = plt.subplot(grid[0, 1])
-#     ax.imshow(imgs[zc_pix], extent=extent_xy, cmap="bone", norm=PowerNorm(gamma=gamma))
-#     ax.set_xticks([])
-#     ax.set_yticks([])
-#     ax.set_title("Data")
-#
-#     ax = plt.subplot(grid[0, 3])
-#     ax.imshow(imgs_fit[zc_pix], extent=extent_xy, cmap="bone", norm=PowerNorm(gamma=gamma))
-#     ax.set_xticks([])
-#     ax.set_yticks([])
-#     ax.set_title("Fit")
-#
-#     # XZ-plane
-#     ax = plt.subplot(grid[1, 1])
-#     ax.imshow(imgs[:, yc_pix], extent=extent_xz, cmap="bone", norm=PowerNorm(gamma=gamma))
-#     ax.set_xlabel("x ($\mu m$)")
-#     ax.set_ylabel("z ($\mu m$)")
-#
-#     ax = plt.subplot(grid[1, 3])
-#     ax.imshow(imgs_fit[:, yc_pix], extent=extent_xz, cmap="bone", norm=PowerNorm(gamma=gamma))
-#     ax.set_xlabel("x ($\mu m$)")
-#     ax.set_ylabel("z ($\mu m$)")
-#
-#     # YZ-plane
-#     ax = plt.subplot(grid[0, 0])
-#     ax.imshow(np.transpose(imgs[:, :, xc_pix]), extent=extent_zy, cmap="bone", norm=PowerNorm(gamma=gamma))
-#     ax.set_xlabel("z ($\mu m$)")
-#     ax.set_ylabel("y ($\mu m$)")
-#
-#     ax = plt.subplot(grid[0, 2])
-#     ax.imshow(np.transpose(imgs_fit[:, :, xc_pix]), extent=extent_zy, cmap="bone", norm=PowerNorm(gamma=gamma))
-#     ax.set_xlabel("z ($\mu m$)")
-#     ax.set_ylabel("y ($\mu m$)")
-#
-#     # XY cuts
-#     ax = plt.subplot(grid[1, 0])
-#     ax.plot(np.sqrt(np.expand_dims(x, axis=0) ** 2 + np.expand_dims(y, axis=1) ** 2).ravel(), imgs[zc_pix].ravel(), 'g.')
-#     ax.plot(y.ravel(), imgs[zc_pix, :, xc_pix], 'b.')
-#     ax.plot(x.ravel(), imgs[zc_pix, yc_pix, :], 'k.')
-#     ax.plot(y.ravel(), imgs_fit[zc_pix, :, xc_pix], 'b')
-#     ax.plot(x.ravel(), imgs_fit[zc_pix, yc_pix, :], 'k')
-#     ax.set_xlabel("xy-position ($\mu m$)")
-#     ax.set_ylabel("amplitude")
-#     ax.legend(["all", "y-cut", "x-cut"])
-#
-#     # z cuts
-#     ax = plt.subplot(grid[1, 2])
-#     ax.plot(z.ravel(), imgs[:, yc_pix, xc_pix], 'b.')
-#     ax.plot(z.ravel(), imgs_fit[:, yc_pix, xc_pix], 'b')
-#     ax.set_xlabel("z-position ($\mu m$)")
-#     ax.set_ylabel("amplitude")
-#
-#     # optional saving
-#     if save_dir is not None:
-#         save_dir = Path(save_dir)
-#         save_dir.mkdir()
-#
-#         figh.savefig(save_dir / f"{label:s}.png")
-#         plt.close(figh)
-#
-#     return figh
-

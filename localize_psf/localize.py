@@ -795,7 +795,7 @@ def fit_gauss_rois(img_rois: np.ndarray,
         if fixed_params is None:
             fixed_params = np.zeros((nparams), dtype=bool)
 
-        params_to_fit = fixed_params.astype(np.int32)
+        params_to_fit = np.array(fixed_params).astype(np.int32)
 
         # do fitting
         fit_params, fit_states, chi_sqrs, niters, fit_t = gf.fit(data,
@@ -1162,7 +1162,7 @@ class unique_filter(filter):
     """
     Filter spots so that only keep one in a certain area, to avoid one spot being picked up multiple times by max filter
     """
-    def __init__(self, dxy_min_dist, dz_min_dist, name="unique"):
+    def __init__(self, dxy_min_dist, dz_min_dist, name="not unique"):
         self.dxy_min_dist = dxy_min_dist
         self.dz_min_dist = dz_min_dist
         self.condition_names = [f"{name:s}"]
@@ -1187,7 +1187,7 @@ def get_param_filter(coords: tuple[np.ndarray],
     """
     Simple composite filter testing bounds of fit parameters
     @param coords: (z, y, x)
-    @param fit_dist_max_err: (dmax_z, dmax_xy) maximum distance between
+    @param fit_dist_max_err: (dmax_z, dmax_xy) maximum distance between fit points allowed.
     @param min_spot_sep: (dz_min, dxy_min)
     @param sigma_bounds: ((sz_min, sxy_min), (sz_max, sxy_max))
     @param amp_bounds: (amp_min, amp_max)
@@ -1568,6 +1568,10 @@ def localize_beads_generic(imgs: np.ndarray,
         filter_settings = {}
 
         if verbose:
+            num_rejected = len(conditions) - np.sum(conditions, axis=0)
+            for rr in range(len(filter.condition_names)):
+                print(f"Rejected {num_rejected[rr]:d} fits because {filter.condition_names[rr]}")
+
             print(f"Identified {np.sum(to_keep):d} likely candidates")
 
     else:
@@ -1670,6 +1674,7 @@ def plot_bead_locations(imgs: np.ndarray,
     :param weights: list of arrays [w_1, ..., w_n], with w_i the same size as center_array_i, giving the intensity of
     the color to be plotted
     :param cbar_labels: list of labels for color bars
+    :param coords:
     :param vlims_percentile: (percentile_min, percentile_max) used to set color scale of image
     :param gamma: gamma to use when displaying image
     :return figure_handle:
@@ -1763,27 +1768,28 @@ def plot_bead_locations(imgs: np.ndarray,
 
 def autofit_psfs(imgs: np.ndarray,
                  psf_roi_size: list[float],
-                 dx: float,
+                 dxy: float,
                  dz: float,
-                 wavelength: float,
-                 ni: float = 1.5,
-                 model: str = 'vectorial',
+                 summary_model=psf.model(wavelength=0.532, ni=1.5, model_name="vectorial"),
                  threshold: float = 100.,
                  min_spot_sep: tuple[float] = (0., 0.),
                  filter_sigma_small: tuple[float] = (1, 0.5, 0.5),
                  filter_sigma_large: tuple[float] = (3, 5, 5),
                  sigma_bounds: tuple[tuple[float]] = ((0., 0.), (np.inf, np.inf)),
-                 roi_size_loc=(13, 21, 21),
-                 fit_amp_thresh: float = 100.,
+                 amp_bounds: tuple[float] = (0, np.inf),
+                 roi_size_loc=(2, 3, 3),
                  dist_boundary_min: tuple[float] = (0., 0.),
+                 localization_model=psf.gaussian3d_psf_model(),
                  max_number_iterations: int = 100,
                  fit_dist_max_err: tuple[float] = (np.inf, np.inf),
                  num_localizations_to_plot: int = 5,
                  psf_percentiles: tuple[float] = (5,),
-                 plot: bool = True,
+                 plot_results: bool = True,
                  only_plot_good_fits: bool = True,
                  plot_filtered_image: bool = False,
                  use_gpu_filter: bool = False,
+                 use_gpu_fit: bool = False,
+                 verbose: bool = False,
                  gamma: float = 0.5,
                  save_dir: str = None,
                  figsize=(18, 10),
@@ -1793,14 +1799,11 @@ def autofit_psfs(imgs: np.ndarray,
     an experimental point-spread function and fit the average PSF to a model function.
 
     :param imgs: nz x nx x ny image
-    :param psf_roi_size: [nz, ny, nx] ROI to determine PSFs on. This is not necessarily the same as the size of the
+    :param psf_roi_size: s(sz, sy, sx) size in um of  ROI to determine PSFs on. This is not necessarily the same as the size of the
     ROI's used during localization
-    :param dx: pixel size in um
+    :param dxy: pixel size in um
     :param dz: z-plane spacing in um
-    :param wavelength: wavelength in um
-    :param ni: index of refraction of medium
-    :param model: "vectorial", "gibson-lanni", "born-wolf", or "gaussian". This model is used to fit the
-    averaged PSF's, but a gaussian model is always used for localization
+    :param summary_model: This model is used to fit the averaged PSF's
     :param threshold: threshold pixel value to identify peaks. Note: this is applied to the filtered image,
     and is not directly comparable to the values in the raw image array
     :param min_spot_sep: (sz, sxy) minimum spot separation between different beads in um
@@ -1815,7 +1818,7 @@ def autofit_psfs(imgs: np.ndarray,
     :param int num_localizations_to_plot: number of ROI's to plot
     :param tuple psf_percentiles: calculate the averaged PSF from the smallest supplied percentage of spots. When
     a tuple is given, compute PSF's corresponding to each supplied percentage.
-    :param bool plot: optionally plot diagnostics
+    :param bool plot_results: optionally plot diagnostics
     :param bool only_plot_good_fits: when plotting ROI, plot only fits that passed all filtering tests or plot all fits
     :param bool plot_filtered_image: plot ROI's against filtered image also
     :param float gamma: gamma to use when plotting
@@ -1828,6 +1831,9 @@ def autofit_psfs(imgs: np.ndarray,
            fit_states, chi_sqrs, niters, \
            psfs_real, psf_coords, otfs_real, otf_coords, psf_percentiles, fit_params_real:
     """
+
+    plt.switch_backend("agg")
+    plt.ioff()
 
     # todo: correct this function for many recent changes
 
@@ -1844,25 +1850,28 @@ def autofit_psfs(imgs: np.ndarray,
     # ###################################
     # do localization
     # ###################################
-    z, y, x = get_coords(imgs.shape, (dz, dx, dx))
+    z, y, x = get_coords(imgs.shape, (dz, dxy, dxy))
 
     filter = get_param_filter((z, y, x),
                               fit_dist_max_err=fit_dist_max_err,
                               min_spot_sep=min_spot_sep,
                               sigma_bounds=sigma_bounds,
-                              amp_bounds=(0, fit_amp_thresh),
+                              amp_bounds=amp_bounds,
                               dist_boundary_min=dist_boundary_min)
 
     coords, fit_results, imgs_filtered = localize_beads_generic(imgs,
-                                                                drs=(dz, dx, dx),
+                                                                drs=(dz, dxy, dxy),
                                                                 threshold=threshold,
                                                                 roi_size=roi_size_loc,
                                                                 filter_sigma_small=filter_sigma_small,
                                                                 filter_sigma_large=filter_sigma_large,
                                                                 min_spot_sep=min_spot_sep,
                                                                 filter=filter,
+                                                                model=localization_model,
                                                                 max_nfit_iterations=max_number_iterations,
-                                                                use_gpu_filter=use_gpu_filter)
+                                                                use_gpu_filter=use_gpu_filter,
+                                                                use_gpu_fit=use_gpu_fit,
+                                                                verbose=verbose)
 
     fit_params = fit_results["fit_params"]
     init_params = fit_results["init_params"]
@@ -1882,7 +1891,7 @@ def autofit_psfs(imgs: np.ndarray,
     # ###################################
     # plot individual localizations
     # ###################################
-    if plot:
+    if plot_results:
         print("plotting ROI's")
         tstart_plot_roi = time.perf_counter()
 
@@ -1891,59 +1900,49 @@ def autofit_psfs(imgs: np.ndarray,
         else:
             ind_to_plot = np.arange(len(to_keep), dtype=int)[:num_localizations_to_plot]
 
-        results = joblib.Parallel(n_jobs=-1, verbose=10, timeout=None)(
-            joblib.delayed(plot_gauss_roi)(fit_params[ind], rois[ind], imgs, coords, init_params[ind],
-                                           figsize=figsize,
-                                           prefix="localization_roi_%d" % ind,
-                                           title="filter conditions = " + " ".join(
-                                                ["%d," % c for c in conditions[ind]]),
-                                           save_dir=save_dir)
-            for ind in ind_to_plot
-        )
+
+        delayed = []
 
         if plot_filtered_image:
-            results = joblib.Parallel(n_jobs=-1, verbose=10, timeout=None)(
-                joblib.delayed(plot_gauss_roi)(fit_params[ind], rois[ind], imgs_filtered, coords,
-                                               init_params[ind], same_color_scale=False,
-                                               figsize=figsize,
-                                               prefix="localization_roi_%d_filtered" % ind,
-                                               title="filter conditions = " + " ".join(
-                                                    ["%d," % c for c in conditions[ind]]),
-                                               save_dir=save_dir)
-                for ind in ind_to_plot
-            )
+            im_to_plot = imgs_filtered
+        else:
+            im_to_plot = imgs
 
-        print("plotting took %0.2fs" % (time.perf_counter() - tstart_plot_roi))
+        for ind in ind_to_plot:
+            delayed.append(dask.delayed(plot_gauss_roi)(fit_params[ind],
+                                                        rois[ind],
+                                                        im_to_plot,
+                                                        coords,
+                                                        init_params[ind],
+                                                        figsize=figsize,
+                                                        prefix="localization_roi_%d" % ind,
+                                                        string="filter conditions = " + " ".join(["%d," % c for c in conditions[ind]]),
+                                                        save_dir=save_dir
+                                                       )
+                           )
+
+        # with ProgressBar():
+        results = dask.compute(*delayed)
+
+        print(f"plotting took {time.perf_counter() - tstart_plot_roi:.2f}s")
 
     # ###################################
     # plot fit statistics
     # ###################################
-    if plot and not no_psfs_found:
-        # figh = psf.plot_fit_stats(fit_params[to_keep], figsize=figsize, **kwargs)
+    if plot_results and not no_psfs_found:
 
         # fit parameter summary
         figh = plt.figure(figsize=figsize, **kwargs)
-        plt.suptitle("Localization fit parameter summary")
-        grid = plt.GridSpec(2, 2, hspace=1, wspace=0.5)
+        figh.suptitle("Localization fit parameter summary")
+        grid = figh.add_gridspec(nrows=localization_model.nparams - 1, hspace=0.3,
+                                 ncols=localization_model.nparams - 1, wspace=0.3)
 
-        # amplitude vs sxy
-        ax = plt.subplot(grid[0, 0])
-        ax.plot(fit_params[to_keep, 4], fit_params[to_keep, 0], '.')
-        ax.set_xlabel(r"$\sigma_{xy}$ ($\mu m$)")
-        ax.set_ylabel("amp")
-
-        # sxy vs sz
-        ax = plt.subplot(grid[0, 1])
-        ax.plot(fit_params[to_keep, 4], fit_params[to_keep, 5], '.')
-        ax.set_xlabel(r"$\sigma_{xy}$ ($\mu m$)")
-        ax.set_ylabel(r"$\sigma_{z}$ ($\mu m$)")
-
-        # sxy vs bg
-        ax = plt.subplot(grid[1, 1])
-        ax.plot(fit_params[to_keep, 4], fit_params[to_keep, 6], '.')
-        ax.set_xlabel(r"$\sigma_{xy}$ ($\mu m$)")
-        ax.set_ylabel(r"$\sigma_{z}$ ($\mu m$)")
-
+        for ii in range(localization_model.nparams):
+            for jj in range(ii + 1, localization_model.nparams):
+                ax = figh.add_subplot(grid[ii, jj - 1])
+                ax.plot(fit_params[to_keep, ii], fit_params[to_keep, jj], '.')
+                ax.set_xlabel(localization_model.parameter_names[ii])
+                ax.set_ylabel(localization_model.parameter_names[jj])
 
         if saving:
             figh.savefig(Path(save_dir) / "fit_stats.png")
@@ -1953,12 +1952,12 @@ def autofit_psfs(imgs: np.ndarray,
     # get and plot experimental PSFs
     # ###################################
     nps = len(psf_percentiles)
-    psf_roi_size_pix = np.round(np.array(psf_roi_size) / np.array([dz, dx, dx])).astype(int)
+    psf_roi_size_pix = np.round(np.array(psf_roi_size) / np.array([dz, dxy, dxy])).astype(int)
     psf_roi_size_pix += (1 - np.mod(psf_roi_size_pix, 2))
 
     psfs_real = np.zeros((nps,) + tuple(psf_roi_size_pix))
     otfs_real = np.zeros(psfs_real.shape, dtype=complex)
-    fit_params_real = np.zeros((nps, 6))
+    fit_params_real = np.zeros((nps, summary_model.nparams))
     psf_coords = None
     otf_coords = None
 
@@ -1973,81 +1972,90 @@ def autofit_psfs(imgs: np.ndarray,
                                 fit_params[:, 2][to_use],
                                 fit_params[:, 1][to_use]), axis=1)
 
-            # find experiment psf/otf
-            psfs_real[ii], psf_coords, otfs_real[ii], otf_coords = psf.get_exp_psf(imgs, (z, y, x), centers, psf_roi_size,
-                                                                               backgrounds=fit_params[:, 5][to_use])
+            # find average experimental psf/otf
+            psfs_real[ii], psf_coords, otfs_real[ii], otf_coords = psf.average_exp_psfs(imgs, (z, y, x), centers, psf_roi_size_pix,
+                                                                                        backgrounds=fit_params[:, 5][to_use])
 
-            results, _ = psf.fit_psfmodel(psfs_real[ii], dx, dz, wavelength, ni, 1, model=model)
+            # fit average experimental psf
+            def fn(p): return summary_model.model(psf_coords, p)
+            init_params = summary_model.estimate_parameters(psfs_real[ii], psf_coords)
+
+            results = fit.fit_model(psfs_real[ii], fn, init_params, jac='3-point', x_scale='jac')
             fit_params_real[ii] = results["fit_params"]
 
-            if plot:
+            if plot_results:
                 figh = plot_gauss_roi(fit_params_real[ii],
-                                      [0, psfs_real[ii].size[0],
-                                       0, psfs_real[ii].size[1],
-                                       0, psfs_real[ii].size[2]],
+                                      [0, psfs_real[ii].shape[0],
+                                       0, psfs_real[ii].shape[1],
+                                       0, psfs_real[ii].shape[2]],
                                       psfs_real[ii],
-                                      coords,
-                                      model=model,
-                                      string=f"smallest {psf_percentiles[ii]:.0f} percent, {type(model)}, sf={model.sf}",
+                                      psf_coords,
+                                      model=summary_model,
+                                      string=f"smallest {psf_percentiles[ii]:.0f} percent,"
+                                             f" {type(summary_model)}, sf={summary_model.sf}",
+                                      vmin=0,
+                                      vmax=1,
                                       gamma=gamma,
                                       figsize=figsize,
                                       **kwargs)
 
-                # figh = psf.plot_psf_fit(psfs_real[ii],
-                #                         model.model(coords, fit_params_real[ii]),
-                #                         coords,
-                #                         fit_params,
-                #                         fit_param_names=model.parameter_names,
-                #                         label=f"smallest {psf_percentiles[ii]:.0f} percent, {type(model)}, sf={model.sf}",
-                #                         gamma=gamma,
-                #                         figsize=figsize,
-                #                         **kwargs)
-
                 if saving:
-                    figh.savefig(Path(save_dir) / "experimental_psf_smallest_{psf_percentiles[ii]:.2f}.png")
+                    figh.savefig(Path(save_dir) / f"experimental_psf_smallest_{psf_percentiles[ii]:.2f}.png")
                     plt.close(figh)
 
     # ###################################
     # plot localization positions
     # ###################################
-    if plot and not no_psfs_found:
+    if plot_results and not no_psfs_found:
         centers_all = np.stack((fit_params[:, 3],
                                 fit_params[:, 2],
                                 fit_params[:, 1]), axis=1)
 
-        extent = [x.min() - 0.5 * dx, x.max() + 0.5 * dx, y.max() + 0.5 * dx, y.min() - 0.5 * dx]
-
-        figh = plot_bead_locations(imgs, [centers_all, centers_all[to_keep]],
+        figh = plot_bead_locations(imgs,
+                                   [centers_all, centers_all[to_keep]],
                                    weights=[np.ones(len(centers_all)), fit_params[to_keep, 4]],
                                    cbar_labels=["all fits", r"kept fits, $\sigma_{xy} (\mu m)$"],
                                    title="Max intensity projection and size from 2D fit versus position",
-                                   extent=extent, gamma=gamma, figsize=figsize)
+                                   coords=np.meshgrid(y, x, indexing="ij"),
+                                   gamma=gamma,
+                                   figsize=figsize)
 
         if saving:
             figh.savefig(Path(save_dir) / "sigma_versus_position.png")
             plt.close(figh)
 
-    data = {"coords": coords,
+    # convert coords to array we can save in zarr file
+    coords_bcast = np.stack([np.array(c, copy=True) for c in np.broadcast_arrays(*coords)], axis=0)
+
+    if psf_coords is not None:
+        psf_coords_bcast = np.stack([np.array(c, copy=True) for c in np.broadcast_arrays(*psf_coords)], axis=0)
+
+    if otf_coords is not None:
+        otf_coords_bcast = np.stack([np.array(c, copy=True) for c in np.broadcast_arrays(*otf_coords)], axis=0)
+
+    data = {"coords": coords_bcast,
             "fit_params": fit_params,
             "init_params": init_params,
             "rois": rois,
             "to_keep": to_keep,
             "conditions": conditions,
             "condition_names": condition_names,
-            "filter_settings": filter_settings,
+            #"filter_settings": filter_settings,
             "fit_states": fit_states,
             "chi_sqrs": chi_sqrs,
             "niterations": niters,
             "psfs_real": psfs_real,
-            "psf_coords": psf_coords,
+            "psf_coords": psf_coords_bcast,
             "otfs_real": otfs_real,
-            "otf_coords": otf_coords,
-            "psf_percentiles": psf_percentiles,
+            "otf_coords": otf_coords_bcast,
+            "psf_percentiles": np.array(psf_percentiles),
             "fit_params_real": fit_params_real}
 
     if saving:
         z = zarr.open(Path(save_dir) / "localization_results.zarr", "w")
         for k, v in data.items():
-            z.array(k, v, compressor="none")
+            if v is not None:
+                z.array(k, v, compressor="none")
+
 
     return data
