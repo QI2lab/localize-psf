@@ -144,7 +144,7 @@ def filter_convolve(imgs, kernel, use_gpu=CUPY_AVAILABLE):
     :param bool use_gpu: if True, do convolution on GPU. If false, do on CPU.
     :return imgs_filtered:
     """
-
+    # todo: check and make sure kernel and imgs are compatible. e.g. that kernel is smaller than image in all dims
     # todo: estimate how much memory convolution requires? Much more than I expect...
 
     # convolve, and deal with edges by normalizing
@@ -259,7 +259,7 @@ def filter_nearby_peaks(centers: np.ndarray, min_xy_dist: float, min_z_dist: flo
     :param weights: only used in "average" mode. If weights are provided, a weighted average between nearby
      points is computed
 
-    :return centers_unique: array of unique centers
+    :return centers_unique: array of unique center coordinates
     :return inds: index into the initial array to produce centers_unique. In mode is "keep-one" or "remove"
     then centers_unique = centers[inds]. If mode is "average", this will not be true as centers_unique will
     not be elements of centers. However, centers[inds] will correspond to one point which was averaged to produce
@@ -277,84 +277,59 @@ def filter_nearby_peaks(centers: np.ndarray, min_xy_dist: float, min_z_dist: flo
 
     # only need to act if minimum distances are non-zero
     if min_xy_dist > 0 or min_z_dist > 0:
-        if len(centers_unique) > nmax:
+        # if number of points is large, divide problem into subproblems, solve each of these, and combine results.
+
+        # check and make sure region is large enough (relative to the minimum distances) to be divide
+        # limits of data
+        clims = np.stack((np.min(centers, axis=0),
+                          np.max(centers, axis=0)), axis=1)
+
+        # find ranges as fraction of min_dist
+        min_dists = np.array([min_z_dist, min_xy_dist, min_xy_dist])
+        ranges = (clims[:, 1] - clims[:, 0]) / min_dists
+
+        if len(centers_unique) > nmax and not np.all(ranges <= 2):
             if mode == "average":
                 raise NotImplementedError("mode='average' is not implemented with nmax < np.inf. Set nmax to np.inf")
 
-            # todo: maybe I should check that dimension sizes are similar before dividing. If have very asymmetric
-            # todo: area it might be better to e.g. make more divisions along one dimension only
-            # todo: on second thought, I think the right approach is in each step to only divide once, and always divide the largest dimension
+            ind_red_dim = np.argmax(ranges)
 
-            # if number of inputs is large, divide problem into subproblems, solve each of these, and combine results.
-            xlims = [np.min(centers[:, 2]), np.max(centers[:, 2])]
-            ylims = [np.min(centers[:, 1]), np.max(centers[:, 1])]
-            zlims = [np.min(centers[:, 0]), np.max(centers[:, 0])]
+            # divide into two regions and solve separately
+            in1 = np.logical_and(centers_unique[:, ind_red_dim] >= clims[ind_red_dim, 0],
+                                 centers_unique[:, ind_red_dim] < np.mean(clims[ind_red_dim]))
+
+            in2 = np.logical_and(centers_unique[:, ind_red_dim] >= np.mean(clims[ind_red_dim]),
+                                 centers_unique[:, ind_red_dim] <= clims[ind_red_dim, 1])
+
+            if np.any(in1):
+                cu1, i1 = filter_nearby_peaks(centers_unique[in1], min_xy_dist, min_z_dist, mode=mode)
+            else:
+                cu1 = np.zeros((0, 3))
+                i1 = np.zeros((0, 3))
+
+            if np.any(in2):
+                cu2, i2 = filter_nearby_peaks(centers_unique[in2], min_xy_dist, min_z_dist, mode=mode)
+            else:
+                cu2 = np.zeros((0, 3))
+                i2 = np.zeros((0, 3))
 
             full_inds = np.arange(len(centers_unique), dtype=int)
-            centers_unique_sectors = []
-            inds_sectors = []
+            centers_unique_sectors = np.concatenate((cu1, cu2))
+            inds_sectors = np.concatenate((full_inds[in1][i1], full_inds[in2][i2]))
 
-            # divide space into octants, if each direction is large enough
-            if (zlims[1] - zlims[0]) > 2 * min_z_dist:
-                zedges = [zlims[0], 0.5 * (zlims[0] + zlims[1]), zlims[1] + min_z_dist]
-            else:
-                zedges = [zlims[0], zlims[1] + min_z_dist]
+            # take care of any non-unique points in the overlap region
+            in_overlap = np.logical_and(centers_unique_sectors[:, ind_red_dim] >= np.mean(clims[ind_red_dim]) - min_dists[ind_red_dim],
+                                        centers_unique_sectors[:, ind_red_dim] <= np.mean(clims[ind_red_dim]) + min_dists[ind_red_dim])
 
-            if (ylims[1] - ylims[0]) > 2 * min_xy_dist:
-                yedges = [ylims[0], 0.5 * (ylims[0] + ylims[1]), ylims[1] + min_xy_dist]
-            else:
-                yedges = [ylims[0], ylims[1] + min_xy_dist]
+            if np.any(in_overlap):
+                centers_unique_overlap, i_overlap = filter_nearby_peaks(centers_unique_sectors[in_overlap], min_xy_dist, min_z_dist, mode=mode)
 
-            if (xlims[1] - xlims[0]) > 2 * min_xy_dist:
-                xedges = [xlims[0], 0.5 * (xlims[0] + xlims[1]), xlims[1] + min_xy_dist]
-            else:
-                xedges = [xlims[0], xlims[1] + min_xy_dist]
+                # get full centers by adding any that were not in the overlap region with the reduced set from the overlap region
+                centers_unique_sectors = np.concatenate((centers_unique_sectors[np.logical_not(in_overlap)],
+                                                         centers_unique_overlap))
+                inds_sectors = np.concatenate((inds_sectors[np.logical_not(in_overlap)],
+                                               full_inds[inds_sectors][in_overlap][i_overlap]))
 
-            # solve sectors independently
-            for ii in range(len(xedges) - 1):
-                for jj in range(len(yedges) - 1):
-                    for kk in range(len(zedges) - 1):
-                        to_use = np.logical_and.reduce((centers_unique[:, 0] >= zedges[kk], centers_unique[:, 0] < zedges[kk + 1],
-                                                        centers_unique[:, 1] >= yedges[jj], centers_unique[:, 1] < yedges[jj + 1],
-                                                        centers_unique[:, 2] >= xedges[ii], centers_unique[:, 2] < xedges[ii + 1]))
-
-                        if np.any(to_use):
-                            cu, i = filter_nearby_peaks(centers_unique[to_use], min_xy_dist, min_z_dist, mode=mode)
-                            centers_unique_sectors.append(cu)
-                            inds_sectors.append(full_inds[to_use][i])
-
-            centers_unique_sectors = np.concatenate(centers_unique_sectors, axis=0)
-            inds_sectors = np.concatenate(inds_sectors)
-
-            # check overlap regions between sectors
-            for ii in range(len(xedges) - 2):
-                to_use = np.logical_and(centers_unique_sectors[:, 2] >= xedges[ii + 1] - min_xy_dist,
-                                        centers_unique_sectors[:, 2] < xedges[ii + 1] + min_xy_dist)
-                if np.any(to_use):
-                    centers_unique_overlap, i = filter_nearby_peaks(centers_unique_sectors[to_use], min_xy_dist, min_z_dist, mode=mode)
-
-                    # get full centers by adding any that were not in the overlap region with the reduced set from the overlap region
-                    centers_unique_sectors = np.concatenate((centers_unique_sectors[np.logical_not(to_use)], centers_unique_overlap))
-                    inds_sectors = np.concatenate((inds_sectors[np.logical_not(to_use)], full_inds[inds_sectors][to_use][i]))
-
-            for ii in range(len(yedges) - 2):
-                to_use = np.logical_and(centers_unique_sectors[:, 1] >= yedges[ii + 1] - min_xy_dist,
-                                        centers_unique_sectors[:, 1] < yedges[ii + 1] + min_xy_dist)
-
-                if np.any(to_use):
-                    centers_unique_overlap, i = filter_nearby_peaks(centers_unique_sectors[to_use], min_xy_dist, min_z_dist, mode=mode)
-
-                    centers_unique_sectors = np.concatenate((centers_unique_sectors[np.logical_not(to_use)], centers_unique_overlap))
-                    inds_sectors = np.concatenate((inds_sectors[np.logical_not(to_use)], full_inds[inds_sectors][to_use][i]))
-
-            for ii in range(len(zedges) - 2):
-                to_use = np.logical_and(centers_unique_sectors[:, 0] >= zedges[ii + 1] - min_z_dist,
-                                        centers_unique_sectors[:, 0] < zedges[ii + 1] + min_z_dist)
-                if np.any(to_use):
-                    centers_unique_overlap, i = filter_nearby_peaks(centers_unique_sectors[to_use], min_xy_dist, min_z_dist, mode=mode)
-
-                    centers_unique_sectors = np.concatenate((centers_unique_sectors[np.logical_not(to_use)], centers_unique_overlap))
-                    inds_sectors = np.concatenate((inds_sectors[np.logical_not(to_use)], full_inds[inds_sectors][to_use][i]))
 
             # full results
             centers_unique = centers_unique_sectors
