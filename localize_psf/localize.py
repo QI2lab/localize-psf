@@ -12,7 +12,6 @@ import zarr
 import numpy as np
 import scipy.signal
 import scipy.ndimage
-import joblib # todo: remove in favor of dask
 import dask
 import matplotlib.pyplot as plt
 from matplotlib.colors import PowerNorm, LinearSegmentedColormap, Normalize
@@ -208,10 +207,6 @@ def get_max_filter_footprint(min_separations, drs):
     ns[ns == 0] = 1
     # ensure odd
     ns += (1 - np.mod(ns, 2))
-
-    # ns = [int(np.ceil(sz / dr)) for sz, dr in zip(min_sep_allowed, drs)]
-    # ensure odd
-    # ns = [n if np.mod(n, 2) == 0 else n + 1 for n in ns]
 
     footprint = np.ones(ns, dtype=bool)
 
@@ -572,12 +567,12 @@ def localize3d(img, mode="radial-symmetry"):
 
 
 # localize using Gaussian fit
-def fit_gauss_roi(img_roi,
-                  coords,
-                  init_params,
-                  fixed_params=None,
-                  bounds=None,
-                  model=psf.gaussian3d_psf_model()):
+def fit_roi(img_roi,
+            coords,
+            init_params,
+            fixed_params=None,
+            bounds=None,
+            model: psf.psf_model = psf.gaussian3d_psf_model()):
     """
     Fit a single ROI to a 3D gaussian function.
 
@@ -589,7 +584,7 @@ def fit_gauss_roi(img_roi,
     that parameter to be identical to the value in init_params. For entries which are False, the fit function
     will determine the optimal value
     :param bounds: ((lower_bounds), (upper_bounds)) where lower_bounds and upper_bounds are each lists/tuples/arrays
-    of length 7.
+    of length nparams
     :param model:
     :return results: dictionary object containing information about fitting
     """
@@ -620,18 +615,19 @@ def fit_gauss_roi(img_roi,
     return results
 
 
-def fit_gauss_rois(img_rois: np.ndarray,
-                   coords_rois: tuple[np.ndarray],
-                   init_params: np.ndarray,
-                   max_number_iterations: int = 100,
-                   estimator: str = "LSE",
-                   fixed_params: np.ndarray = None,
-                   use_gpu: bool = GPUFIT_AVAILABLE,
-                   verbose: bool = True,
-                   debug: bool = False,
-                   model=psf.gaussian3d_psf_model()):
+def fit_rois(img_rois: np.ndarray,
+             coords_rois: tuple[np.ndarray],
+             init_params: np.ndarray,
+             max_number_iterations: int = 100,
+             estimator: str = "LSE",
+             fixed_params: np.ndarray = None,
+             use_gpu: bool = GPUFIT_AVAILABLE,
+             verbose: bool = True,
+             debug: bool = False,
+             model: psf.psf_model = psf.gaussian3d_psf_model()):
     """
-    Fit rois. Can use either CPU parallelization with joblib or GPU parallelization using gpufit
+    Fit rois to different model functions. Can use either CPU parallelization with dask or GPU parallelization
+     using gpufit.
 
     :param img_rois: list of image rois
     :param coords_rois: ((z0, y0, x0), (z1, y1, x1), ....)
@@ -651,45 +647,27 @@ def fit_gauss_rois(img_rois: np.ndarray,
         if img_rois[ii].ndim != 3:
             raise ValueError(f"img_rois position {ii:d} was not 3-dimensional")
 
-
     if not use_gpu:
-
-        verbose_joblib = 0
-        if verbose:
-            verbose_joblib = 1
-
         tstart = time.perf_counter()
 
         if debug:
             results = []
             for ii in range(len(img_rois)):
-                results.append(fit_gauss_roi(img_rois[ii],
-                                             (zrois[ii], yrois[ii], xrois[ii]),
-                                             init_params=init_params[ii],
-                                             fixed_params=fixed_params,
-                                             model=model))
+                results.append(fit_roi(img_rois[ii],
+                                       (zrois[ii], yrois[ii], xrois[ii]),
+                                       init_params=init_params[ii],
+                                       fixed_params=fixed_params,
+                                       model=model))
         else:
-            # results = joblib.Parallel(n_jobs=-1, verbose=verbose_joblib, timeout=None)(
-            #     joblib.delayed(fit_gauss_roi)(img_rois[ii],
-            #                                   (zrois[ii], yrois[ii], xrois[ii]),
-            #                                   init_params=init_params[ii],
-            #                                   fixed_params=fixed_params,
-            #                                   sf=sf,
-            #                                   dc=dc,
-            #                                   angles=angles,
-            #                                   fn=fn,
-            #                                   jacobian=jacobian)
-            #     for ii in range(len(img_rois)))
-
             # forced to switch to dask form joblib because joblib use pickling to exchange info between process
             # and functions (which are arguments to fit_gauss_roi) are not pickleable
             delayed = []
             for ii in range(len(img_rois)):
-                delayed.append(dask.delayed(fit_gauss_roi)(img_rois[ii],
-                                             (zrois[ii], yrois[ii], xrois[ii]),
-                                             init_params=init_params[ii],
-                                             fixed_params=fixed_params,
-                                             model=model))
+                delayed.append(dask.delayed(fit_roi)(img_rois[ii],
+                                                     (zrois[ii], yrois[ii], xrois[ii]),
+                                                     init_params=init_params[ii],
+                                                     fixed_params=fixed_params,
+                                                     model=model))
 
             # with ProgressBar():
             results = dask.compute(*delayed)
@@ -798,7 +776,7 @@ def plot_gauss_roi(fit_params: list[float],
                    imgs: np.ndarray,
                    coords: tuple[np.ndarray] = None,
                    init_params: np.ndarray = None,
-                   model=psf.gaussian3d_psf_model(),
+                   model: psf.psf_model = psf.gaussian3d_psf_model(),
                    string: str = None,
                    same_color_scale: bool = True,
                    vmin: float = None,
@@ -1329,7 +1307,7 @@ def localize_beads_generic(imgs: np.ndarray,
                            use_gpu_fit: bool = GPUFIT_AVAILABLE,
                            use_gpu_filter: bool = CUPY_AVAILABLE,
                            verbose: bool = True,
-                           model=psf.gaussian3d_psf_model(),
+                           model: psf.psf_model = psf.gaussian3d_psf_model(),
                            debug=False):
     """
     Given an image consisting of diffraction limited features and background, identify the diffraction limited features
@@ -1515,16 +1493,16 @@ def localize_beads_generic(imgs: np.ndarray,
             fixed_params[5] = True
             fixed_params[3] = True
 
-        fit_params, fit_states, chi_sqrs, niters, fit_t = fit_gauss_rois(img_rois,
-                                                                         (zrois, yrois, xrois),
-                                                                         init_params,
-                                                                         max_nfit_iterations,
-                                                                         estimator="LSE",
-                                                                         fixed_params=fixed_params,
-                                                                         use_gpu=use_gpu_fit,
-                                                                         verbose=verbose,
-                                                                         model=model,
-                                                                         debug=debug)
+        fit_params, fit_states, chi_sqrs, niters, fit_t = fit_rois(img_rois,
+                                                                   (zrois, yrois, xrois),
+                                                                   init_params,
+                                                                   max_nfit_iterations,
+                                                                   estimator="LSE",
+                                                                   fixed_params=fixed_params,
+                                                                   use_gpu=use_gpu_fit,
+                                                                   verbose=verbose,
+                                                                   model=model,
+                                                                   debug=debug)
 
         tend = time.perf_counter()
         if verbose:
@@ -1748,7 +1726,7 @@ def autofit_psfs(imgs: np.ndarray,
                  psf_roi_size: list[float],
                  dxy: float,
                  dz: float,
-                 summary_model=psf.model(wavelength=0.532, ni=1.5, model_name="vectorial"),
+                 summary_model: psf.psf_model = psf.model(wavelength=0.532, ni=1.5, model_name="vectorial"),
                  threshold: float = 100.,
                  min_spot_sep: tuple[float] = (0., 0.),
                  filter_sigma_small: tuple[float] = (1, 0.5, 0.5),
@@ -1757,7 +1735,7 @@ def autofit_psfs(imgs: np.ndarray,
                  amp_bounds: tuple[float] = (0, np.inf),
                  roi_size_loc=(2, 3, 3),
                  dist_boundary_min: tuple[float] = (0., 0.),
-                 localization_model=psf.gaussian3d_psf_model(),
+                 localization_model: psf.psf_model = psf.gaussian3d_psf_model(),
                  max_number_iterations: int = 100,
                  fit_dist_max_err: tuple[float] = (np.inf, np.inf),
                  num_localizations_to_plot: int = 5,
