@@ -37,7 +37,7 @@ except ImportError:
     GPUFIT_AVAILABLE = False
 
 
-def get_coords(sizes, drs):
+def get_coords(sizes, drs, broadcast=False):
     """
     Regularly spaced coordinates which can be broadcast to full size.
 
@@ -58,6 +58,9 @@ def get_coords(sizes, drs):
     ndims = len(drs)
     coords = [np.expand_dims(np.arange(sz) * dr, axis=list(range(ii)) + list(range(ii + 1, ndims)))
               for ii, (sz, dr) in enumerate(zip(sizes, drs))]
+
+    if broadcast:
+        coords = [np.array(c, copy=True) for c in coords]
 
     return coords
 
