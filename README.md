@@ -27,7 +27,7 @@ Tools for localizing diffraction limited spots from image data. This is primaril
 support for FISH spot finding and PSF fitting. This code is also the basis of
 FISH spotfinding on the OPM, although the titled geometry functions are contained in
 [OPM repository](https://github.com/QI2lab/OPM). The localization routines can be run either on the CPU using multiprocessing with 
-[joblib](https://joblib.readthedocs.io/en/latest/) or on the GPU using a modified version of 
+[dask](https://www.dask.org/) or on the GPU using a modified version of 
 [GPUfit](https://github.com/QI2lab/Gpufit)
 
 The module contains a high-level function for localizing diffraction limited objects in a 3D image,
