@@ -284,6 +284,7 @@ def filter_nearby_peaks(centers: np.ndarray, min_xy_dist: float, min_z_dist: flo
 
         # find ranges as fraction of min_dist
         min_dists = np.array([min_z_dist, min_xy_dist, min_xy_dist])
+        # todo: does this have a problem if min_dists = 0?
         ranges = (clims[:, 1] - clims[:, 0]) / min_dists
 
         if len(centers_unique) > nmax and not np.all(ranges <= 2):
@@ -1388,8 +1389,6 @@ def localize_beads_generic(imgs: np.ndarray,
     # ###################################
     tstart = time.perf_counter()
 
-    # imgs = cp.asnumpy(cupyx.scipy.ndimage.median_filter(cp.array(imgs), size=(3, 3, 3)))
-
     if filter_sigma_small is not None:
         ks = get_filter_kernel(filter_sigma_small, (dz, dy, dx))
         imgs_hp = filter_convolve(imgs, ks, use_gpu=use_gpu_filter)
@@ -1413,7 +1412,7 @@ def localize_beads_generic(imgs: np.ndarray,
     tstart = time.perf_counter()
 
     footprint = get_max_filter_footprint((dz_min_sep, dxy_min_sep, dxy_min_sep), (dz, dy, dx))
-    centers_guess_inds, amps = find_peak_candidates(imgs_filtered, footprint, threshold, mask=mask)
+    centers_guess_inds, _ = find_peak_candidates(imgs_filtered, footprint, threshold, mask=mask)
 
     # todo: could autothreshold by trying to fit # of points versus threshold
 
@@ -1444,8 +1443,6 @@ def localize_beads_generic(imgs: np.ndarray,
                                                        weights=weights,
                                                        mode="average",
                                                        nmax=np.inf)
-
-        amps = amps[inds_comb]
 
         if verbose:
             print(f"Found {len(centers_guess):d} points separated by"
@@ -1503,6 +1500,8 @@ def localize_beads_generic(imgs: np.ndarray,
                                                                    verbose=verbose,
                                                                    model=model,
                                                                    debug=debug)
+
+        fit_params = np.array([model.normalize_parameters(fp) for fp in fit_params])
 
         tend = time.perf_counter()
         if verbose:

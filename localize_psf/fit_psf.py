@@ -356,6 +356,7 @@ class psf_model:
 
     def test_jacobian(self, coords: tuple[np.ndarray], params: np.ndarray, dp: float = 1e-7):
         # numerical test for jacobian
+        jac_calc = self.jacobian(coords, params)
         jac_numerical = []
         for ii in range(self.nparams):
             dp_now = np.zeros(self.nparams)
@@ -363,11 +364,22 @@ class psf_model:
 
             jac_numerical.append((self.model(coords, params + dp_now) - self.model(coords, params - dp_now)) / dp)
 
-        return jac_numerical
+        return jac_numerical, jac_calc
 
 
     def estimate_parameters(self, img: np.ndarray, coords: tuple[np.ndarray]):
         pass
+
+    def normalize_parameters(self, params):
+        """
+        Return parameters in a standardized format, when there can be ambiguity. For example,
+        a Gaussian model may include a standard deviation parameter. Since only the square of this quantity enters
+        the model, a fit may return a negative value for standard deviation. In that case, this function
+        would return the absolute value of the standard deviation
+        @param params:
+        @return:
+        """
+        return params
 
 
 class gaussian3d_psf_model(psf_model):
@@ -392,7 +404,8 @@ class gaussian3d_psf_model(psf_model):
         # calculate psf at oversampled points
         psf_s = np.exp(-(xx_s - p[1]) ** 2 / 2 / p[4] ** 2
                        -(yy_s - p[2]) ** 2 / 2 / p[4] ** 2
-                       -(zz_s - p[3]) ** 2 / 2 / p[5] ** 2)
+                       -(zz_s - p[3]) ** 2 / 2 / p[5] ** 2
+                       )
 
         # normalization is such that the predicted peak value of the PSF ignoring binning would be p[0]
         psf = p[0] * np.mean(psf_s, axis=-1) + p[-1]
@@ -405,9 +418,11 @@ class gaussian3d_psf_model(psf_model):
         # oversample points in pixel
         xx_s, yy_s, zz_s = oversample_pixel(x, y, z, self.dc, sf=self.sf, euler_angles=self.angles)
 
-        psf_s = np.exp(-(xx_s - p[1]) ** 2 / 2 / p[4] ** 2
-                       - (yy_s - p[2]) ** 2 / 2 / p[4] ** 2
-                       - (zz_s - p[3]) ** 2 / 2 / p[5] ** 2)
+        # use sxy * |sxy| instead of sxy**2 to enforce sxy > 0
+        psf_s = np.exp(-(xx_s - p[1]) ** 2 / 2 / p[4]**2
+                       -(yy_s - p[2]) ** 2 / 2 / p[4]**2
+                       -(zz_s - p[3]) ** 2 / 2 / p[5]**2
+                       )
 
         # normalization is such that the predicted peak value of the PSF ignoring binning would be p[0]
         # psf = p[0] * psf_sum + p[-1]
@@ -415,12 +430,12 @@ class gaussian3d_psf_model(psf_model):
         bcast_shape = (x + y + z).shape
         # [A, cx, cy, cz, sxy, sz, bg]
         jac = [np.mean(psf_s, axis=-1),
-               p[0] * np.mean(2 * (xx_s - p[1]) / 2 / p[4] ** 2 * psf_s, axis=-1),
-               p[0] * np.mean(2 * (yy_s - p[2]) / 2 / p[4] ** 2 * psf_s, axis=-1),
-               p[0] * np.mean(2 * (zz_s - p[3]) / 2 / p[5] ** 2 * psf_s, axis=-1),
+               p[0] * np.mean(2 * (xx_s - p[1]) / 2 / p[4]**2 * psf_s, axis=-1),
+               p[0] * np.mean(2 * (yy_s - p[2]) / 2 / p[4]**2 * psf_s, axis=-1),
+               p[0] * np.mean(2 * (zz_s - p[3]) / 2 / p[5]**2 * psf_s, axis=-1),
                p[0] * np.mean((2 / p[4] ** 3 * (xx_s - p[1]) ** 2 / 2 +
                                2 / p[4] ** 3 * (yy_s - p[2]) ** 2 / 2) * psf_s, axis=-1),
-               p[0] * np.mean(2 / p[5] ** 3 * (zz_s - p[3]) ** 2 / 2 * psf_s, axis=-1),
+               p[0] * np.mean( 2 / p[5] ** 3 * (zz_s - p[3]) ** 2 / 2 * psf_s, axis=-1),
                np.ones(bcast_shape)]
 
         return jac
@@ -429,7 +444,9 @@ class gaussian3d_psf_model(psf_model):
         z, y, x = coords
 
         # subtract smallest value so positive
-        img_temp = img - np.nanmean(img)
+        # img_temp = img - np.nanmean(img)
+        # to_use = np.logical_and(np.logical_not(np.isnan(img_temp)), img_temp > 0)
+        img_temp = img - np.nanmin(img)
         to_use = np.logical_and(np.logical_not(np.isnan(img_temp)), img_temp > 0)
 
         if img.ndim != len(coords):
@@ -446,7 +463,8 @@ class gaussian3d_psf_model(psf_model):
         sxy = np.mean(sigmas[:2])
         sz = sigmas[2]
 
-        guess_params = np.concatenate((np.array([np.nanmax(img) - np.nanmean(img)]),
+        guess_params = np.concatenate((#np.array([np.nanmax(img) - np.nanmean(img)]),
+                                       np.array([np.nanmax(img) - np.nanmin(img)]), # may be too large ... but typically have problems with being too small
                                        np.flip(c1s),
                                        np.array([sxy]),
                                        np.array([sz]),
@@ -454,8 +472,14 @@ class gaussian3d_psf_model(psf_model):
                                        ),
                                       )
 
-        return guess_params
+        return self.normalize_parameters(guess_params)
 
+    def normalize_parameters(self, params):
+        norm_params = np.array([params[0], params[1], params[2], params[3],
+                                np.abs(params[4]), np.abs(params[5]),
+                                params[6]])
+
+        return norm_params
 
 class asymmetric_gaussian3d(psf_model):
     def __init__(self, dc: float = None, sf=1, angles=(0., 0., 0.)):
@@ -535,7 +559,8 @@ class asymmetric_gaussian3d(psf_model):
         z, y, x = coords
 
         # subtract smallest value so positive
-        img_temp = img - np.nanmean(img)
+        # img_temp = img - np.nanmean(img)
+        img_temp = img
         to_use = np.logical_and(np.logical_not(np.isnan(img_temp)), img_temp > 0)
 
         if img.ndim != len(coords):
@@ -558,8 +583,14 @@ class asymmetric_gaussian3d(psf_model):
                                        ),
                                       )
 
-        return guess_params
+        return self.normalize_parameters(guess_params)
 
+    def normalize_parameters(self, params):
+        norm_params = np.array([params[0], params[1], params[2], params[3],
+                                np.abs(params[4]), np.abs(params[5]), np.abs(params[6]),
+                                params[7], params[8]])
+
+        return norm_params
 
 class gaussian2d_psf_model(psf_model):
     """
@@ -609,8 +640,11 @@ class gaussian2d_psf_model(psf_model):
                               np.array([p3d[6]])
                               )
                              )
-        return p2d
+        return self.normalize_parameters(p2d)
 
+    def normalize_parameters(self, params):
+        norm_params = np.array([params[0], params[1], params[2], np.abs(params[3]), params[4]])
+        return norm_params
 
 class gaussian_lorentzian_psf_model(psf_model):
     """
@@ -690,8 +724,12 @@ class gaussian_lorentzian_psf_model(psf_model):
                                        ),
                                       )
 
-        return guess_params
+        return self.normalize_parameters(guess_params)
 
+    def normalize_parameters(self, params):
+        norm_params = np.array([params[0], params[1], params[2], params[3],
+                                np.abs(params[4]), np.abs(params[5]), params[6]])
+        return norm_params
 
 class born_wolf_psf_model(psf_model):
     """
@@ -857,7 +895,8 @@ class model(psf_model):
         @param coords: (z, y, x). Coordinates must be exactly as obtained from get_psf_coords() with
         nx=ny and dx=dy.
         @param p:
-        @param kwargs: keywords passed through to vectorial_psf() or scalar_psf()
+        @param kwargs: keywords passed through to vectorial_psf() or scalar_psf(). Note that in most cases
+        these will shift the best focus PSF away from z=0
         @return:
         """
         zz, y, x = coords
@@ -870,8 +909,7 @@ class model(psf_model):
             raise ValueError("'NA' is not allowed to be passed as a named parameter. It is specified in p.")
 
         if self.model_name == 'vectorial':
-            # todo: need to include index of refraction?
-            model_params = {'NA': p[4], 'sf': self.sf}
+            model_params = {'NA': p[4], 'sf': self.sf, 'ni': self.ni, 'ni0': self.ni}
             model_params.update(kwargs)
 
             psf_norm = psfm.vectorial_psf(0, 1, dxy, wvl=self.wavelength, params=model_params, normalize=False)
@@ -879,8 +917,7 @@ class model(psf_model):
             val = p[0] / psf_norm * ndi.shift(val, [0, p[2] / dxy, p[1] / dxy], mode='nearest') + p[5]
 
         elif self.model_name == 'gibson-lanni':
-            # todo: need to include index of refraction?
-            model_params = {'NA': p[4], 'sf': self.sf}
+            model_params = {'NA': p[4], 'sf': self.sf, 'ni': self.ni, 'ni0': self.ni}
             model_params.update(kwargs)
 
             psf_norm = psfm.scalar_psf(0, 1, dxy, wvl=self.wavelength, params=model_params, normalize=False)
@@ -903,7 +940,8 @@ class model(psf_model):
             psf_norm = gauss_model.model((p[3], p[2], p[1]), p_gauss) - p[5]
             val = p[0] / psf_norm * (gauss_model.model((z, y, x), p_gauss) - p[5]) + p[5]
         else:
-            raise ValueError()
+            raise ValueError(f"model_name was '{self.model_name:s}',"
+                             f" but must be 'vectorial', 'gibson-lanni', 'born-wolf', or 'gaussian'")
 
 
         return val
