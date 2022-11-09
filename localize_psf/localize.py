@@ -273,8 +273,8 @@ def filter_nearby_peaks(centers: np.ndarray, min_xy_dist: float, min_z_dist: flo
     if weights is None:
         weights = np.ones(len(centers_unique))
 
-    # only need to act if minimum distances are non-zero
-    if min_xy_dist > 0 or min_z_dist > 0:
+    # only need to act if minimum distances are non-zero and we have any centers to deal with
+    if (min_xy_dist > 0 or min_z_dist > 0) and centers_unique.size != 0:
         # if number of points is large, divide problem into subproblems, solve each of these, and combine results.
 
         # check and make sure region is large enough (relative to the minimum distances) to be divide
