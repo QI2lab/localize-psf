@@ -488,8 +488,6 @@ class gaussian3d_psf_model(psf_model):
         z, y, x = coords
 
         # subtract smallest value so positive
-        # img_temp = img - np.nanmean(img)
-        # to_use = np.logical_and(np.logical_not(np.isnan(img_temp)), img_temp > 0)
         img_temp = img - np.nanmin(img)
         to_use = np.logical_and(np.logical_not(np.isnan(img_temp)), img_temp > 0)
 
@@ -504,8 +502,8 @@ class gaussian3d_psf_model(psf_model):
             c2s[ii] = np.sum(img_temp[to_use] * coords[ii][to_use] ** 2) / np.sum(img_temp[to_use])
 
         sigmas = np.sqrt(c2s - c1s ** 2)
-        sxy = np.mean(sigmas[:2])
-        sz = sigmas[2]
+        sz = sigmas[0]
+        sxy = np.mean(sigmas[1:])
 
         guess_params = np.concatenate((#np.array([np.nanmax(img) - np.nanmean(img)]),
                                        np.array([np.nanmax(img) - np.nanmin(img)]), # may be too large ... but typically have problems with being too small
@@ -763,8 +761,10 @@ class gaussian_lorentzian_psf_model(psf_model):
             c2s[ii] = np.sum(img_temp[to_use] * coords[ii][to_use] ** 2) / np.sum(img_temp[to_use])
 
         sigmas = np.sqrt(c2s - c1s ** 2)
-        sxy = np.mean(sigmas[:2])
-        sz = sigmas[2]
+        # sxy = np.mean(sigmas[:2])
+        # sz = sigmas[2]
+        sz = sigmas[0]
+        sxy = np.mean(sigmas[1:])
 
         guess_params = np.concatenate((np.array([np.nanmax(img) - np.nanmean(img)]),
                                        np.flip(c1s),
