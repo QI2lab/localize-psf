@@ -13,6 +13,7 @@ import numpy as np
 import scipy.signal
 import scipy.ndimage
 import dask
+from dask.diagnostics import ProgressBar
 import matplotlib.pyplot as plt
 from matplotlib.colors import PowerNorm, LinearSegmentedColormap, Normalize
 import localize_psf.rois as roi_fns
@@ -24,19 +25,21 @@ try:
     import cupy as cp
     import cupyx.scipy.signal
     import cupyx.scipy.ndimage
-    CUPY_AVAILABLE = True
+    _cupy_available = True
 except ImportError:
-    CUPY_AVAILABLE = False
+    _cupy_available = False
 
 # custom GPUFit for fitting on GPU
 try:
     import pygpufit.gpufit as gf
-    GPUFIT_AVAILABLE = True
+    _gpufit_available = True
 except ImportError:
-    GPUFIT_AVAILABLE = False
+    _gpufit_available = False
 
 
-def get_coords(sizes, drs, broadcast=False):
+def get_coords(sizes: list[int],
+               drs: list[float],
+               broadcast: bool = False):
     """
     Regularly spaced coordinates which can be broadcast to full size.
 
@@ -59,12 +62,16 @@ def get_coords(sizes, drs, broadcast=False):
               for ii, (sz, dr) in enumerate(zip(sizes, drs))]
 
     if broadcast:
+        # this produces copies of the arrays instead of views
         coords = [np.array(c, copy=True) for c in coords]
 
     return coords
 
 
-def get_roi(center, img, coords, sizes):
+def get_roi(center: tuple[float],
+            img: np.ndarray,
+            coords: tuple[np.ndarray],
+            sizes: tuple[int]):
     """
     Find ROI which is nearly centered on center. Since center may not correspond to a pixel location, and the
     size of the ROI may not be odd, center will not be the exact center of the ROI
@@ -92,7 +99,9 @@ def get_roi(center, img, coords, sizes):
     return roi, img_roi, coords_roi
 
 
-def get_filter_kernel(sigmas, drs, sigma_cutoff=2):
+def get_filter_kernel(sigmas: list[float],
+                      drs: list[float],
+                      sigma_cutoff: int = 2):
     """
     Gaussian filter kernel for arbitrary dimensions. If drs or sigmas are zero along one dimension, then the kernel
     will have unit length and weight along this direction
@@ -136,7 +145,9 @@ def get_filter_kernel(sigmas, drs, sigma_cutoff=2):
     return kernel
 
 
-def filter_convolve(imgs, kernel, use_gpu=CUPY_AVAILABLE):
+def filter_convolve(imgs,
+                    kernel,
+                    use_gpu: bool = _cupy_available):
     """
     Convolution filter using kernel with GPU support. To avoid roll-off effects at the edge, the convolved
     result is "normalized" by being divided by the kernel convolved with an array of ones.
@@ -149,46 +160,29 @@ def filter_convolve(imgs, kernel, use_gpu=CUPY_AVAILABLE):
     # todo: check and make sure kernel and imgs are compatible. e.g. that kernel is smaller than image in all dims
     # todo: estimate how much memory convolution requires? Much more than I expect...
 
-    # convolve, and deal with edges by normalizing
     if use_gpu:
-        kernel_cp = cp.asarray(kernel, dtype=cp.float32)
-        imgs_cp = cp.asarray(imgs, dtype=cp.float32)
-        imgs_filtered_cp = cupyx.scipy.signal.fftconvolve(imgs_cp, kernel_cp, mode="same")
-        imgs_filtered = cp.asnumpy(imgs_filtered_cp)
-
-        imgs_cp = None
-        del imgs_cp
-
-        imgs_filtered_cp = None
-        del imgs_filtered_cp
-
-        norm_cp = cupyx.scipy.signal.fftconvolve(cp.ones(imgs.shape), kernel_cp, mode="same")
-        norm = cp.asnumpy(norm_cp)
-
-        imgs_filtered = imgs_filtered / norm
-
-        kernel_cp = None
-        del kernel_cp
-
-        norm_cp = None
-        del norm_cp
-
-        mempool = cp.get_default_memory_pool()
-        mempool.free_all_blocks()
-        # pinned_mempool = cp.get_default_pinned_memory_pool()
-
+        xp = cp
+        convolve = cupyx.scipy.signal.fftconvolve
     else:
-        imgs_filtered = scipy.signal.fftconvolve(imgs, kernel, mode="same") / \
-                        scipy.signal.fftconvolve(np.ones(imgs.shape), kernel, mode="same")
+        xp = np
+        convolve = scipy.signal.fftconvolve
 
-    # this method too slow for large filter sizes
-    # imgs_filtered = scipy.ndimage.convolve(imgs, kernel, mode="constant", cval=0) / \
-    #                 scipy.ndimage.convolve(np.ones(imgs.shape), kernel, mode="constant", cval=0)
+    kernel = xp.array(kernel)
+    imgs = xp.array(imgs)
+
+    # convolve, and deal with edges by normalizing
+    imgs_filtered = convolve(imgs, kernel, mode="same")
+    norm = convolve(xp.ones(imgs.shape), kernel, mode="same")
+    imgs_filtered /= norm
+
+    # mempool = cp.get_default_memory_pool()
+    # mempool.free_all_blocks()
 
     return imgs_filtered
 
 
-def get_max_filter_footprint(min_separations, drs):
+def get_max_filter_footprint(min_separations: list[float],
+                             drs: list[float]):
     """
     Get footprint for maximum filter. This is a binary mask which is True at points included in the mask
     and False at other points. For doing a square maximum filter can choose a footprint of only Trues, but cannot
@@ -213,7 +207,11 @@ def get_max_filter_footprint(min_separations, drs):
     return footprint
 
 
-def find_peak_candidates(imgs, footprint, threshold, mask=None, use_gpu_filter=CUPY_AVAILABLE):
+def find_peak_candidates(imgs: np.ndarray,
+                         footprint: np.ndarray,
+                         threshold: float,
+                         mask: np.ndarray = None,
+                         use_gpu_filter: bool = _cupy_available):
     """
     Find peak candidates in image using maximum filter
 
@@ -222,28 +220,37 @@ def find_peak_candidates(imgs, footprint, threshold, mask=None, use_gpu_filter=C
     This can be obtained from get_max_filter_footprint()
     :param float threshold: only pixels with values greater than or equal to the threshold will be considered
     :param bool use_gpu_filter: whether or not to do maximum filter on GPU
-    :return centers_guess_inds, img_vals: np.array([[i0, i1, i2], ...]) array indices of local maxima
+    :return inds, amps: np.array([[i0, i1, i2], ...]) array indices of local maxima
     """
-    if mask is None:
-        mask = np.ones(imgs.shape, dtype=bool)
-
     if use_gpu_filter:
-        img_max_filtered = cp.asnumpy(
-            cupyx.scipy.ndimage.maximum_filter(cp.asarray(imgs, dtype=cp.float32), footprint=cp.asarray(footprint)))
-        # need to compare imgs as float32 because img_max_filtered will be ...
-        is_max = np.logical_and.reduce((imgs.astype(np.float32) == img_max_filtered, imgs >= threshold, mask))
+        xp = cp
+        max_filter = cupyx.scipy.ndimage.maximum_filter
     else:
-        img_max_filtered = scipy.ndimage.maximum_filter(imgs, footprint=footprint)
-        is_max = np.logical_and.reduce((imgs == img_max_filtered, imgs >= threshold, mask))
+        xp = np
+        max_filter = scipy.ndimage.maximum_filter
+
+    if mask is None:
+        mask = xp.ones(imgs.shape, dtype=bool)
+
+    mask = xp.array(mask)
+    imgs = xp.array(imgs)
+    footprint = xp.array(footprint)
+    img_max_filtered = max_filter(imgs, footprint=footprint)
+    # don't use reduce because CuPy doesn't support it
+    is_max = xp.logical_and(xp.logical_and(imgs == img_max_filtered, imgs >= threshold), mask)
 
     amps = imgs[is_max]
-    centers_guess_inds = np.argwhere(is_max)
+    inds = np.argwhere(is_max)
 
-    return centers_guess_inds, amps
+    return inds, amps
 
 
-def filter_nearby_peaks(centers: np.ndarray, min_xy_dist: float, min_z_dist: float, mode: str = "keep-one",
-                        weights: np.ndarray = None, nmax: int = 10000) -> (np.ndarray, np.ndarray):
+def filter_nearby_peaks(centers: np.ndarray,
+                        min_xy_dist: float,
+                        min_z_dist: float,
+                        mode: str = "keep-one",
+                        weights: np.ndarray = None,
+                        nmax: int = 10000) -> (np.ndarray, np.ndarray):
     """
     Combine multiple center positions into a reduced set, where assume all centers separated by no more than
     min_xy_dist and min_z_dist come from the same feature.
@@ -374,7 +381,8 @@ def filter_nearby_peaks(centers: np.ndarray, min_xy_dist: float, min_z_dist: flo
 
 
 # localize using radial symmetry
-def localize2d(img, mode="radial-symmetry"):
+def localize2d(img: np.ndarray,
+               mode: str = "radial-symmetry"):
     """
     Perform 2D localization using the radial symmetry approach of https://doi.org/10.1038/nmeth.2071
 
@@ -458,7 +466,8 @@ def localize2d(img, mode="radial-symmetry"):
     return xc, yc
 
 
-def localize3d(img, mode="radial-symmetry"):
+def localize3d(img: np.ndarray,
+               mode: str = "radial-symmetry"):
     """
     Perform 3D localization using an extension of the radial symmetry approach of https://doi.org/10.1038/nmeth.2071
 
@@ -568,18 +577,19 @@ def localize3d(img, mode="radial-symmetry"):
 
 
 # localize using Gaussian fit
-def fit_roi(img_roi,
-            coords,
-            init_params,
-            fixed_params=None,
-            bounds=None,
-            model: psf.psf_model = psf.gaussian3d_psf_model()):
+def fit_roi(img_roi: np.ndarray,
+            coords: tuple[np.ndarray],
+            init_params: list[float],
+            fixed_params: list[bool] = None,
+            bounds: tuple[list[float]] = None,
+            model: psf.psf_model = psf.gaussian3d_psf_model(),
+            max_number_iterations: int = None) -> dict:
     """
     Fit a single ROI to a 3D gaussian function.
 
     :param img_roi: array of size nz x ny x nx which will be fit
     :param coords: (z_roi, y_roi, x_roi). These coordinate arrays must be broadcastable to the same size as img_roi
-    :param init_params: array of length 7, where the parameters are
+    :param init_params: array of length model.nparams, where the parameters are
     [amplitude, center-x, center-y, center-z, sigma-xy, sigma_z, offset]
     :param fixed_params: boolean array of length 7. For entries which are True, the fit function will force
     that parameter to be identical to the value in init_params. For entries which are False, the fit function
@@ -600,35 +610,38 @@ def fit_roi(img_roi,
         raise ValueError(f"img_roi must have 3 dimensions but had {img_roi.ndim:d}")
 
     # localization functions
-    def model_fn(params): return model.model((z_roi, y_roi, x_roi), params)
+    def model_fn(params): return model.model(coords, params)
 
     if model.has_jacobian:
-        def jac_fn(p): return model.jacobian((z_roi, y_roi, x_roi), p)
+        def jac_fn(p): return model.jacobian(coords, p)
     else:
         jac_fn = None
 
     # do fitting
-    results = fit.fit_model(img_roi, model_fn, init_params,
+    results = fit.fit_model(img_roi,
+                            model_fn,
+                            init_params,
                             bounds=bounds,
                             fixed_params=fixed_params,
-                            model_jacobian=jac_fn)
+                            model_jacobian=jac_fn,
+                            max_nfev=max_number_iterations)
 
     return results
 
 
-def fit_rois(img_rois: np.ndarray,
+def fit_rois(img_rois: list[np.ndarray],
              coords_rois: tuple[np.ndarray],
              init_params: np.ndarray,
              max_number_iterations: int = 100,
              estimator: str = "LSE",
              fixed_params: np.ndarray = None,
-             use_gpu: bool = GPUFIT_AVAILABLE,
-             verbose: bool = True,
+             use_gpu: bool = _gpufit_available,
              debug: bool = False,
-             model: psf.psf_model = psf.gaussian3d_psf_model()):
+             verbose: bool = False,
+             model: psf.psf_model = psf.gaussian3d_psf_model()) -> dict:
     """
     Fit rois to different model functions. Can use either CPU parallelization with dask or GPU parallelization
-     using gpufit.
+    using gpufit.
 
     :param img_rois: list of image rois
     :param coords_rois: ((z0, y0, x0), (z1, y1, x1), ....)
@@ -636,10 +649,14 @@ def fit_rois(img_rois: np.ndarray,
     :param int max_number_iterations: maximum number of iterations to be used for each fit
     :param estimator: "LSE" or "MLE"
     :param model: "gaussian", "rotated-gaussian", "gaussian-lorentzian"
-    :param list[bool] fixed_params: length nparams vector of parameters to fix. only supports fixing/unfixing
+    :param fixed_params: length nparams vector of parameters to fix. only supports fixing/unfixing
     each parameter for all fits
     :param bool use_gpu:
-    :return fit_params, fit_states, chi_sqrs, niters, fit_t:
+    :param debug:
+    :param verbose:
+    :param model: model to use for PSF fitting. If doing this on the CPU, use implementations in fit_psf.py, otherwise
+    model must have a corresponding version in GPU fit.
+    :return fit_results:
     """
 
     zrois, yrois, xrois = coords_rois
@@ -670,16 +687,18 @@ def fit_rois(img_rois: np.ndarray,
                                                      fixed_params=fixed_params,
                                                      model=model))
 
-            # with ProgressBar():
-            results = dask.compute(*delayed)
-
-
+            if verbose:
+                with ProgressBar():
+                    results = dask.compute(*delayed)
+            else:
+                results = dask.compute(*delayed)
 
         fit_t = (time.perf_counter() - tstart)
         fit_params = np.asarray([r["fit_params"] for r in results])
         chi_sqrs = np.asarray([r["chi_squared"] for r in results])
         fit_states = np.asarray([r["status"] for r in results])
         niters = np.asarray([r["nfev"] for r in results])
+        fit_states_key = results[0]["status_codes"]
 
     else:
         if model.sf != 1:
@@ -693,12 +712,11 @@ def fit_rois(img_rois: np.ndarray,
         else:
             raise NotImplementedError("only 'gaussian3d_psf' and 'gaussian_lorentzian_psf' have"
                                       " corresponding GPU implementations")
-
-        nparams = model.nparams
-
         # todo: implemented on GPU but not CPU
         # elif fn == 0:
         #     model_id = gf.ModelID.GAUSS_3D_ROT_ARB
+
+        nparams = model.nparams
 
         # ensure arrays are row vectors
         xrois, yrois, zrois, img_rois = zip(*[(xr.ravel()[None, :],
@@ -728,25 +746,26 @@ def fit_rois(img_rois: np.ndarray,
             for xr, yr, zr in zip(xrois, yrois, zrois)]
         coords = np.concatenate(coords)
 
-        user_info = np.concatenate((coords.astype(np.float32), roi_sizes.astype(np.float32)))
+        user_info = np.concatenate((coords.astype(np.float32),
+                                    roi_sizes.astype(np.float32)))
 
         # initial parameters
         init_params = init_params.astype(np.float32)
 
         # check arguments
         if data.ndim != 2:
-            raise ValueError("data wrong dimension")
+            raise ValueError(f"data.ndim should = 2 but was {data.ndim:d}")
         if init_params.ndim != 2 or init_params.shape != (nfits, nparams):
-            raise ValueError("init_params had wrong shape or dimension")
+            raise ValueError(f"init_params should have shape ({nfits:d}, {nparams:d}), but had shape {init_params.shape}")
         if user_info.ndim != 1 or user_info.size != (3 * nfits * n_pts_per_fit + nfits):
-            raise ValueError("user_info had wrong shape or dimension")
+            raise ValueError(f"user_info should have size ({3 * nfits * n_pts_per_fit + nfits:d}), but had size {user_info.size:d}")
 
         if estimator == "MLE":
             est_id = gf.EstimatorID.MLE
         elif estimator == "LSE":
             est_id = gf.EstimatorID.LSE
         else:
-            raise ValueError("'estimator' must be 'MLE' or 'LSE' but was '%s'" % estimator)
+            raise ValueError(f"'estimator' must be 'MLE' or 'LSE' but was '{estimator:s}'")
 
         # set which parameters to fit/fix
         if fixed_params is None:
@@ -764,12 +783,27 @@ def fit_rois(img_rois: np.ndarray,
                                                                  parameters_to_fit=params_to_fit,
                                                                  user_info=user_info)
 
-        # correct sigmas in case negative
-        # todo: think better to do this in external function bc might not be same in all models
-        fit_params[:, 4] = np.abs(fit_params[:, 4])
-        fit_params[:, 5] = np.abs(fit_params[:, 5])
+        # defined in Gpufit/constants.h
+        fit_states_key = {"converged": 0,
+                          "max_iteration": 1,
+                          "singular_hessian": 2,
+                          "neg_curvature_mle": 3,
+                          "gpu_not_ready": 4}
 
-    return fit_params, fit_states, chi_sqrs, niters, fit_t
+    # ensure e.g. Gaussian sigmas are > 0
+    fit_params = np.array([model.normalize_parameters(fp) for fp in fit_params])
+
+    # collect results
+    fit_results = {"fit_params": fit_params,
+                   "init_params": init_params,
+                   "fit_states": fit_states,
+                   "fit_states_key": fit_states_key,
+                   "chi_sqrs": chi_sqrs,
+                   "niters": niters,
+                   "fit_time": fit_t,
+                   "model": repr(model)}
+
+    return fit_results
 
 
 def plot_gauss_roi(fit_params: list[float],
@@ -1125,6 +1159,12 @@ class unique_filter(filter):
         self.condition_names = [f"{name:s}"]
 
     def filter(self, fit_params, *args, **kwargs):
+        """
+        @param fit_params: we assume that cx = fit_params[:, 1], cy = fit_params[:, 2], cz = fit_params[:, 3]
+        @param args:
+        @param kwargs:
+        @return:
+        """
         _, unique_inds = filter_nearby_peaks(fit_params[:, (3, 2, 1)],
                                              self.dxy_min_dist,
                                              self.dz_min_dist,
@@ -1301,15 +1341,15 @@ def localize_beads_generic(imgs: np.ndarray,
                            filter_sigma_small: tuple[float] = (1, 0.1, 0.1),
                            filter_sigma_large: tuple[float] = (10, 5, 5),
                            min_spot_sep: tuple[float] = (0, 0),
-                           filter=None,
-                           mask=None,
+                           filter = None,
+                           mask = None,
                            max_nfit_iterations: int = 100,
                            fit_filtered_images: bool = False,
-                           use_gpu_fit: bool = GPUFIT_AVAILABLE,
-                           use_gpu_filter: bool = CUPY_AVAILABLE,
+                           use_gpu_fit: bool = _gpufit_available,
+                           use_gpu_filter: bool = _cupy_available,
                            verbose: bool = True,
                            model: psf.psf_model = psf.gaussian3d_psf_model(),
-                           debug=False):
+                           debug: bool = False):
     """
     Given an image consisting of diffraction limited features and background, identify the diffraction limited features
     using the following procedure:
@@ -1382,18 +1422,23 @@ def localize_beads_generic(imgs: np.ndarray,
     # unpack arguments
     z, y, x = get_coords(imgs.shape, (dz, dy, dx))
     dz_min_sep, dxy_min_sep = min_spot_sep
-    roi_size_pix = roi_fns.get_roi_size(roi_size, 0.5 * (dx + dy), dz, ensure_odd=True)
+    roi_size_pix = roi_fns.get_roi_size(roi_size, [dz, dy, dx], ensure_odd=True)
 
     # ###################################
     # filter images
     # ###################################
     tstart = time.perf_counter()
 
+    if use_gpu_filter:
+        xp = cp
+    else:
+        xp = np
+
     if filter_sigma_small is not None:
         ks = get_filter_kernel(filter_sigma_small, (dz, dy, dx))
         imgs_hp = filter_convolve(imgs, ks, use_gpu=use_gpu_filter)
     else:
-        imgs_hp = imgs
+        imgs_hp = xp.array(imgs)
 
     if filter_sigma_large is not None:
         kl = get_filter_kernel(filter_sigma_large, (dz, dy, dx))
@@ -1412,14 +1457,19 @@ def localize_beads_generic(imgs: np.ndarray,
     tstart = time.perf_counter()
 
     footprint = get_max_filter_footprint((dz_min_sep, dxy_min_sep, dxy_min_sep), (dz, dy, dx))
-    centers_guess_inds, _ = find_peak_candidates(imgs_filtered, footprint, threshold, mask=mask)
+    centers_guess_inds, _ = find_peak_candidates(imgs_filtered, footprint, threshold, mask=mask, use_gpu_filter=use_gpu_filter)
+
+    if use_gpu_filter:
+        imgs_filtered = imgs_filtered.get()
+        centers_guess_inds = centers_guess_inds.get()
 
     # todo: could autothreshold by trying to fit # of points versus threshold
 
     # real coordinates
     centers_guess = np.stack((z[centers_guess_inds[:, 0], 0, 0],
                               y[0, centers_guess_inds[:, 1], 0],
-                              x[0, 0, centers_guess_inds[:, 2]]), axis=1)
+                              x[0, 0, centers_guess_inds[:, 2]]),
+                             axis=1)
 
     if verbose:
         print(f"identified {len(centers_guess_inds):d} candidates"
@@ -1455,19 +1505,21 @@ def localize_beads_generic(imgs: np.ndarray,
         tstart = time.perf_counter()
 
         if fit_filtered_images:
-            rois, img_rois, coords = zip(*[get_roi(c, imgs_filtered, (z, y, x), roi_size_pix) for c in centers_guess])
+            imgs_fit = imgs_filtered
         else:
-            rois, img_rois, coords = zip(*[get_roi(c, imgs, (z, y, x), roi_size_pix) for c in centers_guess])
+            imgs_fit = imgs
 
+        # in my limited testing did not see any speed up from parallelizing with dask.delayed
+        rois, img_rois, coords = zip(*[get_roi(c, imgs_fit, (z, y, x), roi_size_pix) for c in centers_guess])
         zrois, yrois, xrois = zip(*coords)
         rois = np.asarray(rois)
 
         # ###################################################
         # determine initial guess values for fits
         # ###################################################
-        init_params = np.stack([model.estimate_parameters(img_rois[ii], (zrois[ii], yrois[ii], xrois[ii]))
+        init_params = np.stack([
+                                model.estimate_parameters(img_rois[ii], (zrois[ii], yrois[ii], xrois[ii]))
                                 for ii in range(len(img_rois))], axis=0)
-
 
         if np.any(np.isnan(init_params)):
             raise ValueError("one or more init_params was NaN")
@@ -1483,74 +1535,69 @@ def localize_beads_generic(imgs: np.ndarray,
             print(f"starting fitting for {centers_guess.shape[0]:d} rois")
         tstart = time.perf_counter()
 
+        # fix some parameters if desired
         fixed_params = [False] * model.nparams
-
         # if 2D, don't want to fit cz or sz
         if data_is_2d:
+            # todo: how to make this model independent?
             fixed_params[5] = True
             fixed_params[3] = True
 
-        fit_params, fit_states, chi_sqrs, niters, fit_t = fit_rois(img_rois,
-                                                                   (zrois, yrois, xrois),
-                                                                   init_params,
-                                                                   max_nfit_iterations,
-                                                                   estimator="LSE",
-                                                                   fixed_params=fixed_params,
-                                                                   use_gpu=use_gpu_fit,
-                                                                   verbose=verbose,
-                                                                   model=model,
-                                                                   debug=debug)
+        fit_results = fit_rois(img_rois,
+                               (zrois, yrois, xrois),
+                               init_params,
+                               max_nfit_iterations,
+                               estimator="LSE",
+                               fixed_params=fixed_params,
+                               model=model,
+                               use_gpu=use_gpu_fit,
+                               debug=debug,
+                               verbose=verbose
+                               )
 
-        fit_params = np.array([model.normalize_parameters(fp) for fp in fit_params])
-
-        tend = time.perf_counter()
         if verbose:
-            print("Localization took %0.2fs" % (tend - tstart))
+            print(f"Localization took {time.perf_counter() - tstart:.2f}s")
 
         # ###################################################
         # filter fits
         # ###################################################
+        tstart_filter = time.perf_counter()
+
         if filter is None:
             filter = no_filter()
 
         # add any other parameters which could be useful for the filter function to accept
         # filter functions are free to ignore all parameters besides fit_params,
         # but must accept arbitrary number of arguments and pass this through to other filters
-        conditions = filter.filter(fit_params, init_params, chi_sqrs, niters, rois, image=imgs, image_filtered=imgs_filtered)
+        conditions = filter.filter(fit_results["fit_params"],
+                                   init_params,
+                                   fit_results["chi_sqrs"],
+                                   fit_results["niters"],
+                                   rois,
+                                   image=imgs,
+                                   image_filtered=imgs_filtered)
 
         to_keep = np.logical_and.reduce(conditions, axis=1)
         condition_names = filter.condition_names
-        filter_settings = {}
+        filter_settings = {}  # todo: populate
+
+        # update fit results with more info
+        fit_results.update({"rois": rois,
+                            "to_keep": to_keep,
+                            "conditions": conditions,
+                            "condition_names": condition_names,
+                            "filter_settings": filter_settings
+                            })
 
         if verbose:
             num_rejected = len(conditions) - np.sum(conditions, axis=0)
             for rr in range(len(filter.condition_names)):
                 print(f"Rejected {num_rejected[rr]:d} fits because {filter.condition_names[rr]}")
 
-            print(f"Identified {np.sum(to_keep):d} likely candidates")
+            print(f"Identified {np.sum(to_keep):d} likely candidates in {time.perf_counter() - tstart_filter:.3f}s")
 
     else:
-        fit_params = np.zeros((0, 7), dtype=float)
-        init_params = np.zeros((0, 7), dtype=float)
-        rois = np.zeros((0, 6), dtype=int)
-        to_keep = None
-        conditions = None
-        condition_names = None
-        filter_settings = None
-        fit_states = None
-        chi_sqrs = None
-        niters = None
-
-    fit_results = {"fit_params": fit_params,
-                   "init_params": init_params,
-                   "rois": rois,
-                   "to_keep": to_keep,
-                   "conditions": conditions,
-                   "condition_names": condition_names,
-                   "filter_settings": filter_settings,
-                   "fit_states": fit_states,
-                   "chi_sqrs": chi_sqrs,
-                   "niters": niters}
+        fit_results = None
 
     return (z, y, x), fit_results, imgs_filtered
 
@@ -1569,8 +1616,8 @@ def localize_beads(imgs: np.ndarray,
                    dist_boundary_min: tuple[float] = (0, 0),
                    max_nfit_iterations: int = 100,
                    fit_filtered_images: bool = False,
-                   use_gpu_fit: bool = GPUFIT_AVAILABLE,
-                   use_gpu_filter: bool = CUPY_AVAILABLE,
+                   use_gpu_fit: bool = _gpufit_available,
+                   use_gpu_filter: bool = _cupy_available,
                    verbose: bool = True):
     """
     Wrapper around localize_beads_generic() which also takes all filter parameters as arguments. Mostly for
