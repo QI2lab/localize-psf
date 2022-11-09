@@ -6,7 +6,7 @@ primarily 1D, 2D, and 3D gaussians allowing for arbitrary rotations.
 """
 import copy
 import numpy as np
-import scipy.optimize
+from scipy.optimize import least_squares
 from localize_psf import affine
 
 
@@ -16,7 +16,7 @@ def fit_model(img: np.ndarray,
               fixed_params: list[bool] = None,
               sd: np.ndarray = None,
               bounds: tuple[tuple[float]] = None,
-              model_jacobian=None,
+              model_jacobian = None,
               **kwargs) -> dict:
     """
     Fit 2D model function to an image. Any Nan values in the image will be ignored. This function is a wrapper for
@@ -57,8 +57,12 @@ def fit_model(img: np.ndarray,
     else:
         jac_fn = None
 
-    results = fit_least_squares(err_fn, init_params, fixed_params=fixed_params, bounds=bounds,
-                                model_jacobian=jac_fn, **kwargs)
+    results = fit_least_squares(err_fn,
+                                init_params,
+                                fixed_params=fixed_params,
+                                bounds=bounds,
+                                model_jacobian=jac_fn,
+                                **kwargs)
 
     return results
 
@@ -67,7 +71,7 @@ def fit_least_squares(model_fn,
                       init_params: list[float],
                       fixed_params: list[bool] = None,
                       bounds: tuple[tuple[float]] = None,
-                      model_jacobian=None,
+                      model_jacobian = None,
                       **kwargs) -> dict:
     """
     Wrapper for non-linear least squares fit function scipy.optimize.least_squares which handles fixing parameters
@@ -140,22 +144,28 @@ def fit_least_squares(model_fn,
     # non-linear least squares fit
     # ###########################
     if model_jacobian is None:
-        fit_info = scipy.optimize.least_squares(err_fn_pfree, init_params_free, bounds=bounds_free, **kwargs)
+        fit_info = least_squares(err_fn_pfree,
+                                 init_params_free,
+                                 bounds=bounds_free,
+                                 **kwargs)
     else:
-        fit_info = scipy.optimize.least_squares(err_fn_pfree, init_params_free, bounds=bounds_free,
-                                                jac=jac_fn_free, x_scale='jac', **kwargs)
+        fit_info = least_squares(err_fn_pfree,
+                                 init_params_free,
+                                 bounds=bounds_free,
+                                 jac=jac_fn_free,
+                                 x_scale='jac',
+                                 **kwargs)
     pfit = pfree2pfull(fit_info['x'])
 
     # ###########################
     # calculate chi squared
     # ###########################
     nfree_params = np.sum(np.logical_not(fixed_params))
-    # red_chi_sq = np.sum(np.square(model_fn(pfit))) / (model_fn(init_params).size - nfree_params)
     # scipy.optimize.least_squares minimizes s = 0.5 * \sum |fn(x_i)|^2, so need a factor of two to correct their cost
     red_chi_sq = (2 * fit_info["cost"]) / (model_fn(init_params).size - nfree_params)
 
     # ###########################
-    # calculate covariance amtrix
+    # calculate covariance matrix
     # ###########################
     try:
         jacobian = fit_info['jac']
@@ -177,16 +187,27 @@ def fit_least_squares(model_fn,
     # ###########################
     # store results
     # ###########################
-    result = {'fit_params': pfit, 'chi_squared': red_chi_sq, 'covariance': cov,
-              'init_params': init_params, 'fixed_params': fixed_params, 'bounds': bounds,
-              'cost': fit_info['cost'], 'optimality': fit_info['optimality'],
-              'nfev': fit_info['nfev'], 'njev': fit_info['njev'], 'status': fit_info['status'],
-              'success': fit_info['success'], 'message': fit_info['message']}
+    result = {'fit_params': pfit,
+              'chi_squared': red_chi_sq,
+              'covariance': cov,
+              'init_params': init_params,
+              'fixed_params': fixed_params,
+              'bounds': bounds,
+              'cost': fit_info['cost'],
+              'optimality': fit_info['optimality'],
+              'nfev': fit_info['nfev'],
+              'njev': fit_info['njev'],
+              'status': fit_info['status'],
+              'success': fit_info['success'],
+              'message': fit_info['message']}
 
     return result
 
 
-def get_moments(img: np.ndarray, order: int = 1, coords: tuple[np.ndarray] = None, dims: list[int] = None) -> list[float]:
+def get_moments(img: np.ndarray,
+                order: int = 1,
+                coords: tuple[np.ndarray] = None,
+                dims: list[int] = None) -> list[float]:
     """
     Calculate moments of distribution of arbitrary size
 
@@ -219,17 +240,19 @@ def get_moments(img: np.ndarray, order: int = 1, coords: tuple[np.ndarray] = Non
     # as trick to avoid having to meshgrid any of the coordinates, we can use NumPy's array broadcasting. Because this
     # looks at the trailing array dimensions, we need to swap our desired axis to be the last dimension, multiply by the
     # coordinates to do the broadcasting, and then swap back
-    # moments = [np.nansum(np.swapaxes(np.swapaxes(img, ii, img.ndim-1) * c**order, ii, img.ndim-1),
-    #            axis=tuple(dims), dtype=float) / w
-    #            for ii, c in zip(dims, coords)]
     moments = [np.nansum(img * c ** order, axis=tuple(dims), dtype=float) / w for c in coords]
 
     return moments
 
 
 # fit data to gaussians
-def fit_gauss1d(y: np.ndarray, init_params: list[float] = None, fixed_params: list[bool] = None,
-                sd: np.ndarray = None, x: np.ndarray = None, bounds: tuple[tuple[float]] = None, **kwargs):
+def fit_gauss1d(y: np.ndarray,
+                init_params: list[float] = None,
+                fixed_params: list[bool] = None,
+                sd: np.ndarray = None,
+                x: np.ndarray = None,
+                bounds: tuple[tuple[float]] = None,
+                **kwargs):
     """
     Fit 1D Gaussian. This is a wrapper for fit_model() which additionally computes reasonably parameter guess values
     from the input data y.
@@ -287,9 +310,14 @@ def fit_gauss1d(y: np.ndarray, init_params: list[float] = None, fixed_params: li
     return result, fit_fn
 
 
-def fit_gauss2d(img: np.ndarray, init_params: list[float] = None, fixed_params: list[bool] = None,
-                sd: np.ndarray = None, xx: np.ndarray = None, yy: np.ndarray = None,
-                bounds: tuple[tuple[float]] = None, **kwargs):
+def fit_gauss2d(img: np.ndarray,
+                init_params: list[float] = None,
+                fixed_params: list[bool] = None,
+                sd: np.ndarray = None,
+                xx: np.ndarray = None,
+                yy: np.ndarray = None,
+                bounds: tuple[tuple[float]] = None,
+                **kwargs):
     """
     Fit 2D gaussian function. The angle theta is defined clockwise from the x- (or y-) axis. NOTE: be careful
     with this when looking at results using e.g. matplotlib.imshow, as this will display the negative y-axis on top.
@@ -360,9 +388,15 @@ def fit_gauss2d(img: np.ndarray, init_params: list[float] = None, fixed_params: 
     return result, fit_fn
 
 
-def fit_sum_gauss2d(img: np.ndarray, ngaussians: int, init_params: list[float],
-                    fixed_params: list[bool] = None, sd: np.ndarray = None,
-                    xx: np.ndarray = None, yy: np.ndarray = None, bounds: tuple[tuple[float]] = None, **kwargs):
+def fit_sum_gauss2d(img: np.ndarray,
+                    ngaussians: int,
+                    init_params: list[float],
+                    fixed_params: list[bool] = None,
+                    sd: np.ndarray = None,
+                    xx: np.ndarray = None,
+                    yy: np.ndarray = None,
+                    bounds: tuple[tuple[float]] = None,
+                    **kwargs):
     """
     Fit 2D gaussian function. The angle theta is defined clockwise from the x- (or y-) axis. NOTE: be careful
     with this when looking at results using e.g. matplotlib.imshow, as this will display the negative y-axis on top.
@@ -404,63 +438,6 @@ def fit_sum_gauss2d(img: np.ndarray, ngaussians: int, init_params: list[float],
         return sum_gauss2d(x, y, pfit)
 
     return result, fn
-
-
-def fit_half_gauss1d(y, init_params=None, fixed_params=None, sd=None, x=None, bounds=None, **kwargs):
-    """
-    Fit function that has two Gaussian halves with different sigmas and offsets but match smoothly at cx
-
-    :param y:
-    :param init_params: [A1, cx, sx1, bg1, sx2, bg2]
-    :param fixed_params:
-    :param sd:
-    :param x:
-    :param bounds:
-    :return result, fit_function:
-    """
-
-    # get coordinates if not provided
-    if x is None:
-        x = np.arange(len(y))
-
-    # get default initial parameters
-    if init_params is None:
-        init_params = [None] * 6
-    else:
-        # init_params = copy.deepcopy(init_params)
-        init_params = [p for p in init_params]
-
-    # guess reasonable parameters if not provided
-    if np.any([ip is None for ip in init_params]):
-        to_use = np.logical_not(np.isnan(y))
-
-        bg = np.nanmean(y.ravel())
-        amp = np.max(y[to_use].ravel()) - bg
-
-        cx, = get_moments(y, order=1, coords=[x])
-        m2x, = get_moments(y, order=2, coords=[x])
-        sx = np.sqrt(m2x - cx ** 2)
-
-        ip_default = [amp, cx, sx, bg, sx, bg]
-
-        # set any parameters that were None to the default values
-        for ii in range(len(init_params)):
-            if init_params[ii] is None:
-                init_params[ii] = ip_default[ii]
-
-    if bounds is None:
-        bounds = ((-np.inf, x.min(), 0, -np.inf, 0, -np.inf),
-                  (np.inf, x.max(), x.max() - x.min(), np.inf, x.max() - x.min(), np.inf))
-
-    def hg_fn(x, p): return (p[0] * np.exp(-(x - p[1])**2 / (2*p[2]**2)) + p[3]) * (x < p[1]) + \
-                            ((p[0] + p[3] - p[5]) * np.exp(-(x - p[1])**2 / (2*p[4]**2)) + p[5]) * (x >= p[1])
-
-    result = fit_model(y, lambda p: hg_fn(x, p), init_params, fixed_params=fixed_params, sd=sd, bounds=bounds, **kwargs)
-
-    pfit = result['fit_params']
-    def fit_fn(x): return hg_fn(x, pfit)
-
-    return result, fit_fn
 
 
 # gaussians and jacobians

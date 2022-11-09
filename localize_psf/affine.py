@@ -528,6 +528,9 @@ def fit_xform_points_ransac(from_pts, to_pts, dist_err_max: float = 0.3, niterat
             dist_errs = np.sqrt(np.linalg.norm(to_pts - xform_points(from_pts, xform_prop), axis=1))
 
             is_inlier_prop = dist_errs < dist_err_max
+            if not np.any(is_inlier_prop):
+                continue
+
             model_err = np.mean(dist_errs[is_inlier_prop])
 
             # if model_err < error_best:
