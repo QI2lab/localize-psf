@@ -187,6 +187,13 @@ def fit_least_squares(model_fn,
     # ###########################
     # store results
     # ###########################
+    status_codes = {"improper input parameters status returned from MINPACK": -1,
+                    "the maximum number of function evaluations is exceeded": 0,
+                    "gtol termination condition is satisfied": 1,
+                    "ftol termination condition is satisfied": 2,
+                    "xtol termination condition is satisfied": 3,
+                    "Both ftol and xtol termination conditions are satisfied": 4}
+
     result = {'fit_params': pfit,
               'chi_squared': red_chi_sq,
               'covariance': cov,
@@ -198,6 +205,7 @@ def fit_least_squares(model_fn,
               'nfev': fit_info['nfev'],
               'njev': fit_info['njev'],
               'status': fit_info['status'],
+              'status_codes': status_codes,
               'success': fit_info['success'],
               'message': fit_info['message']}
 
