@@ -4,7 +4,8 @@ Tools for dealing with regions of interest (ROI's)
 import numpy as np
 
 
-def roi2global(coords_roi: list[float], roi: list[int]):
+def roi2global(coords_roi: list[float],
+               roi: list[int]):
     """
     Convert from ROI coordinates to global coordinates. i.e. if we have an array M then
     ROI(M)[c1, c2, ..., cn] = M[c1_full, c2_full, ..., cn_full]
@@ -21,7 +22,8 @@ def roi2global(coords_roi: list[float], roi: list[int]):
     return coords_full
 
 
-def global2roi(coords_full: list[float], roi: list[int]):
+def global2roi(coords_full: list[float],
+               roi: list[int]):
     """
     Convert from global coordinates to ROI coordinates. i.e. if we have an array M, then
     M[c1, c2, ..., cn] = ROI(M)[c1_xform, c2_xform, ..., cn_xform]
@@ -39,7 +41,10 @@ def global2roi(coords_full: list[float], roi: list[int]):
     return coords_roi
 
 
-def get_centered_roi(centers: list, sizes: list[int], min_vals: list[int] = None, max_vals: list[int] = None):
+def get_centered_roi(centers: list,
+                     sizes: list[int],
+                     min_vals: list[int] = None,
+                     max_vals: list[int] = None):
     """
     Get end points of an roi centered about centers (as close as possible) with length sizes.
     If the ROI size is odd, the ROI will be perfectly centered. Otherwise, the centering will
@@ -89,7 +94,10 @@ def get_centered_roi(centers: list, sizes: list[int], min_vals: list[int] = None
     return roi
 
 
-def cut_roi(roi: list[int], arr: np.ndarray, axes: tuple[int] = None, allow_broadcastable_arrays: bool = True) -> np.ndarray:
+def cut_roi(roi: list[int],
+            arr: np.ndarray,
+            axes: tuple[int] = None,
+            allow_broadcastable_arrays: bool = True) -> np.ndarray:
     """
     Return region of interest from an array
 
@@ -125,25 +133,20 @@ def cut_roi(roi: list[int], arr: np.ndarray, axes: tuple[int] = None, allow_broa
     return arr[tuple(slices)]
 
 
-def get_roi_size(sizes: list[float], dc: float, dz: float, ensure_odd: bool = True):
+def get_roi_size(sizes: list[float],
+                 drs: list[float],
+                 ensure_odd: bool = True):
     """
     Get closest larger ROI size in pixels given a set of sizes in real units
 
-    @param sizes: [sz, sy, sx], ROI sizes in real units
-    @param dc: pixel size
-    @param dz: z-spacing size
-    @param bool ensure_odd: enforce only odd ROI sizes if true
-    @return roi_sizes: [n0, n1, n2]
+    @param sizes: [s0, s1, ...], ROI sizes in real units
+    @param drs: [dr0, dr1, ...]
+    @param ensure_odd: enforce only odd ROI sizes if true
+    @return roi_sizes: [n0, n1, n2, ...]
     """
-    n0 = int(np.ceil(sizes[0] / dz))
-    n1 = int(np.ceil(sizes[1] / dc))
-    n2 = int(np.ceil(sizes[2] / dc))
 
+    roi_sizes = [int(np.ceil(s / dr)) for s, dr in zip(sizes, drs)]
     if ensure_odd:
-        n0 += (1 - np.mod(n0, 2))
-        n1 += (1 - np.mod(n1, 2))
-        n2 += (1 - np.mod(n2, 2))
-
-    roi_sizes = [n0, n1, n2]
+        roi_sizes = [n + 1 - np.mod(n, 2) for n in roi_sizes]
 
     return roi_sizes
