@@ -752,7 +752,7 @@ def fit_rois(img_rois: np.ndarray,
         if fixed_params is None:
             fixed_params = np.zeros((nparams), dtype=bool)
 
-        params_to_fit = np.array(fixed_params).astype(np.int32)
+        params_to_fit = np.logical_not(np.array(fixed_params)).astype(np.int32)
 
         # do fitting
         fit_params, fit_states, chi_sqrs, niters, fit_t = gf.fit(data,
