@@ -6,11 +6,11 @@ experimental PSF's from the average of many beads and fitting 2D and 3D PSF mode
 """
 import warnings
 import numpy as np
-import scipy.ndimage as ndi
-import scipy.special as sp
-import scipy.integrate
-import scipy.interpolate
-import scipy.signal
+from scipy.ndimage import shift
+from scipy.special import j0, j1
+from scipy.integrate import quad
+from scipy.interpolate import interp1d
+from scipy.signal import fftconvolve
 from scipy import fft
 from localize_psf import affine, rois
 
@@ -25,7 +25,9 @@ except ImportError:
     psfmodels_available = False
 
 
-def blur_img_otf(ground_truth, otf, apodization=1):
+def blur_img_otf(ground_truth: np.ndarray,
+                 otf: np.ndarray,
+                 apodization: np.ndarray = 1):
     """
     Blur image with OTF
 
@@ -39,7 +41,9 @@ def blur_img_otf(ground_truth, otf, apodization=1):
     return img_blurred
 
 
-def blur_img_psf(ground_truth, psf, apodization=1):
+def blur_img_psf(ground_truth: np.ndarray,
+                 psf: np.ndarray,
+                 apodization: np.ndarray = 1):
     """
     Blur image with PSF
 
@@ -54,7 +58,8 @@ def blur_img_psf(ground_truth, psf, apodization=1):
 
 
 # tools for converting between different otf/psf representations
-def otf2psf(otf, dfs=1):
+def otf2psf(otf: np.ndarray,
+            dfs: list[float] = 1):
     """
     Compute the point-spread function from the optical transfer function
     :param otf: otf, as a 1D, 2D or 3D array. Assumes that f=0 is near the center of the array, and frequency are
@@ -79,7 +84,8 @@ def otf2psf(otf, dfs=1):
     return psf, coords
 
 
-def psf2otf(psf, drs=1):
+def psf2otf(psf: np.ndarray,
+            drs: list[float] = 1):
     """
     Compute the optical transfer function from the point-spread function
 
@@ -104,7 +110,10 @@ def psf2otf(psf, drs=1):
     return otf, coords
 
 
-def symm_fn_1d_to_2d(arr, fs, fmax, npts):
+def symm_fn_1d_to_2d(arr,
+                     fs,
+                     fmax: float,
+                     npts: int):
     """
     Convert a 1D function which is symmetric wrt to the radial variable to a 2D matrix.
     Useful helper function when computing PSFs from 2D OTFs
@@ -129,12 +138,18 @@ def symm_fn_1d_to_2d(arr, fs, fmax, npts):
     to_interp = np.logical_and(fmag >= fs[not_nan].min(), fmag <= fs[not_nan].max())
 
     arr_out = np.zeros((ny, nx), dtype=arr.dtype)
-    arr_out[to_interp] = scipy.interpolate.interp1d(fs[not_nan], arr[not_nan])(fmag[to_interp])
+    arr_out[to_interp] = interp1d(fs[not_nan], arr[not_nan])(fmag[to_interp])
 
     return arr_out, fxs, fys
 
 
-def atf2otf(atf, dx=None, wavelength=0.5, ni=1.5, defocus_um=0, fx=None, fy=None):
+def atf2otf(atf,
+            dx: float = None,
+            wavelength: float = 0.5,
+            ni: float = 1.5,
+            defocus_um: float = 0,
+            fx=None,
+            fy=None):
     """
     Get incoherent transfer function (OTF) from autocorrelation of coherent transfer function (ATF)
 
@@ -169,12 +184,15 @@ def atf2otf(atf, dx=None, wavelength=0.5, ni=1.5, defocus_um=0, fx=None, fy=None
     otf_c_minus_conj = np.roll(np.roll(np.flip(atf_defocus, axis=(0, 1)), np.mod(ny + 1, 2), axis=0),
                                np.mod(nx + 1, 2), axis=1).conj()
 
-    otf = scipy.signal.fftconvolve(atf_defocus, otf_c_minus_conj, mode='same') / np.sum(np.abs(atf) ** 2)
+    otf = fftconvolve(atf_defocus, otf_c_minus_conj, mode='same') / np.sum(np.abs(atf) ** 2)
     return otf, atf_defocus
 
 
 # circular aperture functions
-def circ_aperture_atf(fx, fy, na, wavelength):
+def circ_aperture_atf(fx,
+                      fy,
+                      na: float,
+                      wavelength: float):
     """
     Amplitude transfer function for circular aperture
 
@@ -195,7 +213,10 @@ def circ_aperture_atf(fx, fy, na, wavelength):
     return atf
 
 
-def circ_aperture_otf(fx, fy, na, wavelength):
+def circ_aperture_otf(fx,
+                      fy,
+                      na: float,
+                      wavelength: float):
     """
     OTF for roi_size circular aperture
 
@@ -222,7 +243,8 @@ def circ_aperture_otf(fx, fy, na, wavelength):
 
 
 # helper functions for converting between NA and peak widths
-def na2fwhm(na, wavelength):
+def na2fwhm(na: float,
+            wavelength: float):
     """
     Convert numerical aperture to full-width at half-maximum, assuming an Airy-function PSF
 
@@ -236,7 +258,8 @@ def na2fwhm(na, wavelength):
     return fwhm
 
 
-def fwhm2na(wavelength, fwhm):
+def fwhm2na(wavelength: float,
+            fwhm: float):
     """
     Convert full-width half-maximum PSF value to the equivalent numerical aperture. Inverse function of na2fwhm
 
@@ -248,7 +271,8 @@ def fwhm2na(wavelength, fwhm):
     return na
 
 
-def na2sxy(na, wavelength):
+def na2sxy(na: float,
+           wavelength: float):
     """
     Convert numerical aperture to standard deviation, assuming the numerical aperture and the sigma
     are related as in the Airy function PSF
@@ -264,7 +288,8 @@ def na2sxy(na, wavelength):
     return sigma
 
 
-def sxy2na(wavelength, sigma_xy):
+def sxy2na(wavelength: float,
+           sigma_xy: float):
     """
     Convert sigma xy value to equivalent numerical aperture, assuming these are related as in the Airy function PSF
     @param wavelength:
@@ -277,7 +302,9 @@ def sxy2na(wavelength, sigma_xy):
     return fwhm2na(wavelength, fwhm)
 
 
-def na2sz(na, wavelength, ni):
+def na2sz(na: float,
+          wavelength: float,
+          ni: float):
     """
     Convert numerical aperture to equivalent sigma-z value,
 
@@ -290,7 +317,9 @@ def na2sz(na, wavelength, ni):
     return np.sqrt(6) / np.pi * ni * wavelength / na ** 2
 
 
-def sz2na(sigma_z, wavelength, ni):
+def sz2na(sigma_z: float,
+          wavelength: float,
+          ni: float):
     """
     Convert sigma-z value to equivalent numerical aperture
 
@@ -348,13 +377,20 @@ class psf_model:
 
 
 
-    def model(self, coords: tuple[np.ndarray], params: np.ndarray):
+    def model(self,
+              coords: tuple[np.ndarray],
+              params: np.ndarray):
         pass
 
-    def jacobian(self, coords: tuple[np.ndarray], params: np.ndarray):
+    def jacobian(self,
+                 coords: tuple[np.ndarray],
+                 params: np.ndarray):
         pass
 
-    def test_jacobian(self, coords: tuple[np.ndarray], params: np.ndarray, dp: float = 1e-7):
+    def test_jacobian(self,
+                      coords: tuple[np.ndarray],
+                      params: np.ndarray,
+                      dp: float = 1e-7):
         # numerical test for jacobian
         jac_calc = self.jacobian(coords, params)
         jac_numerical = []
@@ -367,10 +403,13 @@ class psf_model:
         return jac_numerical, jac_calc
 
 
-    def estimate_parameters(self, img: np.ndarray, coords: tuple[np.ndarray]):
+    def estimate_parameters(self,
+                            img: np.ndarray,
+                            coords: tuple[np.ndarray]):
         pass
 
-    def normalize_parameters(self, params):
+    def normalize_parameters(self,
+                             params):
         """
         Return parameters in a standardized format, when there can be ambiguity. For example,
         a Gaussian model may include a standard deviation parameter. Since only the square of this quantity enters
@@ -384,10 +423,15 @@ class psf_model:
 
 class gaussian3d_psf_model(psf_model):
     """
-    Gaussian approximation to PSF. Matches well for equal peak intensity, but some deviations in area.
-    See https://doi.org/10.1364/AO.46.001819 for more details.
+    Gaussian approximation to PSF.
+
+    Since a diffraction limited PSF does not trully have a Gaussian form, we must choose some metric measuring
+    the difference between the real PSF and the Gaussian PSF. For example, minimizing the difference between
+    the two using an L1 metric results in the estimate
     sigma_xy = 0.22 * lambda / NA.
-    This comes from equating the FWHM of the Gaussian and the airy function.
+    See https://doi.org/10.1364/AO.46.001819 for more details.
+
+    TWee arrive at a similar estimate from equating the FWHM of the Gaussian and the airy function.
     FWHM = 2 * sqrt{2*log(2)} * sigma ~ 0.51 * wavelength / NA
 
     sigma_z = np.sqrt(6) / np.pi * ni * wavelength / NA ** 2
@@ -607,6 +651,12 @@ class gaussian2d_psf_model(psf_model):
         self.gauss3d = gaussian3d_psf_model(dc=dc, sf=sf, angles=angles)
 
     def model(self, coords: tuple[np.ndarray], params: np.ndarray):
+        """
+
+        @param coords: [amplitude, cx, cy, sxy, bg]
+        @param params:
+        @return:
+        """
         y, x = coords
         bcast_shape = np.broadcast_shapes(y.shape, x.shape)
         z = np.zeros(bcast_shape)
@@ -784,7 +834,7 @@ class born_wolf_psf_model(psf_model):
         # evaluate in-focus portion using airy function, which is much faster than integrating
         # ################################
         def airy_fn(rho):
-            val = p[0] * 4 * np.abs(sp.j1(rho * k * p[4]) / (rho * k * p[4])) ** 2 + p[5]
+            val = p[0] * 4 * np.abs(j1(rho * k * p[4]) / (rho * k * p[4])) ** 2 + p[5]
             val[rho == 0] = p[0] + p[4]
             return val
 
@@ -809,7 +859,7 @@ class born_wolf_psf_model(psf_model):
         if not np.all(is_in_focus):
 
             def integrand(rho, r, z):
-                return rho * sp.j0(k * r * p[4] * rho) * np.exp(-1j * k * (z - p[3]) * p[4] ** 2 * rho ** 2 / (2 * self.ni))
+                return rho * j0(k * r * p[4] * rho) * np.exp(-1j * k * (z - p[3]) * p[4] ** 2 * rho ** 2 / (2 * self.ni))
 
             # like this approach because allows rr, z, etc. to have arbitrary dimension
             already_evaluated = np.logical_or(is_in_focus, is_in_focus)
@@ -817,8 +867,8 @@ class born_wolf_psf_model(psf_model):
                 if already_eval:
                     continue
 
-                int_real = scipy.integrate.quad(lambda rho: integrand(rho, r, zc).real, 0, 1)[0]
-                int_img = scipy.integrate.quad(lambda rho: integrand(rho, r, zc).imag, 0, 1)[0]
+                int_real = quad(lambda rho: integrand(rho, r, zc).real, 0, 1)[0]
+                int_img = quad(lambda rho: integrand(rho, r, zc).imag, 0, 1)[0]
 
                 coords = np.unravel_index(ii, rr.shape)
                 psfs[coords] = p[0] * 4 * (int_real ** 2 + int_img ** 2) + p[5]
@@ -914,7 +964,7 @@ class model(psf_model):
 
             psf_norm = psfm.vectorial_psf(0, 1, dxy, wvl=self.wavelength, params=model_params, normalize=False)
             val = psfm.vectorial_psf(z - p[3], nx, dxy, wvl=self.wavelength, params=model_params, normalize=False)
-            val = p[0] / psf_norm * ndi.shift(val, [0, p[2] / dxy, p[1] / dxy], mode='nearest') + p[5]
+            val = p[0] / psf_norm * shift(val, [0, p[2] / dxy, p[1] / dxy], mode='nearest') + p[5]
 
         elif self.model_name == 'gibson-lanni':
             model_params = {'NA': p[4], 'sf': self.sf, 'ni': self.ni, 'ni0': self.ni}
@@ -922,7 +972,7 @@ class model(psf_model):
 
             psf_norm = psfm.scalar_psf(0, 1, dxy, wvl=self.wavelength, params=model_params, normalize=False)
             val = psfm.scalar_psf(z - p[3], nx, dxy, wvl=self.wavelength, params=model_params, normalize=False)
-            val = p[0] / psf_norm * ndi.shift(val, [0, p[2] / dxy, p[1] / dxy], mode='nearest') + p[5]
+            val = p[0] / psf_norm * shift(val, [0, p[2] / dxy, p[1] / dxy], mode='nearest') + p[5]
 
         elif self.model_name == "born-wolf":
             bw_model = born_wolf_psf_model(wavelength=self.wavelength, ni=self.ni, dc=self.dc, sf=self.sf, angles=self.angles)
@@ -963,7 +1013,12 @@ class model(psf_model):
 
 
 # utility functions
-def oversample_pixel(x, y, z, ds, sf, euler_angles=(0., 0., 0.)):
+def oversample_pixel(x: np.ndarray,
+                     y: np.ndarray,
+                     z: np.ndarray,
+                     ds: float,
+                     sf: int,
+                     euler_angles: tuple[float] = (0., 0., 0.)):
     """
     Generate coordinates to oversample a pixel on a 2D grid.
 
@@ -1013,7 +1068,9 @@ def oversample_pixel(x, y, z, ds, sf, euler_angles=(0., 0., 0.)):
     return xx_s, yy_s, zz_s
 
 
-def oversample_voxel(coords, drs, sf=3):
+def oversample_voxel(coords: tuple[np.ndarray],
+                     drs: tuple[float],
+                     sf: int = 3):
     """
     Get coordinates to oversample a voxel on a 3D grid
 
@@ -1034,7 +1091,9 @@ def oversample_voxel(coords, drs, sf=3):
     return coords_upsample
 
 
-def get_psf_coords(ns, drs, broadast=False):
+def get_psf_coords(ns: list[int],
+                   drs: list[float],
+                   broadast: bool = False):
     """
     Get centered coordinates for PSFmodels style PSF's from step size and number of coordinates
     :param ns: list of number of points
@@ -1042,7 +1101,7 @@ def get_psf_coords(ns, drs, broadast=False):
     :return coords: list of coordinates [zs, ys, xs, ...]
     """
     ndims = len(drs)
-    coords = [np.expand_dims(d * (np.arange(n) - n // 2),
+    coords = [np.expand_dims(d * (np.arange(n) - (n // 2)),
                              axis=tuple(range(ii)) + tuple(range(ii+1, ndims)))
               for ii, (n, d) in enumerate(zip(ns, drs))]
 
@@ -1053,7 +1112,11 @@ def get_psf_coords(ns, drs, broadast=False):
     return coords
 
 
-def average_exp_psfs(imgs, coords, centers, roi_sizes, backgrounds=None):
+def average_exp_psfs(imgs: np.ndarray,
+                     coords: tuple[np.ndarray],
+                     centers: np.ndarray,
+                     roi_sizes: tuple[int],
+                     backgrounds=None):
     """
     Get experimental psf from imgs by averaging many localizations (after pixel shifting).
 
@@ -1096,7 +1159,10 @@ def average_exp_psfs(imgs, coords, centers, roi_sizes, backgrounds=None):
 
         # cut roi from image
         roi_unc = rois.get_centered_roi((zc_pix, yc_pix, xc_pix), roi_sizes)
-        roi = rois.get_centered_roi((zc_pix, yc_pix, xc_pix), roi_sizes, min_vals=[0, 0, 0], max_vals=imgs.shape)
+        roi = rois.get_centered_roi((zc_pix, yc_pix, xc_pix),
+                                    roi_sizes,
+                                    min_vals=[0, 0, 0],
+                                    max_vals=imgs.shape)
         img_roi = rois.cut_roi(roi, imgs)
 
         zroi = rois.cut_roi(roi, z)
@@ -1112,7 +1178,7 @@ def average_exp_psfs(imgs, coords, centers, roi_sizes, backgrounds=None):
         zshift_pix = (zroi[cz_pix_roi, 0, 0] - centers[ii, 0]) / dz
 
         # get coordinates
-        img_roi_shifted = ndi.shift(np.array(img_roi, dtype=float), [zshift_pix, yshift_pix, xshift_pix],
+        img_roi_shifted = shift(np.array(img_roi, dtype=float), [zshift_pix, yshift_pix, xshift_pix],
                                     mode="constant", cval=-1)
         img_roi_shifted[img_roi_shifted == -1] = np.nan
 
