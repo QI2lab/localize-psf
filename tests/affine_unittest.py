@@ -6,7 +6,7 @@ import numpy as np
 from scipy import fft
 import scipy.signal
 import scipy.optimize
-import affine
+from localize_psf import affine
 
 def get_phase_realspace(img, frq, dxy, phase_guess=0):
     """

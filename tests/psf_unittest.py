@@ -2,7 +2,7 @@ import unittest
 
 import numpy as np
 from numpy import fft
-import fit_psf
+from localize_psf import fit_psf
 
 class Test_psf(unittest.TestCase):
 
