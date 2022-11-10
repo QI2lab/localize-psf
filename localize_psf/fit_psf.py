@@ -372,7 +372,77 @@ class pixelated_psf_model(fit.coordinate_model):
         self.angles = angles
 
 
-class gaussian3d_psf_model(pixelated_psf_model):
+class from_coordinate_model(pixelated_psf_model):
+    """
+    Helper class to convert any preexisting 3D coordinate model to a pixelated model
+    """
+    def __init__(self,
+                 model: fit.coordinate_model,
+                 dc: float = None,
+                 sf: int = 1,
+                 angles: tuple[float] = (0., 0., 0.)
+                 ):
+
+        param_names = model.parameter_names
+        has_jacobian = model.has_jacobian
+        ndims = model.ndims
+
+        if ndims != 3:
+            raise ValueError(f"pixel oversampling only implemented for 3D models,"
+                             f" but provided moel has ndims={ndims:d}")
+
+        super().__init__(param_names,
+                         dc=dc,
+                         sf=sf,
+                         angles=angles,
+                         has_jacobian=has_jacobian,
+                         ndims=ndims)
+        self.coord_model = model
+
+    def model(self,
+              coordinates: tuple[np.ndarray],
+              parameters: np.ndarray) -> np.ndarray:
+
+        z, y, x, = coordinates
+        # oversample points in pixel
+        xx_s, yy_s, zz_s = oversample_pixel(x, y, z, self.dc, sf=self.sf, euler_angles=self.angles)
+
+        # calculate psf at oversampled points
+        psf_s = self.coord_model.model((zz_s, yy_s, xx_s), parameters)
+        # average over those points
+        psf = np.mean(psf_s, axis=-1)
+
+        return psf
+
+
+    def jacobian(self,
+                 coordinates: tuple[np.ndarray],
+                 parameters: np.ndarray) -> list[np.ndarray]:
+
+        z, y, x = coordinates
+
+        # oversample points in pixel
+        xx_s, yy_s, zz_s = oversample_pixel(x, y, z, self.dc, sf=self.sf, euler_angles=self.angles)
+
+        jac_os = self.coord_model.jacobian((zz_s, yy_s, xx_s), parameters)
+
+        jac = [np.mean(j, axis=-1) for j in jac_os]
+
+        return jac
+
+
+    def estimate_parameters(self,
+                            data: np.ndarray,
+                            coordinates: tuple[np.ndarray]):
+        return self.coord_model.estimate_parameters(data, coordinates)
+
+
+    def normalize_parameters(self,
+                             parameters) -> np.ndarray:
+        return self.coord_model.normalize_parameters(parameters)
+
+
+class gaussian3d_psf_model(from_coordinate_model):
     """
     Gaussian approximation to PSF.
 
@@ -387,219 +457,33 @@ class gaussian3d_psf_model(pixelated_psf_model):
 
     sigma_z = np.sqrt(6) / np.pi * ni * wavelength / NA ** 2
     """
-    def __init__(self, dc: float = None, sf=1, angles=(0., 0., 0.)):
-        super().__init__(["A", "cx", "cy", "cz", "sxy", "sz", "bg"],
-                         dc=dc, sf=sf, angles=angles, has_jacobian=True, ndims=3)
+    def __init__(self,
+                 dc: float = None,
+                 sf: int = 1,
+                 angles: tuple[float] = (0., 0., 0.)
+                 ):
 
-    def model(self,
-              coords: tuple[np.ndarray],
-              params: np.ndarray):
-        z, y, x, = coords
-        # oversample points in pixel
-        xx_s, yy_s, zz_s = oversample_pixel(x, y, z, self.dc, sf=self.sf, euler_angles=self.angles)
-
-        # calculate psf at oversampled points
-        psf_s = np.exp(-(xx_s - params[1]) ** 2 / 2 / params[4] ** 2
-                       - (yy_s - params[2]) ** 2 / 2 / params[4] ** 2
-                       - (zz_s - params[3]) ** 2 / 2 / params[5] ** 2
-                       )
-
-        # normalization is such that the predicted peak value of the PSF ignoring binning would be p[0]
-        psf = params[0] * np.mean(psf_s, axis=-1) + params[-1]
-
-        return psf
-
-    def jacobian(self,
-                 coords: tuple[np.ndarray],
-                 params: np.ndarray):
-        z, y, x = coords
-
-        # oversample points in pixel
-        xx_s, yy_s, zz_s = oversample_pixel(x, y, z, self.dc, sf=self.sf, euler_angles=self.angles)
-
-        # use sxy * |sxy| instead of sxy**2 to enforce sxy > 0
-        psf_s = np.exp(-(xx_s - params[1]) ** 2 / 2 / params[4] ** 2
-                       - (yy_s - params[2]) ** 2 / 2 / params[4] ** 2
-                       - (zz_s - params[3]) ** 2 / 2 / params[5] ** 2
-                       )
-
-        # normalization is such that the predicted peak value of the PSF ignoring binning would be p[0]
-        # psf = p[0] * psf_sum + p[-1]
-
-        bcast_shape = (x + y + z).shape
-        # [A, cx, cy, cz, sxy, sz, bg]
-        jac = [np.mean(psf_s, axis=-1),
-               params[0] * np.mean(2 * (xx_s - params[1]) / 2 / params[4] ** 2 * psf_s, axis=-1),
-               params[0] * np.mean(2 * (yy_s - params[2]) / 2 / params[4] ** 2 * psf_s, axis=-1),
-               params[0] * np.mean(2 * (zz_s - params[3]) / 2 / params[5] ** 2 * psf_s, axis=-1),
-               params[0] * np.mean((2 / params[4] ** 3 * (xx_s - params[1]) ** 2 / 2 +
-                                    2 / params[4] ** 3 * (yy_s - params[2]) ** 2 / 2) * psf_s, axis=-1),
-               params[0] * np.mean(2 / params[5] ** 3 * (zz_s - params[3]) ** 2 / 2 * psf_s, axis=-1),
-               np.ones(bcast_shape)]
-
-        return jac
-
-    def estimate_parameters(self,
-                            img: np.ndarray,
-                            coords: tuple[np.ndarray]):
-        z, y, x = coords
-
-        # subtract smallest value so positive
-        img_temp = img - np.nanmin(img)
-        to_use = np.logical_and(np.logical_not(np.isnan(img_temp)), img_temp > 0)
-
-        if img.ndim != len(coords):
-            raise ValueError("len(coords) != img.ndim")
-
-        # compute moments
-        c1s = np.zeros(img.ndim)
-        c2s = np.zeros(img.ndim)
-        for ii in range(img.ndim):
-            c1s[ii] = np.sum(img_temp[to_use] * coords[ii][to_use]) / np.sum(img_temp[to_use])
-            c2s[ii] = np.sum(img_temp[to_use] * coords[ii][to_use] ** 2) / np.sum(img_temp[to_use])
-
-        sigmas = np.sqrt(c2s - c1s ** 2)
-        sz = sigmas[0]
-        sxy = np.mean(sigmas[1:])
-
-        guess_params = np.concatenate((np.array([np.nanmax(img) - np.nanmin(img)]), # may be too large ... but typically have problems with being too small
-                                       np.flip(c1s),
-                                       np.array([sxy]),
-                                       np.array([sz]),
-                                       np.array([np.nanmean(img)])
-                                       ),
-                                      )
-
-        return self.normalize_parameters(guess_params)
+        super().__init__(fit.gauss3d(), dc=dc, sf=sf, angles=angles)
 
 
-    def normalize_parameters(self,
-                             params: np.ndarray):
-        norm_params = np.array(params, copy=True)
-        norm_params[..., 4] = np.abs(norm_params[..., 4])
-        norm_params[..., 5] = np.abs(norm_params[..., 5])
+class asymmetric_gaussian3d(from_coordinate_model):
+    def __init__(self,
+                 dc: float = None,
+                 sf: int = 1,
+                 angles: tuple[float] = (0., 0., 0.)
+                 ):
 
-        return norm_params
+        super().__init__(fit.asymmetric_gaussian3d(), dc=dc, sf=sf, angles=angles)
 
 
-class asymmetric_gaussian3d(pixelated_psf_model):
-    def __init__(self, dc: float = None, sf=1, angles=(0., 0., 0.)):
-        super().__init__(["A", "cx", "cy", "cz", "sx", "sy/sx", "sz", "theta_xy", "bg"],
-                         dc=dc, sf=sf, angles=angles, has_jacobian=True, ndims=3)
+class gaussian3d_rotated(from_coordinate_model):
+    def __init__(self,
+                 dc: float = None,
+                 sf: int = 1,
+                 angles: tuple[float] = (0., 0., 0.)
+                 ):
 
-    def model(self,
-              coords: tuple[np.ndarray],
-              params: np.ndarray):
-        z, y, x, = coords
-
-        # oversample points in pixel
-        xx_s, yy_s, zz_s = oversample_pixel(x, y, z, self.dc, sf=self.sf, euler_angles=self.angles)
-
-        # rotated coordinates
-        xx_rot = np.cos(params[7]) * (xx_s - params[1]) - np.sin(params[7]) * (yy_s - params[2])
-        yy_rot = np.cos(params[7]) * (yy_s - params[2]) + np.sin(params[7]) * (xx_s - params[1])
-
-        # calculate psf at oversampled points
-        psf_s = np.exp(-xx_rot ** 2 / 2 / params[4] ** 2
-                       - yy_rot ** 2 / 2 / (params[4] * params[5]) ** 2
-                       - (zz_s - params[3]) ** 2 / 2 / params[6] ** 2)
-
-        # normalization is such that the predicted peak value of the PSF ignoring binning would be p[0]
-        psf = params[0] * np.mean(psf_s, axis=-1) + params[8]
-
-        return psf
-
-    def jacobian(self,
-                 coords: tuple[np.ndarray],
-                 params: np.ndarray):
-        z, y, x, = coords
-        # oversample points in pixel
-        xx_s, yy_s, zz_s = oversample_pixel(x, y, z, self.dc, sf=self.sf, euler_angles=self.angles)
-
-        p = params
-        # rotated coordinates
-        xx_rot = np.cos(p[7]) * (xx_s - p[1]) - np.sin(p[7]) * (yy_s - p[2])
-        yy_rot = np.cos(p[7]) * (yy_s - p[2]) + np.sin(p[7]) * (xx_s - p[1])
-
-        dx_dphi = -np.sin(p[7]) * (xx_s - p[1]) - np.cos(p[7]) * (yy_s - p[2])
-        dy_dphi = -np.sin(p[7]) * (yy_s - p[2]) + np.cos(p[7]) * (xx_s - p[1])
-
-        # calculate psf at oversampled points
-        psf_s = np.exp(-xx_rot ** 2 / 2 / p[4] ** 2
-                       -yy_rot ** 2 / 2 / (p[4] * p[5]) ** 2
-                       -(zz_s - p[3]) ** 2 / 2 / p[6] ** 2)
-
-        dpsf_dcx = 2 * xx_rot * np.cos(p[7]) / 2 / p[4]**2 + \
-                   2 * yy_rot * np.sin(p[7]) / 2 / (p[4] * p[5])**2
-
-        dpsf_dcy = -2 * xx_rot * np.sin(p[7]) / 2 / p[4] ** 2 + \
-                    2 * yy_rot * np.cos(p[7]) / 2 / (p[4] * p[5]) ** 2
-
-        dpsf_dcz = 2 * (zz_s - p[3]) / 2 / p[6] ** 2
-
-        dpsf_dsx = 2 / p[4] ** 3 * xx_rot ** 2 / 2 + \
-                   2 / p[4] ** 3 * yy_rot ** 2 / 2 / p[5] ** 2
-
-        dpsf_dsrat = 2 / p[5] ** 3 * yy_rot**2 / 2 / p[4] ** 2
-
-        dpsf_dsz = 2 / p[6] ** 3 * (zz_s - p[3]) ** 2 / 2
-
-        dpsf_dtheta = 2 * xx_rot / 2 / p[4] ** 2 * dx_dphi + \
-                      2 * yy_rot / 2 / (p[4] * p[5]) ** 2 * dy_dphi
-
-        bcast_shape = (x + y + z).shape
-        jac = [np.mean(psf_s, axis=-1),  # A
-               p[0] * np.mean(dpsf_dcx * psf_s, axis=-1),  # cx
-               p[0] * np.mean(dpsf_dcy * psf_s, axis=-1),  # cy
-               p[0] * np.mean(dpsf_dcz * psf_s, axis=-1),  # cz
-               p[0] * np.mean(dpsf_dsx * psf_s, axis=-1),  # sx
-               p[0] * np.mean(dpsf_dsrat * psf_s, axis=-1),  # sy/sx
-               p[0] * np.mean(dpsf_dsz * psf_s, axis=-1),  # sz
-               p[0] * np.mean(dpsf_dtheta * psf_s, axis=-1), # theta
-               np.ones(bcast_shape)  # bg
-               ]
-
-        return jac
-
-    def estimate_parameters(self,
-                            img: np.ndarray,
-                            coords: tuple[np.ndarray]):
-        z, y, x = coords
-
-        # subtract smallest value so positive
-        # img_temp = img - np.nanmean(img)
-        img_temp = img
-        to_use = np.logical_and(np.logical_not(np.isnan(img_temp)), img_temp > 0)
-
-        if img.ndim != len(coords):
-            raise ValueError("len(coords) != img.ndim")
-
-        # compute moments
-        c1s = np.zeros(img.ndim)
-        c2s = np.zeros(img.ndim)
-        for ii in range(img.ndim):
-            c1s[ii] = np.sum(img_temp[to_use] * coords[ii][to_use]) / np.sum(img_temp[to_use])
-            c2s[ii] = np.sum(img_temp[to_use] * coords[ii][to_use] ** 2) / np.sum(img_temp[to_use])
-
-        sigmas = np.sqrt(c2s - c1s ** 2)
-
-        guess_params = np.concatenate((np.array([np.nanmax(img) - np.nanmean(img)]),
-                                       np.flip(c1s),
-                                       np.flip(sigmas),
-                                       np.array([0.]),
-                                       np.array([np.nanmean(img)])
-                                       ),
-                                      )
-
-        return self.normalize_parameters(guess_params)
-
-    def normalize_parameters(self, params):
-        norm_params = np.array(params, copy=True)
-        norm_params[..., 4] = np.abs(norm_params[..., 4])
-        norm_params[..., 5] = np.abs(norm_params[..., 5])
-        norm_params[..., 6] = np.abs(norm_params[..., 6])
-
-        return norm_params
+        super().__init__(fit.gauss3d_rotated(), dc=dc, sf=sf, angles=angles)
 
 
 class gaussian2d_psf_model(pixelated_psf_model):
@@ -1070,7 +954,7 @@ def oversample_voxel(coords: tuple[np.ndarray],
 
 def get_psf_coords(ns: list[int],
                    drs: list[float],
-                   broadast: bool = False):
+                   broadcast: bool = False):
     """
     Get centered coordinates for PSFmodels style PSF's from step size and number of coordinates
     :param ns: list of number of points
@@ -1082,7 +966,7 @@ def get_psf_coords(ns: list[int],
                              axis=tuple(range(ii)) + tuple(range(ii+1, ndims)))
               for ii, (n, d) in enumerate(zip(ns, drs))]
 
-    if broadast:
+    if broadcast:
         # return arrays instead of views coords
         coords = [np.array(c, copy=True) for c in np.broadcast_arrays(*coords)]
 
@@ -1121,7 +1005,7 @@ def average_exp_psfs(imgs: np.ndarray,
 
     psf_shifted = np.zeros((nrois, roi_sizes[0], roi_sizes[1], roi_sizes[2])) * np.nan
     # coordinates
-    z_psf, y_psf, x_psf = get_psf_coords(roi_sizes, [dz, dy, dx], broadast=True)
+    z_psf, y_psf, x_psf = get_psf_coords(roi_sizes, [dz, dy, dx], broadcast=True)
 
     zc_pix_psf = np.argmin(np.abs(z_psf[:, 0, 0]))
     yc_pix_psf = np.argmin(np.abs(y_psf[0, :, 0]))

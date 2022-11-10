@@ -427,6 +427,231 @@ class gauss2d_sum(coordinate_model):
 
 
 class gauss3d(coordinate_model):
+    def __init__(self):
+        """
+        3D gaussian symmetric in xy
+        """
+        super().__init__(["amp", "cx", "cy", "cz", "sxy", "sz", "bg"], 3, has_jacobian=True)
+
+
+    def model(self,
+              coordinates: tuple[np.ndarray],
+              params: np.ndarray) -> np.ndarray:
+
+        z, y, x, = coordinates
+
+        # calculate psf at oversampled points
+        val = params[0] * np.exp(-(x - params[1]) ** 2 / 2 / params[4] ** 2
+                                 -(y - params[2]) ** 2 / 2 / params[4] ** 2
+                                 -(z - params[3]) ** 2 / 2 / params[5] ** 2
+                                ) + params[6]
+
+        return val
+
+
+    def jacobian(self,
+                 coordinates: tuple[np.ndarray],
+                 params: np.ndarray) -> list[np.ndarray]:
+
+        z, y, x = coordinates
+        bcast_shape = (x + y + z).shape
+
+        # use sxy * |sxy| instead of sxy**2 to enforce sxy > 0
+        v = np.exp(-(x - params[1]) ** 2 / 2 / params[4] ** 2
+                   - (y - params[2]) ** 2 / 2 / params[4] ** 2
+                   - (z - params[3]) ** 2 / 2 / params[5] ** 2
+                  )
+
+        # [A, cx, cy, cz, sxy, sz, bg]
+        jac = [v,
+               params[0] * 2 * (x - params[1]) / 2 / params[4] ** 2 * v,
+               params[0] * 2 * (y - params[2]) / 2 / params[4] ** 2 * v,
+               params[0] * 2 * (z - params[3]) / 2 / params[5] ** 2 * v,
+               params[0] * (2 / params[4] ** 3 * (x - params[1]) ** 2 / 2 +
+                            2 / params[4] ** 3 * (y - params[2]) ** 2 / 2) * v,
+               params[0] * 2 / params[5] ** 3 * (z - params[3]) ** 2 / 2 * v,
+               np.ones(bcast_shape)]
+
+        return jac
+
+
+    def estimate_parameters(self,
+                            data: np.ndarray,
+                            coordinates: tuple[np.ndarray]):
+
+        z, y, x = coordinates
+
+        # subtract smallest value so positive
+        img_temp = data - np.nanmin(data)
+        to_use = np.logical_and(np.logical_not(np.isnan(img_temp)), img_temp > 0)
+
+        if data.ndim != len(coordinates):
+            raise ValueError("len(coords) != img.ndim")
+
+        # compute moments
+        c1s = np.zeros(data.ndim)
+        c2s = np.zeros(data.ndim)
+        for ii in range(data.ndim):
+            c1s[ii] = np.sum(img_temp[to_use] * coordinates[ii][to_use]) / np.sum(img_temp[to_use])
+            c2s[ii] = np.sum(img_temp[to_use] * coordinates[ii][to_use] ** 2) / np.sum(img_temp[to_use])
+
+        sigmas = np.sqrt(c2s - c1s ** 2)
+        sz = sigmas[0]
+        sxy = np.mean(sigmas[1:])
+
+        guess_params = np.concatenate((np.array([np.nanmax(data) - np.nanmin(data)]),
+                                       np.flip(c1s),
+                                       np.array([sxy]),
+                                       np.array([sz]),
+                                       np.array([np.nanmean(data)])
+                                       ),
+                                      )
+
+        return self.normalize_parameters(guess_params)
+
+
+    def estimate_bounds(self,
+                        coordinates: tuple[np.ndarray]):
+        z, y, x = coordinates
+
+        lbs = (-np.inf, x.min(), y.min(), z.min(), 0, 0, -np.inf)
+        ubs = (np.inf, x.max(), y.max(), z.max(), np.inf, np.inf, np.inf)
+        return lbs, ubs
+
+    def normalize_parameters(self,
+                             params: np.ndarray):
+        norm_params = np.array(params, copy=True)
+        norm_params[..., 4] = np.abs(norm_params[..., 4])
+        norm_params[..., 5] = np.abs(norm_params[..., 5])
+
+        return norm_params
+
+
+class asymmetric_gaussian3d(coordinate_model):
+    def __init__(self):
+        super().__init__(["A", "cx", "cy", "cz", "sx", "sy/sx", "sz", "theta_xy", "bg"],
+                         3, has_jacobian=True)
+
+
+    def model(self,
+              coords: tuple[np.ndarray],
+              params: np.ndarray):
+        z, y, x, = coords
+
+        # rotated coordinates
+        xx_rot = np.cos(params[7]) * (x - params[1]) - np.sin(params[7]) * (y - params[2])
+        yy_rot = np.cos(params[7]) * (y - params[2]) + np.sin(params[7]) * (x - params[1])
+
+        vals = params[0] * np.exp(-xx_rot ** 2 / 2 / params[4] ** 2
+                                  - yy_rot ** 2 / 2 / (params[4] * params[5]) ** 2
+                                  - (z - params[3]) ** 2 / 2 / params[6] ** 2) + params[8]
+
+        return vals
+
+
+    def jacobian(self,
+                 coords: tuple[np.ndarray],
+                 params: np.ndarray):
+
+        z, y, x, = coords
+        bcast_shape = (x + y + z).shape
+
+        p = params
+        # rotated coordinates
+        xx_rot = np.cos(p[7]) * (x - p[1]) - np.sin(p[7]) * (y - p[2])
+        yy_rot = np.cos(p[7]) * (y - p[2]) + np.sin(p[7]) * (x - p[1])
+
+        dx_dphi = -np.sin(p[7]) * (x - p[1]) - np.cos(p[7]) * (y - p[2])
+        dy_dphi = -np.sin(p[7]) * (y - p[2]) + np.cos(p[7]) * (x - p[1])
+
+        # calculate psf at oversampled points
+        val0  = np.exp(-xx_rot ** 2 / 2 / p[4] ** 2
+                       -yy_rot ** 2 / 2 / (p[4] * p[5]) ** 2
+                       -(z - p[3]) ** 2 / 2 / p[6] ** 2)
+
+        dpsf_dcx = 2 * xx_rot * np.cos(p[7]) / 2 / p[4]**2 + \
+                   2 * yy_rot * np.sin(p[7]) / 2 / (p[4] * p[5])**2
+
+        dpsf_dcy = -2 * xx_rot * np.sin(p[7]) / 2 / p[4] ** 2 + \
+                    2 * yy_rot * np.cos(p[7]) / 2 / (p[4] * p[5]) ** 2
+
+        dpsf_dcz = 2 * (z - p[3]) / 2 / p[6] ** 2
+
+        dpsf_dsx = 2 / p[4] ** 3 * xx_rot ** 2 / 2 + \
+                   2 / p[4] ** 3 * yy_rot ** 2 / 2 / p[5] ** 2
+
+        dpsf_dsrat = 2 / p[5] ** 3 * yy_rot**2 / 2 / p[4] ** 2
+
+        dpsf_dsz = 2 / p[6] ** 3 * (z - p[3]) ** 2 / 2
+
+        dpsf_dtheta = 2 * xx_rot / 2 / p[4] ** 2 * dx_dphi + \
+                      2 * yy_rot / 2 / (p[4] * p[5]) ** 2 * dy_dphi
+
+        jac = [val0,  # A
+               p[0] * dpsf_dcx * val0,  # cx
+               p[0] * dpsf_dcy * val0,  # cy
+               p[0] * dpsf_dcz * val0,  # cz
+               p[0] * dpsf_dsx * val0,  # sx
+               p[0] * dpsf_dsrat * val0,  # sy/sx
+               p[0] * dpsf_dsz * val0,  # sz
+               p[0] * dpsf_dtheta * val0, # theta
+               np.ones(bcast_shape)  # bg
+               ]
+
+        return jac
+
+
+    def estimate_parameters(self,
+                            img: np.ndarray,
+                            coords: tuple[np.ndarray]):
+        z, y, x = coords
+
+        # subtract smallest value so positive
+        img_temp = img
+        to_use = np.logical_and(np.logical_not(np.isnan(img_temp)), img_temp > 0)
+
+        if img.ndim != len(coords):
+            raise ValueError("len(coords) != img.ndim")
+
+        # compute moments
+        c1s = np.zeros(img.ndim)
+        c2s = np.zeros(img.ndim)
+        for ii in range(img.ndim):
+            c1s[ii] = np.sum(img_temp[to_use] * coords[ii][to_use]) / np.sum(img_temp[to_use])
+            c2s[ii] = np.sum(img_temp[to_use] * coords[ii][to_use] ** 2) / np.sum(img_temp[to_use])
+
+        sigmas = np.sqrt(c2s - c1s ** 2)
+
+        guess_params = np.concatenate((np.array([np.nanmax(img) - np.nanmean(img)]),
+                                       np.flip(c1s),
+                                       np.flip(sigmas),
+                                       np.array([0.]),
+                                       np.array([np.nanmean(img)])
+                                       ),
+                                      )
+
+        return self.normalize_parameters(guess_params)
+
+
+    def estimate_bounds(self,
+                        coordinates: tuple[np.ndarray]) -> (tuple[float], tuple[float]):
+        z, y, x = coordinates
+
+        lbs = (-np.inf, x.min(), y.min(), z.min(), 0, 0, 0, -np.inf, -np.inf)
+        ubs = (np.inf, x.max(), y.max(), z.max(), np.inf, np.inf, np.inf, np.inf, np.inf)
+        return lbs, ubs
+
+
+    def normalize_parameters(self, params):
+        norm_params = np.array(params, copy=True)
+        norm_params[..., 4] = np.abs(norm_params[..., 4])
+        norm_params[..., 5] = np.abs(norm_params[..., 5])
+        norm_params[..., 6] = np.abs(norm_params[..., 6])
+
+        return norm_params
+
+
+class gauss3d_rotated(coordinate_model):
 
     def __init__(self):
         """
@@ -437,12 +662,12 @@ class gauss3d(coordinate_model):
         f_rot(r_lab) = f(r_body) = f(U^{-1} * r_lab)
 
         Take the z-axis in the frame of the object, and consider the z-axis in the lab frame. phi and theta describe
-        how the transformation to overlap these two. psi gives the gives the angle the object is rotated about its own axis
+        how the transformation to overlap these two. psi gives the angle the object is rotated about its own axis
 
         :param p: [A, cx, cy, cz, sigma x_rot, sigma y_rot, sigma z_rot, bg, phi, theta, psi]
         :return value:
         """
-        super().__init__(["amp", "cx", "cy", "cz" "sx", "sy", "sz", "bg", "phi", "theta", "psi"], 3, has_jacobian=True)
+        super().__init__(["amp", "cx", "cy", "cz", "sx", "sy", "sz", "bg", "phi", "theta", "psi"], 3, has_jacobian=True)
 
 
     def model(self,
@@ -520,10 +745,40 @@ class gauss3d(coordinate_model):
 
         return jac
 
+
     def estimate_parameters(self,
                             data: np.ndarray,
                             coordinates: tuple[np.ndarray]):
-        pass
+        z, y, x = coordinates
+
+        # subtract smallest value so positive
+        img_temp = data
+        to_use = np.logical_and(np.logical_not(np.isnan(img_temp)), img_temp > 0)
+
+        if data.ndim != len(coordinates):
+            raise ValueError("len(coords) != img.ndim")
+
+        # compute moments
+        c1s = np.zeros(data.ndim)
+        c2s = np.zeros(data.ndim)
+        for ii in range(data.ndim):
+            c1s[ii] = np.sum(img_temp[to_use] * coordinates[ii][to_use]) / np.sum(img_temp[to_use])
+            c2s[ii] = np.sum(img_temp[to_use] * coordinates[ii][to_use] ** 2) / np.sum(img_temp[to_use])
+
+        sigmas = np.sqrt(c2s - c1s ** 2)
+
+        guess_params = np.concatenate((np.array([np.nanmax(data) - np.nanmean(data)]),
+                                       np.flip(c1s),
+                                       np.flip(sigmas),
+                                       np.array([np.nanmean(data)]),
+                                       np.array([0.]),
+                                       np.array([0.]),
+                                       np.array([0.]),
+                                       ),
+                                      )
+
+        return self.normalize_parameters(guess_params)
+
 
     def estimate_bounds(self,
                         coordinates: tuple[np.ndarray]):
@@ -532,6 +787,7 @@ class gauss3d(coordinate_model):
         lbs = (-np.inf, x.min(), y.min(), z.min(), 0, 0, 0, -np.inf, -np.inf, -np.inf, -np.inf)
         ubs = (np.inf, x.max(), y.max(), z.max(), np.inf, np.inf, np.inf, np.inf, np.inf, np.inf, np.inf)
         return lbs, ubs
+
 
     def normalize_parameters(self,
                              parameters):
