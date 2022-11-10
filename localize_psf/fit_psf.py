@@ -437,6 +437,11 @@ class from_coordinate_model(pixelated_psf_model):
         return self.coord_model.estimate_parameters(data, coordinates)
 
 
+    def estimate_bounds(self,
+                        coordinates: tuple[np.ndarray]) -> (tuple[float], tuple[float]):
+        return self.coord_model.estimate_bounds(coordinates)
+
+
     def normalize_parameters(self,
                              parameters) -> np.ndarray:
         return self.coord_model.normalize_parameters(parameters)

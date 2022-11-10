@@ -582,6 +582,7 @@ def fit_roi(img_roi: np.ndarray,
             init_params: list[float],
             fixed_params: list[bool] = None,
             bounds: tuple[list[float]] = None,
+            guess_bounds: bool = False,
             model: psf.pixelated_psf_model = psf.gaussian3d_psf_model(),
             max_number_iterations: int = None) -> dict:
     """
@@ -614,7 +615,7 @@ def fit_roi(img_roi: np.ndarray,
                         init_params,
                         fixed_params=fixed_params,
                         bounds=bounds,
-                        guess_bounds=False,
+                        guess_bounds=guess_bounds,
                         max_nfev=max_number_iterations)
 
     return results
@@ -626,6 +627,7 @@ def fit_rois(img_rois: list[np.ndarray],
              max_number_iterations: int = 100,
              estimator: str = "LSE",
              fixed_params: np.ndarray = None,
+             guess_bounds: bool = False,
              use_gpu: bool = _gpufit_available,
              debug: bool = False,
              verbose: bool = False,
@@ -650,6 +652,10 @@ def fit_rois(img_rois: list[np.ndarray],
     :return fit_results:
     """
 
+    if guess_bounds and use_gpu:
+        warnings.warn("use_gpu selected for fitting, but unsupported option guess_bounds selected."
+                      "guess_bounds will be ignored")
+
     zrois, yrois, xrois = coords_rois
 
     for ii in range(len(img_rois)):
@@ -666,6 +672,7 @@ def fit_rois(img_rois: list[np.ndarray],
                                        (zrois[ii], yrois[ii], xrois[ii]),
                                        init_params=init_params[ii],
                                        fixed_params=fixed_params,
+                                       guess_bounds=guess_bounds,
                                        model=model))
         else:
             # forced to switch to dask form joblib because joblib use pickling to exchange info between process
@@ -676,6 +683,7 @@ def fit_rois(img_rois: list[np.ndarray],
                                                      (zrois[ii], yrois[ii], xrois[ii]),
                                                      init_params=init_params[ii],
                                                      fixed_params=fixed_params,
+                                                     guess_bounds=guess_bounds,
                                                      model=model))
 
             if verbose:
@@ -1340,6 +1348,7 @@ def localize_beads_generic(imgs: np.ndarray,
                            use_gpu_filter: bool = _cupy_available,
                            verbose: bool = True,
                            model: psf.pixelated_psf_model = psf.gaussian3d_psf_model(),
+                           guess_bounds: bool = False,
                            debug: bool = False):
     """
     Given an image consisting of diffraction limited features and background, identify the diffraction limited features
@@ -1373,6 +1382,8 @@ def localize_beads_generic(imgs: np.ndarray,
     @param model: an instance of a class derived from psf.psf_model. The model describes the PSF and how to 'fit' data
     to it. Information e.g. about pixelation can be provided to the model. See psf.psf_model and the derived classes
     for more details
+    @param guess_bounds: whether to use bounds for each ROI guessed from the coordinates. If so, will use
+    bound guesses from model.estimate_bounds().
     @return coords, fit_results, imgs_filtered: coords = (z, y, x)
     """
 
@@ -1541,6 +1552,7 @@ def localize_beads_generic(imgs: np.ndarray,
                                estimator="LSE",
                                fixed_params=fixed_params,
                                model=model,
+                               guess_bounds=guess_bounds,
                                use_gpu=use_gpu_fit,
                                debug=debug,
                                verbose=verbose

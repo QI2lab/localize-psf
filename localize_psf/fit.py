@@ -173,7 +173,7 @@ class coordinate_model():
             sd[sd == 0] = np.nanmean(sd[sd != 0])
             sd[np.isnan(sd)] = np.nanmean(sd[sd != 0])
 
-                # default bounds
+        # default bounds
         lbs_default, ubs_default = self.estimate_bounds(coordinates)
 
         if bounds is None:
