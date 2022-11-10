@@ -582,7 +582,7 @@ def fit_roi(img_roi: np.ndarray,
             init_params: list[float],
             fixed_params: list[bool] = None,
             bounds: tuple[list[float]] = None,
-            model: psf.psf_model = psf.gaussian3d_psf_model(),
+            model: psf.pixelated_psf_model = psf.gaussian3d_psf_model(),
             max_number_iterations: int = None) -> dict:
     """
     Fit a single ROI to a 3D gaussian function.
@@ -609,22 +609,13 @@ def fit_roi(img_roi: np.ndarray,
     if img_roi.ndim != 3:
         raise ValueError(f"img_roi must have 3 dimensions but had {img_roi.ndim:d}")
 
-    # localization functions
-    def model_fn(params): return model.model(coords, params)
-
-    if model.has_jacobian:
-        def jac_fn(p): return model.jacobian(coords, p)
-    else:
-        jac_fn = None
-
-    # do fitting
-    results = fit.fit_model(img_roi,
-                            model_fn,
-                            init_params,
-                            bounds=bounds,
-                            fixed_params=fixed_params,
-                            model_jacobian=jac_fn,
-                            max_nfev=max_number_iterations)
+    results = model.fit(img_roi,
+                        coords,
+                        init_params,
+                        fixed_params=fixed_params,
+                        bounds=bounds,
+                        guess_bounds=False,
+                        max_nfev=max_number_iterations)
 
     return results
 
@@ -638,7 +629,7 @@ def fit_rois(img_rois: list[np.ndarray],
              use_gpu: bool = _gpufit_available,
              debug: bool = False,
              verbose: bool = False,
-             model: psf.psf_model = psf.gaussian3d_psf_model()) -> dict:
+             model: psf.pixelated_psf_model = psf.gaussian3d_psf_model()) -> dict:
     """
     Fit rois to different model functions. Can use either CPU parallelization with dask or GPU parallelization
     using gpufit.
@@ -811,7 +802,7 @@ def plot_gauss_roi(fit_params: list[float],
                    imgs: np.ndarray,
                    coords: tuple[np.ndarray] = None,
                    init_params: np.ndarray = None,
-                   model: psf.psf_model = psf.gaussian3d_psf_model(),
+                   model: psf.pixelated_psf_model = psf.gaussian3d_psf_model(),
                    string: str = None,
                    same_color_scale: bool = True,
                    vmin: float = None,
@@ -1348,7 +1339,7 @@ def localize_beads_generic(imgs: np.ndarray,
                            use_gpu_fit: bool = _gpufit_available,
                            use_gpu_filter: bool = _cupy_available,
                            verbose: bool = True,
-                           model: psf.psf_model = psf.gaussian3d_psf_model(),
+                           model: psf.pixelated_psf_model = psf.gaussian3d_psf_model(),
                            debug: bool = False):
     """
     Given an image consisting of diffraction limited features and background, identify the diffraction limited features
@@ -1772,7 +1763,7 @@ def autofit_psfs(imgs: np.ndarray,
                  psf_roi_size: list[float],
                  dxy: float,
                  dz: float,
-                 summary_model: psf.psf_model = psf.model(wavelength=0.532, ni=1.5, model_name="vectorial"),
+                 summary_model: psf.pixelated_psf_model = psf.gridded_psf_model(wavelength=0.532, ni=1.5, model_name="vectorial"),
                  threshold: float = 100.,
                  min_spot_sep: tuple[float] = (0., 0.),
                  filter_sigma_small: tuple[float] = (1, 0.5, 0.5),
@@ -1781,7 +1772,7 @@ def autofit_psfs(imgs: np.ndarray,
                  amp_bounds: tuple[float] = (0, np.inf),
                  roi_size_loc=(2, 3, 3),
                  dist_boundary_min: tuple[float] = (0., 0.),
-                 localization_model: psf.psf_model = psf.gaussian3d_psf_model(),
+                 localization_model: psf.pixelated_psf_model = psf.gaussian3d_psf_model(),
                  max_number_iterations: int = 100,
                  fit_dist_max_err: tuple[float] = (np.inf, np.inf),
                  num_localizations_to_plot: int = 5,

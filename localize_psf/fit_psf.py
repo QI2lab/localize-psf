@@ -12,7 +12,7 @@ from scipy.integrate import quad
 from scipy.interpolate import interp1d
 from scipy.signal import fftconvolve
 from scipy import fft
-from localize_psf import affine, rois
+from localize_psf import affine, rois, fit
 
 # most of the functions don't require this module, and it does not easily pip install,
 # so don't require it. Probably should enforce some reasonable behavior on the functions
@@ -333,95 +333,46 @@ def sz2na(sigma_z: float,
 
 
 # PSF models
-class psf_model:
-    """
-    TODO: should I include a fit method in this class?
-    """
+class pixelated_psf_model(fit.coordinate_model):
+
     def __init__(self,
                  param_names: list[str],
                  dc: float = None,
                  sf: int = 1,
                  angles: tuple[float] = (0., 0., 0.),
-                 has_jacobian: bool = False):
+                 has_jacobian: bool = False,
+                 ndims: int = 3
+                 ):
         """
-
-        PSF functions, accounting for image pixelation along an arbitrary direction
+        PSF functions, accounting for image pixelation along an arbitrary direction.
 
         vectorized, i.e. can rely on obeying broadcasting rules for x,y,z
+
+        # todo: want any easy way to create pixelated model from a fit.coordinate_model
 
         @param param_names:
         @param dc: pixel size
         @param sf: factor to oversample pixels. The value of each pixel is determined by averaging sf**2 equally spaced
         @param angles: Euler angles describing orientation of pixel to resample
         @param has_jacobian:
+        @param ndims: specifies the number of spatial dimensions for this model. coordinates should always be a
+        tuple with length ndims
         """
 
-
-
-        if not isinstance(param_names, list):
-            raise ValueError("param_names must be a list of strings")
-
-        self.parameter_names = param_names
-        self.nparams = len(param_names)
+        super().__init__(param_names, ndims, has_jacobian=has_jacobian)
 
         if not isinstance(sf, int):
             raise ValueError("sf must be an integer")
         self.sf = sf
 
         if sf != 1 and dc is None:
-            raise Exception("If sf != 1, then a value for dc must be provided")
+            raise Exception("If sf != 1, then the pixel size, dc, must not be None")
         self.dc = dc
 
         self.angles = angles
-        self.has_jacobian = has_jacobian
 
 
-
-    def model(self,
-              coords: tuple[np.ndarray],
-              params: np.ndarray):
-        pass
-
-    def jacobian(self,
-                 coords: tuple[np.ndarray],
-                 params: np.ndarray):
-        pass
-
-    def test_jacobian(self,
-                      coords: tuple[np.ndarray],
-                      params: np.ndarray,
-                      dp: float = 1e-7):
-        # numerical test for jacobian
-        jac_calc = self.jacobian(coords, params)
-        jac_numerical = []
-        for ii in range(self.nparams):
-            dp_now = np.zeros(self.nparams)
-            dp_now[ii] = dp * 0.5
-
-            jac_numerical.append((self.model(coords, params + dp_now) - self.model(coords, params - dp_now)) / dp)
-
-        return jac_numerical, jac_calc
-
-
-    def estimate_parameters(self,
-                            img: np.ndarray,
-                            coords: tuple[np.ndarray]):
-        pass
-
-    def normalize_parameters(self,
-                             params):
-        """
-        Return parameters in a standardized format, when there can be ambiguity. For example,
-        a Gaussian model may include a standard deviation parameter. Since only the square of this quantity enters
-        the model, a fit may return a negative value for standard deviation. In that case, this function
-        would return the absolute value of the standard deviation
-        @param params:
-        @return:
-        """
-        return params
-
-
-class gaussian3d_psf_model(psf_model):
+class gaussian3d_psf_model(pixelated_psf_model):
     """
     Gaussian approximation to PSF.
 
@@ -438,34 +389,38 @@ class gaussian3d_psf_model(psf_model):
     """
     def __init__(self, dc: float = None, sf=1, angles=(0., 0., 0.)):
         super().__init__(["A", "cx", "cy", "cz", "sxy", "sz", "bg"],
-                         dc=dc, sf=sf, angles=angles, has_jacobian=True)
+                         dc=dc, sf=sf, angles=angles, has_jacobian=True, ndims=3)
 
-    def model(self, coords: tuple[np.ndarray], p: np.ndarray):
+    def model(self,
+              coords: tuple[np.ndarray],
+              params: np.ndarray):
         z, y, x, = coords
         # oversample points in pixel
         xx_s, yy_s, zz_s = oversample_pixel(x, y, z, self.dc, sf=self.sf, euler_angles=self.angles)
 
         # calculate psf at oversampled points
-        psf_s = np.exp(-(xx_s - p[1]) ** 2 / 2 / p[4] ** 2
-                       -(yy_s - p[2]) ** 2 / 2 / p[4] ** 2
-                       -(zz_s - p[3]) ** 2 / 2 / p[5] ** 2
+        psf_s = np.exp(-(xx_s - params[1]) ** 2 / 2 / params[4] ** 2
+                       - (yy_s - params[2]) ** 2 / 2 / params[4] ** 2
+                       - (zz_s - params[3]) ** 2 / 2 / params[5] ** 2
                        )
 
         # normalization is such that the predicted peak value of the PSF ignoring binning would be p[0]
-        psf = p[0] * np.mean(psf_s, axis=-1) + p[-1]
+        psf = params[0] * np.mean(psf_s, axis=-1) + params[-1]
 
         return psf
 
-    def jacobian(self, coords: tuple[np.ndarray], p: np.ndarray):
+    def jacobian(self,
+                 coords: tuple[np.ndarray],
+                 params: np.ndarray):
         z, y, x = coords
 
         # oversample points in pixel
         xx_s, yy_s, zz_s = oversample_pixel(x, y, z, self.dc, sf=self.sf, euler_angles=self.angles)
 
         # use sxy * |sxy| instead of sxy**2 to enforce sxy > 0
-        psf_s = np.exp(-(xx_s - p[1]) ** 2 / 2 / p[4]**2
-                       -(yy_s - p[2]) ** 2 / 2 / p[4]**2
-                       -(zz_s - p[3]) ** 2 / 2 / p[5]**2
+        psf_s = np.exp(-(xx_s - params[1]) ** 2 / 2 / params[4] ** 2
+                       - (yy_s - params[2]) ** 2 / 2 / params[4] ** 2
+                       - (zz_s - params[3]) ** 2 / 2 / params[5] ** 2
                        )
 
         # normalization is such that the predicted peak value of the PSF ignoring binning would be p[0]
@@ -474,17 +429,19 @@ class gaussian3d_psf_model(psf_model):
         bcast_shape = (x + y + z).shape
         # [A, cx, cy, cz, sxy, sz, bg]
         jac = [np.mean(psf_s, axis=-1),
-               p[0] * np.mean(2 * (xx_s - p[1]) / 2 / p[4]**2 * psf_s, axis=-1),
-               p[0] * np.mean(2 * (yy_s - p[2]) / 2 / p[4]**2 * psf_s, axis=-1),
-               p[0] * np.mean(2 * (zz_s - p[3]) / 2 / p[5]**2 * psf_s, axis=-1),
-               p[0] * np.mean((2 / p[4] ** 3 * (xx_s - p[1]) ** 2 / 2 +
-                               2 / p[4] ** 3 * (yy_s - p[2]) ** 2 / 2) * psf_s, axis=-1),
-               p[0] * np.mean( 2 / p[5] ** 3 * (zz_s - p[3]) ** 2 / 2 * psf_s, axis=-1),
+               params[0] * np.mean(2 * (xx_s - params[1]) / 2 / params[4] ** 2 * psf_s, axis=-1),
+               params[0] * np.mean(2 * (yy_s - params[2]) / 2 / params[4] ** 2 * psf_s, axis=-1),
+               params[0] * np.mean(2 * (zz_s - params[3]) / 2 / params[5] ** 2 * psf_s, axis=-1),
+               params[0] * np.mean((2 / params[4] ** 3 * (xx_s - params[1]) ** 2 / 2 +
+                                    2 / params[4] ** 3 * (yy_s - params[2]) ** 2 / 2) * psf_s, axis=-1),
+               params[0] * np.mean(2 / params[5] ** 3 * (zz_s - params[3]) ** 2 / 2 * psf_s, axis=-1),
                np.ones(bcast_shape)]
 
         return jac
 
-    def estimate_parameters(self, img: np.ndarray, coords: tuple[np.ndarray]):
+    def estimate_parameters(self,
+                            img: np.ndarray,
+                            coords: tuple[np.ndarray]):
         z, y, x = coords
 
         # subtract smallest value so positive
@@ -505,8 +462,7 @@ class gaussian3d_psf_model(psf_model):
         sz = sigmas[0]
         sxy = np.mean(sigmas[1:])
 
-        guess_params = np.concatenate((#np.array([np.nanmax(img) - np.nanmean(img)]),
-                                       np.array([np.nanmax(img) - np.nanmin(img)]), # may be too large ... but typically have problems with being too small
+        guess_params = np.concatenate((np.array([np.nanmax(img) - np.nanmin(img)]), # may be too large ... but typically have problems with being too small
                                        np.flip(c1s),
                                        np.array([sxy]),
                                        np.array([sz]),
@@ -516,43 +472,51 @@ class gaussian3d_psf_model(psf_model):
 
         return self.normalize_parameters(guess_params)
 
-    def normalize_parameters(self, params):
-        norm_params = np.array([params[0], params[1], params[2], params[3],
-                                np.abs(params[4]), np.abs(params[5]),
-                                params[6]])
+
+    def normalize_parameters(self,
+                             params: np.ndarray):
+        norm_params = np.array(params, copy=True)
+        norm_params[..., 4] = np.abs(norm_params[..., 4])
+        norm_params[..., 5] = np.abs(norm_params[..., 5])
 
         return norm_params
 
-class asymmetric_gaussian3d(psf_model):
+
+class asymmetric_gaussian3d(pixelated_psf_model):
     def __init__(self, dc: float = None, sf=1, angles=(0., 0., 0.)):
         super().__init__(["A", "cx", "cy", "cz", "sx", "sy/sx", "sz", "theta_xy", "bg"],
-                         dc=dc, sf=sf, angles=angles, has_jacobian=True)
+                         dc=dc, sf=sf, angles=angles, has_jacobian=True, ndims=3)
 
-    def model(self, coords: tuple[np.ndarray], p: np.ndarray):
+    def model(self,
+              coords: tuple[np.ndarray],
+              params: np.ndarray):
         z, y, x, = coords
 
         # oversample points in pixel
         xx_s, yy_s, zz_s = oversample_pixel(x, y, z, self.dc, sf=self.sf, euler_angles=self.angles)
 
         # rotated coordinates
-        xx_rot = np.cos(p[7]) * (xx_s - p[1]) - np.sin(p[7]) * (yy_s - p[2])
-        yy_rot = np.cos(p[7]) * (yy_s - p[2]) + np.sin(p[7]) * (xx_s - p[1])
+        xx_rot = np.cos(params[7]) * (xx_s - params[1]) - np.sin(params[7]) * (yy_s - params[2])
+        yy_rot = np.cos(params[7]) * (yy_s - params[2]) + np.sin(params[7]) * (xx_s - params[1])
 
         # calculate psf at oversampled points
-        psf_s = np.exp(-xx_rot ** 2 / 2 / p[4] ** 2
-                       -yy_rot ** 2 / 2 / (p[4] * p[5]) ** 2
-                       -(zz_s - p[3]) ** 2 / 2 / p[6] ** 2)
+        psf_s = np.exp(-xx_rot ** 2 / 2 / params[4] ** 2
+                       - yy_rot ** 2 / 2 / (params[4] * params[5]) ** 2
+                       - (zz_s - params[3]) ** 2 / 2 / params[6] ** 2)
 
         # normalization is such that the predicted peak value of the PSF ignoring binning would be p[0]
-        psf = p[0] * np.mean(psf_s, axis=-1) + p[8]
+        psf = params[0] * np.mean(psf_s, axis=-1) + params[8]
 
         return psf
 
-    def jacobian(self, coords: tuple[np.ndarray], p: np.ndarray):
+    def jacobian(self,
+                 coords: tuple[np.ndarray],
+                 params: np.ndarray):
         z, y, x, = coords
         # oversample points in pixel
         xx_s, yy_s, zz_s = oversample_pixel(x, y, z, self.dc, sf=self.sf, euler_angles=self.angles)
 
+        p = params
         # rotated coordinates
         xx_rot = np.cos(p[7]) * (xx_s - p[1]) - np.sin(p[7]) * (yy_s - p[2])
         yy_rot = np.cos(p[7]) * (yy_s - p[2]) + np.sin(p[7]) * (xx_s - p[1])
@@ -597,7 +561,9 @@ class asymmetric_gaussian3d(psf_model):
 
         return jac
 
-    def estimate_parameters(self, img: np.ndarray, coords: tuple[np.ndarray]):
+    def estimate_parameters(self,
+                            img: np.ndarray,
+                            coords: tuple[np.ndarray]):
         z, y, x = coords
 
         # subtract smallest value so positive
@@ -628,13 +594,15 @@ class asymmetric_gaussian3d(psf_model):
         return self.normalize_parameters(guess_params)
 
     def normalize_parameters(self, params):
-        norm_params = np.array([params[0], params[1], params[2], params[3],
-                                np.abs(params[4]), np.abs(params[5]), np.abs(params[6]),
-                                params[7], params[8]])
+        norm_params = np.array(params, copy=True)
+        norm_params[..., 4] = np.abs(norm_params[..., 4])
+        norm_params[..., 5] = np.abs(norm_params[..., 5])
+        norm_params[..., 6] = np.abs(norm_params[..., 6])
 
         return norm_params
 
-class gaussian2d_psf_model(psf_model):
+
+class gaussian2d_psf_model(pixelated_psf_model):
     """
     Gaussian approximation to PSF. Matches well for equal peak intensity, but some deviations in area.
     See https://doi.org/10.1364/AO.46.001819 for more details.
@@ -644,7 +612,7 @@ class gaussian2d_psf_model(psf_model):
     """
     def __init__(self, dc: float = None, sf=1, angles=(0., 0., 0.)):
         super().__init__(["A", "cx", "cy", "sxy", "bg"],
-                         dc=dc, sf=sf, angles=angles, has_jacobian=True)
+                         dc=dc, sf=sf, angles=angles, has_jacobian=True, ndims=2)
 
         self.gauss3d = gaussian3d_psf_model(dc=dc, sf=sf, angles=angles)
 
@@ -691,10 +659,12 @@ class gaussian2d_psf_model(psf_model):
         return self.normalize_parameters(p2d)
 
     def normalize_parameters(self, params):
-        norm_params = np.array([params[0], params[1], params[2], np.abs(params[3]), params[4]])
+        norm_params = np.array(params, copy=True)
+        norm_params[..., 3] = np.abs(norm_params[..., 3])
         return norm_params
 
-class gaussian_lorentzian_psf_model(psf_model):
+
+class gaussian_lorentzian_psf_model(pixelated_psf_model):
     """
     Gaussian-Lorentzian PSF model. One difficulty with the Gaussian PSF is the weight is not the same in every z-plane,
     as we expect it should be. The Gaussian-Lorentzian form remedies this, but the functional form
@@ -702,7 +672,7 @@ class gaussian_lorentzian_psf_model(psf_model):
     """
     def __init__(self, dc=None, sf=1, angles=(0., 0., 0.)):
         super().__init__(["A", "cx", "cy", "cz", "sxy", "hwhm_z", "bg"],
-                         dc=dc, sf=sf, angles=angles, has_jacobian=True)
+                         dc=dc, sf=sf, angles=angles, has_jacobian=True, ndims=3)
 
     def model(self, coords, p):
         (z, y, x) = coords
@@ -777,11 +747,13 @@ class gaussian_lorentzian_psf_model(psf_model):
         return self.normalize_parameters(guess_params)
 
     def normalize_parameters(self, params):
-        norm_params = np.array([params[0], params[1], params[2], params[3],
-                                np.abs(params[4]), np.abs(params[5]), params[6]])
+        norm_params = np.array(params, copy=True)
+        norm_params[..., 4] = np.abs(norm_params[..., 4])
+        norm_params[..., 5] = np.abs(norm_params[..., 5])
         return norm_params
 
-class born_wolf_psf_model(psf_model):
+
+class born_wolf_psf_model(pixelated_psf_model):
     """
     Born-wolf PSF function evaluated using Airy function if in-focus, and axial function if along the axis.
     Otherwise evaluated using numerical integration.
@@ -805,7 +777,7 @@ class born_wolf_psf_model(psf_model):
             raise NotImplementedError("Only implemented for sf=1")
 
         super().__init__(["A", "cx", "cy", "cz", "na", "bg"],
-                         dc=dc, sf=sf, angles=angles, has_jacobian=False)
+                         dc=dc, sf=sf, angles=angles, has_jacobian=False, ndims=3)
 
     def model(self, coords: tuple[np.ndarray], p: np.ndarray):
         """
@@ -892,10 +864,11 @@ class born_wolf_psf_model(psf_model):
         return params_guess
 
 
-class model(psf_model):
+class gridded_psf_model(pixelated_psf_model):
     """
-    Wrapper function for evaluating different PSF models where only the coordinate grid information is given
-    (i.e. nx and dxy) and not the actual coordinates. The real coordinates can be obtained using get_psf_coords().
+    Wrapper function for evaluating different PSF models which are constrained to be on gridded coordinates. Therefore
+    only grid parameters (i.e. nx and dxy) are provided and not the actual coordinates.
+     The real coordinates can be obtained using get_psf_coords().
 
     This class primarily exists to wrap the psfmodel functions, but
 
@@ -935,9 +908,11 @@ class model(psf_model):
             raise NotImplementedError("not yet implemented for sf=/=1")
 
         super().__init__(["A", "cx", "cy", "cz", "na", "bg"],
-                         dc=dc, sf=sf, angles=angles, has_jacobian=False)
+                         dc=dc, sf=sf, angles=angles, has_jacobian=False, ndims=3)
 
-    def model(self, coords: tuple[np.ndarray], p: np.ndarray, **kwargs):
+    def model(self,
+              coords: tuple[np.ndarray],
+              p: np.ndarray, **kwargs):
         """
         Unlike other model functions this ONLY works if coords are of the same style as obtained from
         get_psf_coords()
@@ -996,7 +971,9 @@ class model(psf_model):
 
         return val
 
-    def estimate_parameters(self, img: np.ndarray, coords: tuple[np.ndarray]):
+    def estimate_parameters(self,
+                            img: np.ndarray,
+                            coords: tuple[np.ndarray]):
 
         gauss3d = gaussian3d_psf_model(dc=self.dc, sf=self.sf, angles=self.angles)
         p3d_gauss = gauss3d.estimate_parameters(img, coords)
