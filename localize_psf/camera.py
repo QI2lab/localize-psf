@@ -1,6 +1,12 @@
 import numpy as np
 from localize_psf import fit_psf
 
+_cupy_available = True
+try:
+    import cupy as cp
+except ImportError:
+    _cupy_available = False
+
 # image simulation
 def adc2photons(img: np.ndarray,
                 gain_map: np.ndarray,
@@ -21,15 +27,16 @@ def adc2photons(img: np.ndarray,
     return photons
 
 
-def simulated_img(ground_truth,
-                  gains,
-                  offsets,
-                  readout_noise_sds,
-                  psf=None,
-                  photon_shot_noise=True,
-                  bin_size=1,
-                  apodization=1,
-                  saturation=None):
+def simulated_img(ground_truth: np.ndarray,
+                  gains: np.ndarray,
+                  offsets: np.ndarray,
+                  readout_noise_sds: np.ndarray,
+                  psf: np.ndarray = None,
+                  photon_shot_noise: bool = True,
+                  bin_size: int = 1,
+                  apodization: np. ndarray = 1,
+                  saturation: int = None,
+                  use_gpu: bool = False):
     """
     Convert ground truth image to simulated camera image including the effects of
     photon shot noise and camera readout noise.
@@ -39,17 +46,24 @@ def simulated_img(ground_truth,
     :param offsets: offsets of each camera pixel (ADU)
     :param readout_noise_sds: standard deviation characterizing readout noise at each camera pixel (ADU)
     :param psf: point-spread function
-    :param bool photon_shot_noise: turn on/off photon shot-noise
-    :param int bin_size: bin pixels before applying Poisson/camera noise. This is to allow defining a pattern on a
+    :param photon_shot_noise: turn on/off photon shot-noise
+    :param bin_size: bin pixels before applying Poisson/camera noise. This is to allow defining a pattern on a
     finer pixel grid.
     :param apodization
     :param saturation:
     :return img, snr:
     """
 
+    if use_gpu:
+        xp = cp
+    else:
+        xp = np
+
+    ground_truth = xp.array(ground_truth)
+
     # optional blur image with PSF
     if psf is not None:
-        img_blurred = fit_psf.blur_img_psf(ground_truth, psf, apodization=apodization).real
+        img_blurred = fit_psf.blur_img_psf(ground_truth, psf, apodization=apodization, use_gpu=use_gpu).real
     else:
         img_blurred = ground_truth
 
@@ -58,20 +72,20 @@ def simulated_img(ground_truth,
 
     # resample image by binning
     bin_size_list = (1,) * (img_blurred.ndim - 2) + (bin_size, bin_size)
-    img_blurred = bin(img_blurred, bin_size_list, mode='sum')
+    img_blurred = bin(img_blurred, bin_size_list, mode='sum', use_gpu=use_gpu)
 
     # add shot noise
     if photon_shot_noise:
-        img_shot_noise = np.random.poisson(img_blurred)
+        img_shot_noise = xp.random.poisson(img_blurred)
     else:
         img_shot_noise = img_blurred
 
     # generate camera noise in ADU
-    readout_noise = np.random.standard_normal(img_shot_noise.shape) * readout_noise_sds
+    readout_noise = xp.random.standard_normal(img_shot_noise.shape) * readout_noise_sds
 
     # convert from photons to ADU
     # todo: is this the appropriate way to convert to integer, or does it introduce some bias?
-    img = np.round(gains * img_shot_noise + readout_noise + offsets).astype(int)
+    img = xp.round(gains * img_shot_noise + readout_noise + offsets).astype(int)
     img[img < 0] = 0
 
     if saturation is not None:
@@ -80,13 +94,14 @@ def simulated_img(ground_truth,
 
     # spatially resolved signal-to-noise ratio
     # get noise from adding in quadrature, assuming photon number large enough ~gaussian
-    snr = (gains * img_blurred) / np.sqrt(readout_noise_sds ** 2 + gains ** 2 * img_blurred)
+    snr = (gains * img_blurred) / xp.sqrt(readout_noise_sds ** 2 + gains ** 2 * img_blurred)
 
     return img, snr
 
 def bin(img: np.ndarray,
         bin_sizes: list[int],
-        mode: str = "sum"):
+        mode: str = "sum",
+        use_gpu: bool = False):
     """
     bin image by combining adjacent pixels
 
@@ -95,6 +110,13 @@ def bin(img: np.ndarray,
     @param mode: "sum" or "mean"
     @return img_binned:
     """
+
+    if use_gpu:
+        xp = cp
+    else:
+        xp = np
+
+    img = xp.array(img)
 
     if len(bin_sizes) != img.ndim:
         raise ValueError("img must have same number of dimensions as bin_sizes")
@@ -109,9 +131,9 @@ def bin(img: np.ndarray,
 
     sum_axes = tuple(range(1, 2*img.ndim, 2))
     if mode == "sum":
-        img_binned = np.sum(img_reshape, axis=sum_axes)
+        img_binned = img_reshape.sum(axis=sum_axes)
     elif mode == "mean":
-        img_binned = np.mean(img_reshape, axis=sum_axes)
+        img_binned = img_reshape.sum(axis=sum_axes)
     else:
         raise ValueError(f"'mode' must be 'sum' or 'mean' but was '{mode:s}'")
 
