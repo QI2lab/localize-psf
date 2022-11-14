@@ -18,32 +18,54 @@ from localize_psf import affine, rois, fit
 # so don't require it. Probably should enforce some reasonable behavior on the functions
 # that require it...
 # https://pypi.org/project/psfmodels/
+_psfmodels_available = True
 try:
     import psfmodels as psfm
-    psfmodels_available = True
 except ImportError:
-    psfmodels_available = False
+    _psfmodels_available = False
+
+_cupy_available = True
+try:
+    import cupy as cp
+except ImportError:
+    _cupy_available = False
 
 
 def blur_img_otf(ground_truth: np.ndarray,
                  otf: np.ndarray,
-                 apodization: np.ndarray = 1):
+                 apodization: np.ndarray = 1,
+                 use_gpu: bool = False):
     """
     Blur image with OTF
 
     :param ground_truth:
     :param otf: optical transfer function evalated at the FFT frequencies (with f=0 near the center of the array)
+    :param apodization:
+    :param use_gpu: If True, perform blurring on GPU. If selected, arrays will be returned on GPU (as CuPy arrays)
+    and it is the callers responsibility to transfer these off the GPU if desired (i.e. to call the CuPy array's
+     get method)
     :return img_blurred:
     """
-    gt_ft = fft.fftshift(fft.fftn(fft.ifftshift(ground_truth)))
-    img_blurred = fft.fftshift(fft.ifftn(fft.ifftshift(gt_ft * otf * apodization)))
+
+    if use_gpu:
+        xp = cp
+    else:
+        xp = np
+
+    ground_truth = xp.array(ground_truth)
+    otf = xp.array(otf)
+    apodization = xp.array(apodization)
+
+    gt_ft = xp.fft.fftshift(xp.fft.fftn(xp.fft.ifftshift(ground_truth)))
+    img_blurred = xp.fft.fftshift(xp.fft.ifftn(xp.fft.ifftshift(gt_ft * otf * apodization)))
 
     return img_blurred
 
 
 def blur_img_psf(ground_truth: np.ndarray,
                  psf: np.ndarray,
-                 apodization: np.ndarray = 1):
+                 apodization: np.ndarray = 1,
+                 use_gpu: bool = False):
     """
     Blur image with PSF
 
@@ -52,14 +74,19 @@ def blur_img_psf(ground_truth: np.ndarray,
     :return blurred_img:
     """
     # todo: allow PSF of different size than image
-    otf, _ = psf2otf(psf)
+    otf, _ = psf2otf(psf, use_gpu=use_gpu)
+    img_blurred = blur_img_otf(ground_truth,
+                               otf,
+                               apodization=apodization,
+                               use_gpu=use_gpu)
 
-    return blur_img_otf(ground_truth, otf, apodization)
+    return img_blurred
 
 
 # tools for converting between different otf/psf representations
 def otf2psf(otf: np.ndarray,
-            dfs: list[float] = 1):
+            dfs: list[float] = 1,
+            use_gpu: bool = False):
     """
     Compute the point-spread function from the optical transfer function
     :param otf: otf, as a 1D, 2D or 3D array. Assumes that f=0 is near the center of the array, and frequency are
@@ -75,17 +102,24 @@ def otf2psf(otf: np.ndarray,
     if len(dfs) != otf.ndim:
         raise ValueError("dfs length must be otf.ndim")
 
+    if use_gpu:
+        xp = cp
+    else:
+        xp = np
+
     shape = otf.shape
     drs = np.array([1 / (df * n) for df, n in zip(shape, dfs)])
     coords = [fft.fftshift(fft.fftfreq(n, 1 / (dr * n))) for n, dr in zip(shape, drs)]
 
-    psf = fft.fftshift(fft.ifftn(fft.ifftshift(otf))).real
+    otf = xp.array(otf)
+    psf = xp.fft.fftshift(xp.fft.ifftn(xp.fft.ifftshift(otf))).real
 
     return psf, coords
 
 
 def psf2otf(psf: np.ndarray,
-            drs: list[float] = 1):
+            drs: list[float] = 1,
+            use_gpu: bool = False):
     """
     Compute the optical transfer function from the point-spread function
 
@@ -102,10 +136,16 @@ def psf2otf(psf: np.ndarray,
     if len(drs) != psf.ndim:
         raise ValueError("drs length must be psf.ndim")
 
+    if use_gpu:
+        xp = cp
+    else:
+        xp = np
+
     shape = psf.shape
     coords = [fft.fftshift(fft.fftfreq(n, dr)) for n, dr in zip(shape, drs)]
 
-    otf = fft.fftshift(fft.fftn(fft.ifftshift(psf)))
+    psf = xp.array(psf)
+    otf = xp.fft.fftshift(xp.fft.fftn(xp.fft.ifftshift(psf)))
 
     return otf, coords
 
@@ -789,7 +829,7 @@ class gridded_psf_model(pixelated_psf_model):
         if model_name not in allowed_models:
             raise ValueError(f"model={model_name:s} was not an allowed value. Allowed values are {allowed_models}")
 
-        if not psfmodels_available and (model_name == "vectorial" or model_name == "gibson-lanni"):
+        if not _psfmodels_available and (model_name == "vectorial" or model_name == "gibson-lanni"):
             raise NotImplementedError(f"model={model_name:s} selected but psfmodels is not installed")
         self.model_name = model_name
 
