@@ -783,9 +783,10 @@ class gauss3d_rotated(coordinate_model):
     def estimate_bounds(self,
                         coordinates: tuple[np.ndarray]):
         z, y, x = coordinates
+        diff_max = np.max([x.max() - x.min(), y.max() - y.min(), z.max() - z.min()])
 
         lbs = (-np.inf, x.min(), y.min(), z.min(), 0, 0, 0, -np.inf, -np.inf, -np.inf, -np.inf)
-        ubs = (np.inf, x.max(), y.max(), z.max(), np.inf, np.inf, np.inf, np.inf, np.inf, np.inf, np.inf)
+        ubs = (np.inf, x.max(), y.max(), z.max(), diff_max, diff_max, diff_max, np.inf, np.inf, np.inf, np.inf)
         return lbs, ubs
 
 
