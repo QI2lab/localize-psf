@@ -4,6 +4,7 @@ Tools for working with point-spread functions and optical transfer functions.
 Functions for estimating PSF's from images of fluorescent beads (z-stacks or single planes). Useful for generating
 experimental PSF's from the average of many beads and fitting 2D and 3D PSF models to beads.
 """
+from typing import Union, Optional
 import warnings
 import numpy as np
 from scipy.ndimage import shift
@@ -28,31 +29,29 @@ _cupy_available = True
 try:
     import cupy as cp
 except ImportError:
+    cp = np
     _cupy_available = False
 
+array = Union[np.ndarray, cp.ndarray]
 
-def blur_img_otf(ground_truth: np.ndarray,
-                 otf: np.ndarray,
-                 apodization: np.ndarray = 1,
-                 use_gpu: bool = False):
+
+def blur_img_otf(ground_truth: array,
+                 otf: array,
+                 apodization: array = 1) -> array:
     """
     Blur image with OTF
 
-    :param ground_truth:
+    :param ground_truth: NumPy or CuPy array. If CuPy array operations will be performed on the GPU
     :param otf: optical transfer function evalated at the FFT frequencies (with f=0 near the center of the array)
     :param apodization:
-    :param use_gpu: If True, perform blurring on GPU. If selected, arrays will be returned on GPU (as CuPy arrays)
-    and it is the callers responsibility to transfer these off the GPU if desired (i.e. to call the CuPy array's
-     get method)
     :return img_blurred:
     """
 
-    if use_gpu:
+    if isinstance(ground_truth, cp.ndarray):
         xp = cp
     else:
         xp = np
 
-    ground_truth = xp.array(ground_truth)
     otf = xp.array(otf)
     apodization = xp.array(apodization)
 
@@ -62,10 +61,9 @@ def blur_img_otf(ground_truth: np.ndarray,
     return img_blurred
 
 
-def blur_img_psf(ground_truth: np.ndarray,
-                 psf: np.ndarray,
-                 apodization: np.ndarray = 1,
-                 use_gpu: bool = False):
+def blur_img_psf(ground_truth: array,
+                 psf: array,
+                 apodization: array = 1) -> array:
     """
     Blur image with PSF
 
@@ -73,20 +71,17 @@ def blur_img_psf(ground_truth: np.ndarray,
     :param psf: point-spread function. this array should be centered at ny//2, nx//2
     :return blurred_img:
     """
+
     # todo: allow PSF of different size than image
-    otf, _ = psf2otf(psf, use_gpu=use_gpu)
-    img_blurred = blur_img_otf(ground_truth,
-                               otf,
-                               apodization=apodization,
-                               use_gpu=use_gpu)
+    otf, _ = psf2otf(psf)
+    img_blurred = blur_img_otf(ground_truth, otf, apodization=apodization)
 
     return img_blurred
 
 
 # tools for converting between different otf/psf representations
-def otf2psf(otf: np.ndarray,
-            dfs: list[float] = 1,
-            use_gpu: bool = False):
+def otf2psf(otf: array,
+            dfs: list[float] = 1) -> (array, list[array]):
     """
     Compute the point-spread function from the optical transfer function
     :param otf: otf, as a 1D, 2D or 3D array. Assumes that f=0 is near the center of the array, and frequency are
@@ -102,24 +97,22 @@ def otf2psf(otf: np.ndarray,
     if len(dfs) != otf.ndim:
         raise ValueError("dfs length must be otf.ndim")
 
-    if use_gpu:
+    if isinstance(otf, cp.ndarray):
         xp = cp
     else:
         xp = np
 
     shape = otf.shape
     drs = np.array([1 / (df * n) for df, n in zip(shape, dfs)])
-    coords = [fft.fftshift(fft.fftfreq(n, 1 / (dr * n))) for n, dr in zip(shape, drs)]
+    coords = [xp.fft.fftshift(xp.fft.fftfreq(n, 1 / (dr * n))) for n, dr in zip(shape, drs)]
 
-    otf = xp.array(otf)
     psf = xp.fft.fftshift(xp.fft.ifftn(xp.fft.ifftshift(otf))).real
 
     return psf, coords
 
 
-def psf2otf(psf: np.ndarray,
-            drs: list[float] = 1,
-            use_gpu: bool = False):
+def psf2otf(psf: array,
+            drs: list[float] = 1) -> (array, list[array]):
     """
     Compute the optical transfer function from the point-spread function
 
@@ -136,15 +129,14 @@ def psf2otf(psf: np.ndarray,
     if len(drs) != psf.ndim:
         raise ValueError("drs length must be psf.ndim")
 
-    if use_gpu:
+    if isinstance(psf, cp.ndarray):
         xp = cp
     else:
         xp = np
 
     shape = psf.shape
-    coords = [fft.fftshift(fft.fftfreq(n, dr)) for n, dr in zip(shape, drs)]
+    coords = [xp.fft.fftshift(xp.fft.fftfreq(n, dr)) for n, dr in zip(shape, drs)]
 
-    psf = xp.array(psf)
     otf = xp.fft.fftshift(xp.fft.fftn(xp.fft.ifftshift(psf)))
 
     return otf, coords
@@ -183,7 +175,7 @@ def symm_fn_1d_to_2d(arr,
     return arr_out, fxs, fys
 
 
-def atf2otf(atf,
+def atf2otf(atf: np.ndarray,
             dx: float = None,
             wavelength: float = 0.5,
             ni: float = 1.5,
@@ -229,10 +221,10 @@ def atf2otf(atf,
 
 
 # circular aperture functions
-def circ_aperture_atf(fx,
-                      fy,
+def circ_aperture_atf(fx: array,
+                      fy: array,
                       na: float,
-                      wavelength: float):
+                      wavelength: float) -> array:
     """
     Amplitude transfer function for circular aperture
 
@@ -242,41 +234,53 @@ def circ_aperture_atf(fx,
     @param wavelength:
     @return atf:
     """
+
+    if isinstance(fx, cp.ndarray):
+        xp = cp
+    else:
+        xp = np
+    fy = xp.ndarray(fy)
+
     fmax = 0.5 / (0.5 * wavelength / na)
 
     # ff = np.sqrt(fx[None, :]**2 + fy[:, None]**2)
-    ff = np.sqrt(fx**2 + fy**2)
+    ff = xp.sqrt(fx**2 + fy**2)
 
-    atf = np.ones(ff.shape)
+    atf = xp.ones(ff.shape)
     atf[ff > fmax] = 0
 
     return atf
 
 
-def circ_aperture_otf(fx,
-                      fy,
+def circ_aperture_otf(fx: array,
+                      fy: array,
                       na: float,
-                      wavelength: float):
+                      wavelength: float) -> array:
     """
     OTF for roi_size circular aperture
 
-    :param fx:
+    :param fx: numpy or cupy ndarray
     :param fy:
     :param na: numerical aperture
     :param wavelength: in um
-    :return otf:
+    :return otf: numpy or cupy ndarray
     """
     # maximum frequency imaging system can pass
     fmax = 1 / (0.5 * wavelength / na)
 
+    if isinstance(fx, cp.ndarray):
+        xp = cp
+    else:
+        xp = np
+
     # freq data
-    fx = np.asarray(fx)
-    fy = np.asarray(fy)
-    ff = np.asarray(np.sqrt(fx**2 + fy**2))
+    fx = xp.array(fx)
+    fy = xp.array(fy)
+    ff = xp.sqrt(fx**2 + fy**2)
 
     with np.errstate(invalid='ignore'):
         # compute otf
-        otf = np.asarray(2 / np.pi * (np.arccos(ff / fmax) - (ff / fmax) * np.sqrt(1 - (ff / fmax)**2)))
+        otf = 2 / np.pi * (xp.arccos(ff / fmax) - (ff / fmax) * xp.sqrt(1 - (ff / fmax)**2))
         otf[ff > fmax] = 0
 
     return otf
