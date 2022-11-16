@@ -1,16 +1,24 @@
+"""
+Tools for working with or simulating camera data
+"""
 import numpy as np
 from localize_psf import fit_psf
+from typing import Optional, Union
 
 _cupy_available = True
 try:
     import cupy as cp
 except ImportError:
+    cp = np
     _cupy_available = False
 
-# image simulation
-def adc2photons(img: np.ndarray,
-                gain_map: np.ndarray,
-                background_map: np.ndarray):
+array = Union[np.ndarray, cp.ndarray]
+
+
+def adc2photons(img: array,
+                gain_map: array,
+                background_map: array,
+                precision: float = 0.) -> array:
     """
     Convert ADC counts to photon number
     :param img:
@@ -23,38 +31,38 @@ def adc2photons(img: np.ndarray,
     photons = (img.astype(float) - background_map) / gain_map
 
     # set anything less than zero to machine precision
-    photons[photons <= 0] = np.finfo(float).eps
+    photons[photons <= precision] = 0
+
     return photons
 
 
-def simulated_img(ground_truth: np.ndarray,
-                  gains: np.ndarray,
-                  offsets: np.ndarray,
-                  readout_noise_sds: np.ndarray,
-                  psf: np.ndarray = None,
+def simulated_img(ground_truth: array,
+                  gains: array,
+                  offsets: array,
+                  readout_noise_sds: array,
+                  psf: Optional[array] = None,
                   photon_shot_noise: bool = True,
                   bin_size: int = 1,
-                  apodization: np. ndarray = 1,
-                  saturation: int = None,
-                  use_gpu: bool = False):
+                  apodization: array = 1,
+                  saturation: Optional[int] = None) -> (array, array):
     """
     Convert ground truth image to simulated camera image including the effects of
-    photon shot noise and camera readout noise.
+    photon shot noise, camera readout noise, and saturation
 
     :param ground_truth: Ground truth mean photon counts (before binning)
     :param gains: gains at each camera pixel (ADU/e)
     :param offsets: offsets of each camera pixel (ADU)
     :param readout_noise_sds: standard deviation characterizing readout noise at each camera pixel (ADU)
-    :param psf: point-spread function
+    :param psf: point-spread function. If not provided, do not blur
     :param photon_shot_noise: turn on/off photon shot-noise
     :param bin_size: bin pixels before applying Poisson/camera noise. This is to allow defining a pattern on a
     finer pixel grid.
-    :param apodization
-    :param saturation:
+    :param apodization: apodization used during PSF blurring
+    :param saturation: set any values in final image larger than this value to this value
     :return img, snr:
     """
 
-    if use_gpu:
+    if isinstance(ground_truth, cp.ndarray):
         xp = cp
     else:
         xp = np
@@ -63,7 +71,7 @@ def simulated_img(ground_truth: np.ndarray,
 
     # optional blur image with PSF
     if psf is not None:
-        img_blurred = fit_psf.blur_img_psf(ground_truth, psf, apodization=apodization, use_gpu=use_gpu).real
+        img_blurred = fit_psf.blur_img_psf(ground_truth, psf, apodization=apodization).real
     else:
         img_blurred = ground_truth
 
@@ -72,7 +80,7 @@ def simulated_img(ground_truth: np.ndarray,
 
     # resample image by binning
     bin_size_list = (1,) * (img_blurred.ndim - 2) + (bin_size, bin_size)
-    img_blurred = bin(img_blurred, bin_size_list, mode='sum', use_gpu=use_gpu)
+    img_blurred = bin(img_blurred, bin_size_list, mode='sum')
 
     # add shot noise
     if photon_shot_noise:
@@ -91,27 +99,25 @@ def simulated_img(ground_truth: np.ndarray,
     if saturation is not None:
         img[img > saturation] = saturation
 
-
     # spatially resolved signal-to-noise ratio
     # get noise from adding in quadrature, assuming photon number large enough ~gaussian
     snr = (gains * img_blurred) / xp.sqrt(readout_noise_sds ** 2 + gains ** 2 * img_blurred)
 
     return img, snr
 
-def bin(img: np.ndarray,
+def bin(img: array,
         bin_sizes: list[int],
-        mode: str = "sum",
-        use_gpu: bool = False):
+        mode: str = "sum") -> array:
     """
-    bin image by combining adjacent pixels
+    Bin image by summing or averaging adjacent pixels
 
-    @param img: img of size n0 x n1 x ... x n_{m-1}
+    @param img: NumPy or CuPy array of size n0 x n1 x ... x n_{m-1}
     @param bin_sizes: list [b0, ..., b_{m-1}]
     @param mode: "sum" or "mean"
     @return img_binned:
     """
 
-    if use_gpu:
+    if isinstance(img, cp.ndarray):
         xp = cp
     else:
         xp = np
