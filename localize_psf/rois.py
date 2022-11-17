@@ -1,6 +1,7 @@
 """
 Tools for dealing with regions of interest (ROI's)
 """
+from typing import Optional
 import numpy as np
 
 
@@ -43,8 +44,8 @@ def global2roi(coords_full: list[float],
 
 def get_centered_roi(centers: list,
                      sizes: list[int],
-                     min_vals: list[int] = None,
-                     max_vals: list[int] = None):
+                     min_vals: Optional[list[int]] = None,
+                     max_vals: Optional[list[int]] = None):
     """
     Get end points of an roi centered about centers (as close as possible) with length sizes.
     If the ROI size is odd, the ROI will be perfectly centered. Otherwise, the centering will
@@ -96,7 +97,7 @@ def get_centered_roi(centers: list,
 
 def cut_roi(roi: list[int],
             arr: np.ndarray,
-            axes: tuple[int] = None,
+            axes: Optional[tuple[int]] = None,
             allow_broadcastable_arrays: bool = True) -> np.ndarray:
     """
     Return region of interest from an array

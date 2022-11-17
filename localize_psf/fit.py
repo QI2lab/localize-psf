@@ -7,6 +7,7 @@ arbitrary rotations.
 All functions rely on fit_least_squares() which is a wrapper for scipy.optimize.least_squares()
 which additionally handles fixing parameters and calculating standard uncertainties.
 """
+from typing import Optional
 import numpy as np
 from scipy.optimize import least_squares
 from localize_psf import affine
@@ -122,10 +123,10 @@ class coordinate_model():
     def fit(self,
             data: np.ndarray,
             coordinates: tuple[np.ndarray],
-            init_params: list[float] = None,
-            fixed_params: list[bool] = None,
-            sd: np.ndarray = None,
-            bounds: tuple[tuple[float]] = None,
+            init_params: Optional[list[float]] = None,
+            fixed_params: Optional[list[bool]] = None,
+            sd: Optional[np.ndarray] = None,
+            bounds: Optional[tuple[tuple[float]]] = None,
             use_jacobian: bool = True,
             guess_bounds: bool = False,
             **kwargs) -> dict:
@@ -875,10 +876,10 @@ class line_piecewisem(coordinate_model):
 def fit_model(img: np.ndarray,
               model_fn,
               init_params: list[float],
-              fixed_params: list[bool] = None,
-              sd: np.ndarray = None,
-              bounds: tuple[tuple[float]] = None,
-              model_jacobian = None,
+              fixed_params: Optional[list[bool]] = None,
+              sd: Optional[np.ndarray] = None,
+              bounds: Optional[tuple[tuple[float]]] = None,
+              model_jacobian: Optional[callable] = None,
               **kwargs) -> dict:
     """
     Fit 2D model function to an image. Any Nan values in the image will be ignored. This function is a wrapper for
@@ -936,9 +937,9 @@ def fit_model(img: np.ndarray,
 
 def fit_least_squares(model_fn,
                       init_params: list[float],
-                      fixed_params: list[bool] = None,
-                      bounds: tuple[tuple[float]] = None,
-                      model_jacobian = None,
+                      fixed_params: Optional[list[bool]] = None,
+                      bounds: Optional[tuple[tuple[float]]] = None,
+                      model_jacobian: Optional[callable] = None,
                       **kwargs) -> dict:
     """
     Wrapper for non-linear least squares fit function scipy.optimize.least_squares which handles fixing parameters
@@ -1081,8 +1082,8 @@ def fit_least_squares(model_fn,
 
 def get_moments(img: np.ndarray,
                 order: int = 1,
-                coords: tuple[np.ndarray] = None,
-                dims: list[int] = None) -> list[float]:
+                coords: Optional[tuple[np.ndarray]] = None,
+                dims: Optional[list[int]] = None) -> list[float]:
     """
     Calculate moments of distribution of arbitrary size
 

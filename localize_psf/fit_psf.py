@@ -176,12 +176,12 @@ def symm_fn_1d_to_2d(arr,
 
 
 def atf2otf(atf: np.ndarray,
-            dx: float = None,
+            dx: Optional[float] = None,
             wavelength: float = 0.5,
             ni: float = 1.5,
             defocus_um: float = 0,
-            fx=None,
-            fy=None):
+            fx: Optional[np.ndarray] = None,
+            fy: Optional[np.ndarray] = None):
     """
     Get incoherent transfer function (OTF) from autocorrelation of coherent transfer function (ATF)
 
@@ -381,7 +381,7 @@ class pixelated_psf_model(fit.coordinate_model):
 
     def __init__(self,
                  param_names: list[str],
-                 dc: float = None,
+                 dc: Optional[float] = None,
                  sf: int = 1,
                  angles: tuple[float] = (0., 0., 0.),
                  has_jacobian: bool = False,
@@ -422,7 +422,7 @@ class from_coordinate_model(pixelated_psf_model):
     """
     def __init__(self,
                  model: fit.coordinate_model,
-                 dc: float = None,
+                 dc: Optional[float] = None,
                  sf: int = 1,
                  angles: tuple[float] = (0., 0., 0.)
                  ):
@@ -507,7 +507,7 @@ class gaussian3d_psf_model(from_coordinate_model):
     sigma_z = np.sqrt(6) / np.pi * ni * wavelength / NA ** 2
     """
     def __init__(self,
-                 dc: float = None,
+                 dc: Optional[float] = None,
                  sf: int = 1,
                  angles: tuple[float] = (0., 0., 0.)
                  ):
@@ -517,7 +517,7 @@ class gaussian3d_psf_model(from_coordinate_model):
 
 class asymmetric_gaussian3d(from_coordinate_model):
     def __init__(self,
-                 dc: float = None,
+                 dc: Optional[float] = None,
                  sf: int = 1,
                  angles: tuple[float] = (0., 0., 0.)
                  ):
@@ -527,7 +527,7 @@ class asymmetric_gaussian3d(from_coordinate_model):
 
 class gaussian3d_rotated(from_coordinate_model):
     def __init__(self,
-                 dc: float = None,
+                 dc: Optional[float] = None,
                  sf: int = 1,
                  angles: tuple[float] = (0., 0., 0.)
                  ):
@@ -543,7 +543,10 @@ class gaussian2d_psf_model(pixelated_psf_model):
     This comes from equating the FWHM of the Gaussian and the airy function.
     FWHM = 2 * sqrt{2*log(2)} * sigma ~ 0.51 * wavelength / NA
     """
-    def __init__(self, dc: float = None, sf=1, angles=(0., 0., 0.)):
+    def __init__(self,
+                 dc: Optional[float] = None,
+                 sf: int = 1,
+                 angles: tuple[float] = (0., 0., 0.)):
         super().__init__(["A", "cx", "cy", "sxy", "bg"],
                          dc=dc, sf=sf, angles=angles, has_jacobian=True, ndims=2)
 
@@ -691,7 +694,12 @@ class born_wolf_psf_model(pixelated_psf_model):
     Born-wolf PSF function evaluated using Airy function if in-focus, and axial function if along the axis.
     Otherwise evaluated using numerical integration.
     """
-    def __init__(self, wavelength: float, ni: float, dc: float = None, sf=1, angles=(0., 0., 0.)):
+    def __init__(self,
+                 wavelength: float,
+                 ni: float,
+                 dc: Optional[float] = None,
+                 sf: int = 1,
+                 angles: tuple[float] = (0., 0., 0.)):
         """
 
         @param wavelength:
@@ -815,7 +823,13 @@ class gridded_psf_model(pixelated_psf_model):
     For 'gaussian', it wraps the gaussian3d_pixelated_psf() function. More details about the relationship between
     the Gaussian sigma and the numerical aperture can be found here: https://doi.org/10.1364/AO.46.001819
     """
-    def __init__(self, wavelength, ni, model_name="vectorial", dc: float = None, sf=1, angles=(0., 0., 0.)):
+    def __init__(self,
+                 wavelength: float,
+                 ni: float,
+                 model_name: str = "vectorial",
+                 dc: Optional[float] = None,
+                 sf: int = 1,
+                 angles: tuple[float] = (0., 0., 0.)):
         """
 
         @param wavelength:

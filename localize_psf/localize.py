@@ -5,6 +5,7 @@ The fitting code can be run on a CPU using multiprocessing with joblib, or on a 
 to GPUfit which can be found at https://github.com/QI2lab/Gpufit. To use the GPU code, you must download and
 compile this repository and install the python bindings.
 """
+from typing import Union, Optional
 from pathlib import Path
 import time
 import warnings
@@ -210,7 +211,7 @@ def get_max_filter_footprint(min_separations: list[float],
 def find_peak_candidates(imgs: np.ndarray,
                          footprint: np.ndarray,
                          threshold: float,
-                         mask: np.ndarray = None,
+                         mask: Optional[np.ndarray] = None,
                          use_gpu_filter: bool = _cupy_available):
     """
     Find peak candidates in image using maximum filter
@@ -249,7 +250,7 @@ def filter_nearby_peaks(centers: np.ndarray,
                         min_xy_dist: float,
                         min_z_dist: float,
                         mode: str = "keep-one",
-                        weights: np.ndarray = None,
+                        weights: Optional[np.ndarray] = None,
                         nmax: int = 10000) -> (np.ndarray, np.ndarray):
     """
     Combine multiple center positions into a reduced set, where assume all centers separated by no more than
@@ -380,7 +381,6 @@ def filter_nearby_peaks(centers: np.ndarray,
     return centers_unique, inds
 
 
-# localize using radial symmetry
 def localize2d(img: np.ndarray,
                mode: str = "radial-symmetry"):
     """
@@ -576,15 +576,14 @@ def localize3d(img: np.ndarray,
     return xc, yc, zc
 
 
-# localize using Gaussian fit
 def fit_roi(img_roi: np.ndarray,
             coords: tuple[np.ndarray],
             init_params: list[float],
-            fixed_params: list[bool] = None,
-            bounds: tuple[list[float]] = None,
+            fixed_params: Optional[list[bool]] = None,
+            bounds: Optional[tuple[list[float]]] = None,
             guess_bounds: bool = False,
             model: psf.pixelated_psf_model = psf.gaussian3d_psf_model(),
-            max_number_iterations: int = None) -> dict:
+            max_number_iterations: Optional[int] = None) -> dict:
     """
     Fit a single ROI to a 3D gaussian function.
 
@@ -626,7 +625,7 @@ def fit_rois(img_rois: list[np.ndarray],
              init_params: np.ndarray,
              max_number_iterations: int = 100,
              estimator: str = "LSE",
-             fixed_params: np.ndarray = None,
+             fixed_params: Optional[np.ndarray] = None,
              guess_bounds: bool = False,
              use_gpu: bool = _gpufit_available,
              debug: bool = False,
@@ -808,18 +807,18 @@ def fit_rois(img_rois: list[np.ndarray],
 def plot_gauss_roi(fit_params: list[float],
                    roi: list[int],
                    imgs: np.ndarray,
-                   coords: tuple[np.ndarray] = None,
-                   init_params: np.ndarray = None,
+                   coords: Optional[tuple[np.ndarray]] = None,
+                   init_params: Optional[np.ndarray] = None,
                    model: psf.pixelated_psf_model = psf.gaussian3d_psf_model(),
-                   string: str = None,
+                   string: Optional[str] = None,
                    same_color_scale: bool = True,
-                   vmin: float = None,
-                   vmax: float = None,
+                   vmin: Optional[float] = None,
+                   vmax: Optional[float] = None,
                    cmap="bone",
                    gamma: float = 1.,
                    figsize: tuple[float] = (16, 8),
                    prefix: str = "",
-                   save_dir=None):
+                   save_dir: Optional[str] = None):
     """
     Plot results obtained from fitting functions fit_gauss_roi() or fit_gauss_rois()
     :param fit_params:
@@ -1340,8 +1339,8 @@ def localize_beads_generic(imgs: np.ndarray,
                            filter_sigma_small: tuple[float] = (1, 0.1, 0.1),
                            filter_sigma_large: tuple[float] = (10, 5, 5),
                            min_spot_sep: tuple[float] = (0, 0),
-                           filter = None,
-                           mask = None,
+                           filter: Optional[filter] = None,
+                           mask: Optional[np.ndarray] = None,
                            max_nfit_iterations: int = 100,
                            fit_filtered_images: bool = False,
                            use_gpu_fit: bool = _gpufit_available,
@@ -1655,12 +1654,12 @@ def localize_beads(imgs: np.ndarray,
 def plot_bead_locations(imgs: np.ndarray,
                         center_lists: list[np.ndarray],
                         title: str = "",
-                        color_lists: list[str] = None,
-                        color_limits: list[list[float]] = None,
-                        legend_labels: list[str] = None,
-                        weights: list[np.ndarray] = None,
-                        cbar_labels: list[str] = None,
-                        coords: list = None,
+                        color_lists: Optional[list[str]] = None,
+                        color_limits: Optional[list[list[float]]] = None,
+                        legend_labels: Optional[list[str]] = None,
+                        weights: Optional[list[np.ndarray]] = None,
+                        cbar_labels: Optional[list[str]] = None,
+                        coords: Optional[list] = None,
                         vlims_percentile: tuple[float] = (0.01, 99.99),
                         gamma: float = 1,
                         **kwargs):
@@ -1796,7 +1795,7 @@ def autofit_psfs(imgs: np.ndarray,
                  use_gpu_fit: bool = False,
                  verbose: bool = False,
                  gamma: float = 0.5,
-                 save_dir: str = None,
+                 save_dir: Optional[str] = None,
                  figsize=(18, 10),
                  **kwargs):
     """
