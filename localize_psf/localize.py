@@ -64,7 +64,7 @@ def get_coords(sizes: list[int],
 
     if broadcast:
         # this produces copies of the arrays instead of views
-        coords = [np.array(c, copy=True) for c in coords]
+        coords = [np.array(c, copy=True) for c in np.broadcast_arrays(*coords)]
 
     return coords
 
@@ -911,7 +911,7 @@ def plot_gauss_roi(fit_params: list[float],
     im = ax.imshow(np.nanmax(img_roi, axis=0).transpose(), origin="lower", extent=extent_yx, cmap=cmap,
                    norm=PowerNorm(vmin=vmin, vmax=vmax, gamma=gamma))
 
-    ax.plot(center_fit[1], center_fit[2], 'mx')
+    ax.plot(center_fit[1], center_fit[2], 'm+')
     if init_params is not None:
         ax.plot(center_guess[1], center_guess[2], 'gx')
 
@@ -927,7 +927,7 @@ def plot_gauss_roi(fit_params: list[float],
 
     ax.imshow(np.nanmax(img_roi, axis=1).transpose(), origin="lower", extent=extent_zx, cmap=cmap,
               norm=PowerNorm(vmin=vmin, vmax=vmax, gamma=gamma))
-    ax.plot(center_fit[0], center_fit[2], 'mx')
+    ax.plot(center_fit[0], center_fit[2], 'm+')
     if init_params is not None:
         ax.plot(center_guess[0], center_guess[2], 'gx')
     ax.set_ylim(extent_zx[2:4])
@@ -945,7 +945,7 @@ def plot_gauss_roi(fit_params: list[float],
         ax.imshow(np.nanmax(img_roi, axis=2),  origin="lower", extent=extent_yz, cmap="bone",
                   norm=PowerNorm(vmin=vmin, vmax=vmax, gamma=gamma))
 
-    ax.plot(center_fit[1], center_fit[0], 'mx')
+    ax.plot(center_fit[1], center_fit[0], 'm+')
     if init_params is not None:
         ax.plot(center_guess[1], center_guess[0], 'gx')
 
@@ -969,7 +969,7 @@ def plot_gauss_roi(fit_params: list[float],
               x_roi[0, 0, 0] - 0.5 * dc, x_roi[0, 0, -1] + 0.5 * dc]
     ax.imshow(np.nanmax(img_fit, axis=0).transpose(), origin="lower", extent=extent, cmap=cmap,
               norm=PowerNorm(vmin=vmin_fit, vmax=vmax_fit, gamma=gamma))
-    ax.plot(center_fit[1], center_fit[2], 'mx')
+    ax.plot(center_fit[1], center_fit[2], 'm+')
     if init_params is not None:
         ax.plot(center_guess[1], center_guess[2], 'gx')
 
@@ -986,7 +986,7 @@ def plot_gauss_roi(fit_params: list[float],
               x_roi[0, 0, 0] - 0.5 * dc, x_roi[0, 0, -1] + 0.5 * dc]
     ax.imshow(np.nanmax(img_fit, axis=1).transpose(), origin="lower", extent=extent, cmap=cmap,
               norm=PowerNorm(vmin=vmin_fit, vmax=vmax_fit, gamma=gamma))
-    ax.plot(center_fit[0], center_fit[2], 'mx')
+    ax.plot(center_fit[0], center_fit[2], 'm+')
     if init_params is not None:
         ax.plot(center_guess[0], center_guess[2], 'gx')
     ax.set_ylim(extent[2:4])
@@ -1002,7 +1002,7 @@ def plot_gauss_roi(fit_params: list[float],
               z_roi[0, 0, 0] - 0.5 * dz, z_roi[-1, 0, 0] + 0.5 * dz]
     ax.imshow(np.nanmax(img_fit, axis=2), origin="lower", extent=extent, cmap=cmap,
               norm=PowerNorm(vmin=vmin_fit, vmax=vmax_fit, gamma=gamma))
-    ax.plot(center_fit[1], center_fit[0], 'mx')
+    ax.plot(center_fit[1], center_fit[0], 'm+')
     if init_params is not None:
         ax.plot(center_guess[1], center_guess[0], 'gx')
     ax.set_ylim(extent[2:4])
@@ -1541,8 +1541,20 @@ def localize_beads_generic(imgs: np.ndarray,
         # if 2D, don't want to fit cz or sz
         if data_is_2d:
             # todo: how to make this model independent?
+
+            if model.parameter_names[5] != "sz":
+                raise ValueError(f"Data was 2D, but model {str(model):s} is not supported because"
+                                 f" parameter 5 is not 'sz'.")
+            # fix sigma-z
             fixed_params[5] = True
+            init_params[:, 5] = 1.
+
+            if model.parameter_names[3] != "cz":
+                raise ValueError(f"Data was 2D, but model {str(model):s} is not supported because"
+                                 f" parameter 3 is not 'cz'.")
+            # fix cz
             fixed_params[3] = True
+            init_params[:, 3] = z[0, 0, 0]
 
         fit_results = fit_rois(img_rois,
                                (zrois, yrois, xrois),
