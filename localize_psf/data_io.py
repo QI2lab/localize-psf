@@ -4,6 +4,7 @@ import re
 from npy2bdv import BdvEditor
 import pandas as pd
 import numpy as np
+from pycromanager import Dataset
 
 def read_metadata(fname):
     """
@@ -101,6 +102,72 @@ def return_data_numpy_widefield(dataset, channel_axis, ch_BDV_idx, num_z, y_pixe
             data_numpy[i,:,:] = dataset.read_image(z=i, c=channel_axis, channel=ch_BDV_idx)
 
     return data_numpy
+
+
+def open_NDTiff(path_dataset, channels=None, z_levels=None, squeeze=True):
+    """
+    Open an NDTiff image.
+
+    Parameters
+    ----------
+    path_dataset : str
+        Path of the image.
+    channels : None or list(int)
+        If None, load all channels, else load a list of channels.
+    z_levels : None or array
+        If None, load all z slices, else load a list of slices.
+    
+    Returns:
+    img : ndarray
+        A numpy ndimage.
+    """
+
+    dataset = Dataset(path_dataset)
+    # use metadata to guess how to load the image
+    meta = dataset.axes
+    c = np.array([x for x in meta['c']])  # array([1, 2, 3])
+    chan = np.array([x for x in meta['channel']])
+    if chan.size == 1:
+        chan_dict = {x: chan[0] for x in c}
+    elif chan.size == c.size:
+        shift = int(np.unique(c.min() - chan))
+        chan_dict = {c[i]: chan[i] for i in range(len(c))}
+    else:
+        raise("`c` and `channel` don't match.")
+    
+    if z_levels is None:
+        z_levels = np.array([x for x in meta['z']])
+
+    # load one image to get more info
+    sample = dataset.read_image(z=int(np.median(z_levels)), c=c[0], channel=chan_dict[c[0]])
+    nb_z = z_levels.size
+    nb_y, nb_x = sample.shape
+
+    # iterativelly load all z planes of all channels
+    if channels is None:
+        channels = list(c) # convert to list for downstream compatibility
+    else:
+        # detect what could go wrong
+        if isinstance(channels, int):
+            channels = [channels]
+        warn_channels = [x for x in channels if x not in c]
+        if len(warn_channels) > 0:
+            print("WARNING these channels are not in the dataset:")
+            print(warn_channels)
+        channels = [x for x in channels if x in c]
+        if len(channels) == 0:
+            print("WARNING there is no requested channel in the dataset, returning")
+            return
+    nb_ch = len(channels)
+    img = np.zeros((nb_ch, nb_z, nb_y, nb_x), dtype=sample.dtype)
+    for i, channel_id in enumerate(channels):
+        print("    channel id: {}".format(channel_id))
+        for z_id, z in enumerate(z_levels):
+            img[i, z_id, :, :] = dataset.read_image(z=z, c=channel_id, channel=chan_dict[channel_id])
+    
+    if squeeze:
+        img = np.squeeze(img)
+    return img
 
 def stitch_data(path_to_xml,iterative_flag):
 

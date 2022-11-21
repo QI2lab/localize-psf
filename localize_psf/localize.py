@@ -135,7 +135,7 @@ def get_filter_kernel(sigmas, drs, sigma_cutoff=2):
     return kernel
 
 
-def filter_convolve(imgs, kernel, use_gpu=CUPY_AVAILABLE):
+def filter_convolve(imgs, kernel, use_gpu=CUPY_AVAILABLE, verbose=1):
     """
     Convolution filter using kernel with GPU support. To avoid roll-off effects at the edge, the convolved
     result is "normalized" by being divided by the kernel convolved with an array of ones.
@@ -149,38 +149,40 @@ def filter_convolve(imgs, kernel, use_gpu=CUPY_AVAILABLE):
     # todo: estimate how much memory convolution requires? Much more than I expect...
     
     # convolve, and deal with edges by normalizing
-    # if use_gpu:
-    #     print("\n\nIn GPU mode\n\n")
-    #     print('CUPY_AVAILABLE : ', CUPY_AVAILABLE)
-    #     kernel_cp = cp.asarray(kernel, dtype=cp.float32)
-    #     imgs_cp = cp.asarray(imgs, dtype=cp.float32)
-    #     imgs_filtered_cp = cupyx.scipy.signal.fftconvolve(imgs_cp, kernel_cp, mode="same")
-    #     imgs_filtered = cp.asnumpy(imgs_filtered_cp)
+    if use_gpu:
+        if verbose > 0: 
+            print("convolution on GPU")
+        kernel_cp = cp.asarray(kernel, dtype=cp.float32)
+        imgs_cp = cp.asarray(imgs, dtype=cp.float32)
+        imgs_filtered_cp = cupyx.scipy.signal.fftconvolve(imgs_cp, kernel_cp, mode="same")
+        imgs_filtered = cp.asnumpy(imgs_filtered_cp)
 
-    #     imgs_cp = None
-    #     del imgs_cp
+        imgs_cp = None
+        del imgs_cp
 
-    #     imgs_filtered_cp = None
-    #     del imgs_filtered_cp
+        imgs_filtered_cp = None
+        del imgs_filtered_cp
 
-    #     norm_cp = cupyx.scipy.signal.fftconvolve(cp.ones(imgs.shape), kernel_cp, mode="same")
-    #     norm = cp.asnumpy(norm_cp)
+        norm_cp = cupyx.scipy.signal.fftconvolve(cp.ones(imgs.shape), kernel_cp, mode="same")
+        norm = cp.asnumpy(norm_cp)
 
-    #     imgs_filtered = imgs_filtered / norm
+        imgs_filtered = imgs_filtered / norm
 
-    #     kernel_cp = None
-    #     del kernel_cp
+        kernel_cp = None
+        del kernel_cp
 
-    #     norm_cp = None
-    #     del norm_cp
+        norm_cp = None
+        del norm_cp
 
-    #     mempool = cp.get_default_memory_pool()
-    #     mempool.free_all_blocks()
-    #     # pinned_mempool = cp.get_default_pinned_memory_pool()
+        mempool = cp.get_default_memory_pool()
+        mempool.free_all_blocks()
+        # pinned_mempool = cp.get_default_pinned_memory_pool()
 
-    # else:
-    imgs_filtered = scipy.signal.fftconvolve(imgs, kernel, mode="same") / \
-                    scipy.signal.fftconvolve(np.ones(imgs.shape), kernel, mode="same")
+    else:
+        if verbose > 0: 
+            print("convolution on CPU")
+        imgs_filtered = scipy.signal.fftconvolve(imgs, kernel, mode="same") / \
+                        scipy.signal.fftconvolve(np.ones(imgs.shape), kernel, mode="same")
 
     # this method too slow for large filter sizes
     # imgs_filtered = scipy.ndimage.convolve(imgs, kernel, mode="constant", cval=0) / \
@@ -1228,17 +1230,18 @@ def localize_spots(imgs, dxy, dz, threshold, roi_size, filter_sigma_small, filte
         if verbose:
             print("Localization took %0.2fs" % (tend - tstart))
 
-        # ###################################################
-        # filter fits
-        # ###################################################
-        to_keep, conditions, condition_names, filter_settings = \
-            filter_localizations(fit_params, init_params, (z, y, x), fit_dist_max_err, min_spot_sep,
-                                 sigma_bounds, fit_amp_min, dist_boundary_min)
+        # # ###################################################
+        # # filter fits
+        # # ###################################################
+        # to_keep, conditions, condition_names, filter_settings = \
+        #     filter_localizations(fit_params, init_params, (z, y, x), fit_dist_max_err, min_spot_sep,
+        #                          sigma_bounds, fit_amp_min, dist_boundary_min)
 
-        if verbose:
-            print("Identified %d likely candidates" % np.sum(to_keep))
+        # if verbose:
+        #     print("Identified %d likely candidates" % np.sum(to_keep))
 
-        return (z, y, x), fit_params, init_params, rois, to_keep, conditions, condition_names, filter_settings
+        # return (z, y, x), fit_params, init_params, rois, to_keep, conditions, condition_names, filter_settings
+        return (z, y, x), fit_params, init_params, rois
 
 
 def plot_bead_locations(imgs, center_lists, title="", color_lists=None, color_limits=None, legend_labels=None,
