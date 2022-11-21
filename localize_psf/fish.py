@@ -1,8 +1,12 @@
 import numpy as np
 import pandas as pd
 import json
-from tysserand import tysserand as ty
-from localize_psf import  localize
+import time
+# from tysserand import tysserand as ty
+import localize_psf.rois as roi_fns
+from localize_psf import fit
+import localize_psf.fit_psf as psf
+from localize_psf import localize
 
 
 def _unpack_tuple(x):
@@ -17,13 +21,21 @@ def _unpack_tuple(x):
 
 # ------ general FISH pipeline functions ------
 
-def make_sigmas(sz, sxy, sigma_ratio=1.6):
+def make_sigmas(na=None, ni=None, lambda_em=None,
+                sz=None, sxy=None, sigma_ratio=1.6):
     """
-    Compute min and max of sigmas x, y and z from
-    estimated size of gaussian spot in pixel.
+    Compute min and max of sigmas x, y and z from physical parameters 
+    or from estimated size of gaussian spot in pixel. Returned values
+    are in µm if physical parameters are used, in pixels otherwise.
 
     Parameters
     ----------
+    na : float
+        Numerical aperture of the objective.
+    ni : float
+        Refractive index of the sample.
+    lambda_em : float
+        Emission wavelength in µm.
     sz : float | int
         Estimated size of spots along the z axis in pixels.
     sxy : float | int
@@ -32,136 +44,195 @@ def make_sigmas(sz, sxy, sigma_ratio=1.6):
         Ratio between big and small sigma for z or xy.
         To reproduce LoG with DoG we need sigma_big = 1.6 * sigma_small.
     """
+    if na is None:
+        # FWHM = 2.355 x sigma
+        sigma_xy = sxy / 2.355
+        sigma_z = sz / 2.355
+        sigma_xy_small = sigma_xy / sigma_ratio**(1/2)
+        sigma_xy_large = sigma_xy * sigma_ratio**(1/2)
+        sigma_z_small = sigma_z / sigma_ratio**(1/2)
+        sigma_z_large = sigma_z * sigma_ratio**(1/2)
 
-    # FWHM = 2.355 x sigma
-    sigma_xy = sxy / 2.355
-    sigma_z = sz / 2.355
-    sigma_xy_small = sigma_xy / sigma_ratio**(1/2)
-    sigma_xy_large = sigma_xy * sigma_ratio**(1/2)
-    sigma_z_small = sigma_z / sigma_ratio**(1/2)
-    sigma_z_large = sigma_z * sigma_ratio**(1/2)
+        return sigma_z, sigma_xy, sigma_z_small, sigma_xy_small, sigma_z_large, sigma_xy_large
+        
+    else:
+        sigma_xy = psf.na2sxy(na, lambda_em)
+        sigma_z = psf.na2sz(na, lambda_em, ni)
 
-    return sigma_z, sigma_xy, sigma_z_small, sigma_xy_small, sigma_z_large, sigma_xy_large
+        # TODO: add choice of coefficients
+        # difference of gaussian filer
+        filter_sigma_small = (0.5 * sigma_z, 0.25 * sigma_xy, 0.25 * sigma_xy)
+        filter_sigma_large = (3 * sigma_z, 3 * sigma_xy, 3 * sigma_xy)
+        # exclude points with sigmas outside these ranges
+        sigmas_min = (0.25 * sigma_z, 0.25 * sigma_xy)
+        sigmas_max = (3 * sigma_z, 4 * sigma_xy)
+
+        return sigma_z, sigma_xy, sigmas_min, sigmas_max, filter_sigma_small, filter_sigma_large
 
 
-def make_roi_sizes(sz, sxy, coef_roi=2, coef_min_roi=0.5):
+def make_roi_sizes(sz, sxy, dz, dxy, coef_roi=2, coef_min_roi=0.5):
     """
     Compute the x/y and z sizes of ROIs to fit gaussians to spots.
     """
-    fit_roi_sizes = (coef_roi * np.array([sz, sxy, sxy])).astype(int)
-    min_fit_roi_sizes = fit_roi_sizes * coef_min_roi
+    if isinstance(coef_roi, (int, float)):
+        coef_roi = np.array([coef_roi] * 3)
+    if isinstance(coef_min_roi, (int, float)):
+        coef_min_roi = np.array([coef_min_roi] * 3)
+    
+    roi_sizes = (coef_roi * np.array([sz, sxy, sxy])).astype(int)
+    roi_sizes_pix = roi_fns.get_roi_size(roi_sizes, dxy, dz, ensure_odd=True)
+    min_roi_sizes_pix = roi_sizes_pix * coef_min_roi
 
-    return fit_roi_sizes, min_fit_roi_sizes
-
-
-def get_roi_coordinates(centers, sizes, max_coords_val, min_sizes, return_sizes=True):
-    """
-    Make pairs of (z, y, x) coordinates defining an ROI.
-    
-    Parameters
-    ----------
-    centers : ndarray, dtype int
-        Centers of future ROIs, a Nx3 array.
-    sizes : array or list
-        Size of ROIs in each dimensions.
-    max_coords_val : array or list
-        Maximum value of coordinates in each dimension,
-        typically the original image shape - 1.
-    min_sizes : array or list
-        Minimum size of ROIs in each dimension.
-    
-    Returns
-    -------
-    roi_coords : ndarray
-        Pairs of point coordinates, a 2xNx3 array.
-    roi_coords : ndarray
-        Shape of each ROI, Nx3 array.
-    """
-    
-    # make raw coordinates
-    min_coords = centers - sizes / 2
-    max_coords = centers + sizes / 2
-    coords = np.stack([min_coords, max_coords]).astype(int)
-    # clean min and max values of coordinates
-    coords[coords < 0] = 0
-    for i in range(3):
-        coords[1, coords[1, :, i] > max_coords_val[i], i] = max_coords_val[i]
-    # delete small ROIs
-    roi_sizes = coords[1, :, :] - coords[0, :, :]
-    select = ~np.any([roi_sizes[:, i] < min_sizes[i] for i in range(3)], axis=0)
-    coords = coords[:, select, :]
-    # swap axes for latter convenience
-    roi_coords = np.swapaxes(coords, 0, 1)
-    
-    if return_sizes:
-        roi_sizes = roi_sizes[select, :]
-        return roi_coords, roi_sizes
-    else:
-        return roi_coords
-
-    
-def extract_ROI(img, coords):
-    """
-    Extract a portion of an image given by the coordinates of 2 points.
-    
-    Parameters
-    ----------
-    img : ndarray, dimension 3
-        The image from which the ROI is extracted.
-    coords : ndarry, shape (2, 3)
-        The 2 coordinates of the 3 dimensional points at the corner of the ROI.
-    
-    Returns
-    -------
-    roi : ndarray
-        A region of interest of the original image.
-    """
-    
-    z0, y0, x0 = coords[0]
-    z1, y1, x1 = coords[1]
-    roi = img[z0:z1, y0:y1, x0:x1]
-    return roi
+    return roi_sizes, roi_sizes_pix, min_roi_sizes_pix
 
 
-def filter_dog(img, sigma_xy_small, sigma_xy_large, 
-               sigma_z_small, sigma_z_large, sigma_cutoff=2):
+def make_min_spot_sep(sigma_z, sigma_xy, coef_sep=(3, 3)):
+    # assume points closer together than this come from a single bead
+    min_spot_sep = (coef_sep[0] * sigma_z, coef_sep[1] * sigma_xy)
+    return min_spot_sep
+
+
+# no longer used for direct implementation of localize_psf
+# will merge both method in the future
+# def get_roi_coordinates(centers, sizes, max_coords_val, min_sizes, return_sizes=True):
+#     """
+#     Make pairs of (z, y, x) coordinates defining an ROI.
+    
+#     Parameters
+#     ----------
+#     centers : ndarray, dtype int
+#         Centers of future ROIs, a Nx3 array.
+#     sizes : array or list
+#         Size of ROIs in each dimensions.
+#     max_coords_val : array or list
+#         Maximum value of coordinates in each dimension,
+#         typically the original image shape - 1.
+#     min_sizes : array or list
+#         Minimum size of ROIs in each dimension.
+    
+#     Returns
+#     -------
+#     roi_coords : ndarray
+#         Pairs of point coordinates, a 2xNx3 array.
+#     roi_coords : ndarray
+#         Shape of each ROI, Nx3 array.
+#     """
+    
+#     # make raw coordinates
+#     min_coords = centers - sizes / 2
+#     max_coords = centers + sizes / 2
+#     coords = np.stack([min_coords, max_coords]).astype(int)
+#     # clean min and max values of coordinates
+#     coords[coords < 0] = 0
+#     for i in range(3):
+#         coords[1, coords[1, :, i] > max_coords_val[i], i] = max_coords_val[i]
+#     # delete small ROIs
+#     roi_sizes = coords[1, :, :] - coords[0, :, :]
+#     select = ~np.any([roi_sizes[:, i] < min_sizes[i] for i in range(3)], axis=0)
+#     coords = coords[:, select, :]
+#     # swap axes for latter convenience
+#     roi_coords = np.swapaxes(coords, 0, 1)
+    
+#     if return_sizes:
+#         roi_sizes = roi_sizes[select, :]
+#         return roi_coords, roi_sizes
+#     else:
+#         return roi_coords
+
+    
+# def extract_ROI(img, coords):
+#     """
+#     Extract a portion of an image given by the coordinates of 2 points.
+    
+#     Parameters
+#     ----------
+#     img : ndarray, dimension 3
+#         The image from which the ROI is extracted.
+#     coords : ndarry, shape (2, 3)
+#         The 2 coordinates of the 3 dimensional points at the corner of the ROI.
+    
+#     Returns
+#     -------
+#     roi : ndarray
+#         A region of interest of the original image.
+#     """
+    
+#     z0, y0, x0 = coords[0]
+#     z1, y1, x1 = coords[1]
+#     roi = img[z0:z1, y0:y1, x0:x1]
+#     return roi
+
+
+def filter_dog(img, filter_sigma_small, filter_sigma_large, 
+               pixel_sizes, sigma_cutoff=2):
     """
     Filter an image (convolve) with a Difference of Gaussian kernel.
     """
-    pixel_sizes = (1, 1, 1)
-    filter_sigma_small = (sigma_z_small, sigma_xy_small, sigma_xy_small)
-    filter_sigma_large = (sigma_z_large, sigma_xy_large, sigma_xy_large)
 
     kernel_small = localize.get_filter_kernel(filter_sigma_small, pixel_sizes, sigma_cutoff=sigma_cutoff)
     kernel_large = localize.get_filter_kernel(filter_sigma_large, pixel_sizes, sigma_cutoff=sigma_cutoff)
-
-    img_high_pass = localize.filter_convolve(img, kernel_small, use_gpu=False)
-    img_low_pass = localize.filter_convolve(img, kernel_large, use_gpu=False)
+    img_high_pass = localize.filter_convolve(img, kernel_small)
+    img_low_pass = localize.filter_convolve(img, kernel_large)
     img_filtered = img_high_pass - img_low_pass
 
     return img_filtered
 
 
-def threshold_image(img, threshold):
-    img_thresholded = np.array(img, copy=True)
-    img_thresholded[img_thresholded < threshold] = 0
-    return img_thresholded
+# def threshold_image(img, threshold):
+#     img_thresholded = np.array(img, copy=True)
+#     img_thresholded[img_thresholded < threshold] = 0
+#     return img_thresholded
+
+def adapt_2D_data(img, roi_size, filter_sigma_small, filter_sigma_large, min_spot_sep):
+    if img.ndim == 2:
+        img = np.expand_dims(img, axis=0)
+        data_is_2d = True
+    else:
+        data_is_2d = False
+
+    if data_is_2d:
+        roi_size[0] = 0
+        filter_sigma_large[0] = 0
+        filter_sigma_small[0] = 0
+        min_spot_sep[0] = 0
+
+    return data_is_2d, img, roi_size, filter_sigma_small, filter_sigma_large, min_spot_sep
 
 
-def find_peaks(img, threshold, min_separations, use_gpu_filter=False):
+def find_peaks(img_filtered, threshold, min_spot_sep, pixel_sizes):
     """
     Detect peaks, presumably in a thresholded DoG filtered image.
     """
-    footprint = localize.get_max_filter_footprint(min_separations=min_separations, drs=(1,1,1))
-    # array of size nz, ny, nx of True
+    # footprint = localize.get_max_filter_footprint(min_separations=min_separations, drs=(1,1,1))
+    # # array of size nz, ny, nx of True
+    # # or use ndi.maximum_filter(img, footprint=np.ones(min_separations))
+    # centers_guess_inds, amps = localize.find_peak_candidates(img, footprint, threshold=threshold, use_gpu_filter=use_gpu_filter)
 
-    # or use ndi.maximum_filter(img, footprint=np.ones(min_separations))
-    centers_guess_inds, amps = localize.find_peak_candidates(img, footprint, threshold=threshold, use_gpu_filter=use_gpu_filter)
+    # unpack arguments
+    z, y, x = localize.get_coords(img_filtered.shape, pixel_sizes)
+    # identify candidate spots
+    if len(img_filtered.shape) == 3 and len(min_spot_sep) == 2:
+        min_spot_sep = np.array([min_spot_sep[0], min_spot_sep[1], min_spot_sep[1]])
+    footprint = localize.get_max_filter_footprint(min_spot_sep, pixel_sizes)
+    centers_guess_inds, amps = localize.find_peak_candidates(img_filtered, footprint, threshold)
 
-    return centers_guess_inds, amps
+    # real coordinates
+    centers_guess = np.stack((z[centers_guess_inds[:, 0], 0, 0],
+                              y[0, centers_guess_inds[:, 1], 0],
+                              x[0, 0, centers_guess_inds[:, 2]]), axis=1)
+    return (z, y, x), centers_guess_inds, centers_guess, amps
 
 
-def merge_peaks(coords, max_z, max_xy, weights=None, method='network', verbose=True):
+def filter_peaks_distance(centers_guess_inds, centers_guess, amps, img_filtered, dxy_min_sep, dz_min_sep):
+    inds = np.ravel_multi_index(centers_guess_inds.transpose(), img_filtered.shape)
+    weights = img_filtered.ravel()[inds]
+    centers_guess, inds_comb = localize.filter_nearby_peaks(centers_guess, dxy_min_sep, dz_min_sep,
+                                                            weights=weights, mode="average")
+    amps = amps[inds_comb]
+    return centers_guess, amps
+
+
+def merge_peaks(coords, max_z, max_xy, weights=None, method='all_dist', verbose=True):
     """
     Merge peaks that are close to each other.
 
@@ -172,7 +243,7 @@ def merge_peaks(coords, max_z, max_xy, weights=None, method='network', verbose=T
     """
 
     if method == 'network':
-        merged_centers_inds = filter_nearby_peaks(coords, max_z, max_xy, weights)
+        merged_centers_inds = localize.filter_nearby_peaks(coords, max_z, max_xy, weights)
         if weights is not None:
             # need ravel_multi_index to get pixel values of weights at several 3D coordinates
             amplitudes_id = np.ravel_multi_index(merged_centers_inds.astype(int).transpose(), weights.shape)
@@ -226,67 +297,154 @@ def detect_dog_spots(img, sigma_xy_small, sigma_xy_large,
         return centers_guess_inds
 
 
-def shift_coordinates(spots_coords, tile_coords, format='pair'):
+# def shift_coordinates(spots_coords, tile_coords, format='pair'):
     
-    if format == 'pair':
-        spots_coords = spots_coords + tile_coords[:, 0, :]
-    elif format == 'single':
-        spots_coords = spots_coords + tile_coords
-    return spots_coords
+#     if format == 'pair':
+#         spots_coords = spots_coords + tile_coords[:, 0, :]
+#     elif format == 'single':
+#         spots_coords = spots_coords + tile_coords
+#     return spots_coords
 
 
-def fit_gaussian_spot(img, centers, fit_roi_sizes, min_fit_roi_sizes, amps, sigma_xy, sigma_z, 
+# def fit_gaussian_spot_legacy(img, centers, fit_roi_sizes, min_fit_roi_sizes, amps, sigma_xy, sigma_z, 
+#                       return_fit_vars=True, verbose=0):
+    
+#     # we don't return roi_sizes because we would have to manage it in
+#     # the detect_spots_tile function, whereas another method could not output it
+#     if verbose > 0: print("Computing ROIs' coordinates")
+#     roi_coords, roi_sizes  = get_roi_coordinates(
+#         centers = centers, 
+#         sizes = fit_roi_sizes, 
+#         max_coords_val = np.array(img.shape) - 1, 
+#         min_sizes = min_fit_roi_sizes,
+#     )
+#     # guess center *in* each individual ROI
+#     centers_guess = (roi_sizes / 2)
+    
+#     # Gaussian fit to find center of each spot
+#     all_res = []
+#     chi_squared = []
+#     for i in range(len(roi_coords)):
+#         # extract ROI
+#         roi = extract_ROI(img, roi_coords[i])
+#         # fit gaussian in ROI
+#         init_params = np.array([
+#             amps[i], 
+#             centers_guess[i, 2],
+#             centers_guess[i, 1],
+#             centers_guess[i, 0],
+#             sigma_xy, 
+#             sigma_z, 
+#             roi.min(),
+#         ])
+#         fit_results = localize.fit_gauss_roi(
+#             roi, 
+#             (localize.get_coords(roi_sizes[i], drs=[1, 1, 1])), 
+#             init_params,
+#             fixed_params=np.full_like(init_params, False),
+#         )
+#         chi_squared.append(fit_results['chi_squared'])
+#         all_res.append(fit_results['fit_params'])
+        
+#     # process all the results
+#     all_res = np.array(all_res)
+#     amplitudes = all_res[:, 0]
+#     centers = all_res[:, 3:0:-1]
+#     sigmas_xy = all_res[:, 4]
+#     sigmas_z = all_res[:, 5]
+#     # offsets = all_res[:, 6]
+#     chi_squared = np.array(chi_squared)
+#     # distances from initial guess
+#     dist_center = np.sqrt(np.sum((centers - centers_guess)**2, axis=1))
+#     # add origin coordinates of each ROI
+#     centers = centers + roi_coords[:, 0, :]
+#     # composed variables for filtering
+#     sigma_ratios = sigmas_z / sigmas_xy
+    
+#     fit_vars = {
+#     'amplitudes': amplitudes,
+#     'sigmas_xy': sigmas_xy,
+#     'sigmas_z': sigmas_z,
+#     # 'offsets': offsets,
+#     'chi_squared': chi_squared,
+#     'dist_center': dist_center,
+#     'sigma_ratios': sigma_ratios,
+#     }        
+    
+#     if return_fit_vars:
+#         return centers, fit_vars
+#     else:
+#         return centers
+
+def fit_gaussian_spot(img, centers_guess, axes, roi_size_pix, amps, sigma_xy, sigma_z, 
+                      dc, sf=1, angles=(0., 0., 0.), data_is_2d=False, 
                       return_fit_vars=True, verbose=0):
+    """
+    axes : (z, y, x)
+    """
     
+    # ------------ Prepare ROIs ------------
     # we don't return roi_sizes because we would have to manage it in
     # the detect_spots_tile function, whereas another method could not output it
     if verbose > 0: print("Computing ROIs' coordinates")
-    roi_coords, roi_sizes  = get_roi_coordinates(
-        centers = centers, 
-        sizes = fit_roi_sizes, 
-        max_coords_val = np.array(img.shape) - 1, 
-        min_sizes = min_fit_roi_sizes,
-    )
-    # guess center *in* each individual ROI
-    centers_guess = (roi_sizes / 2)
-    
-    # Gaussian fit to find center of each spot
-    all_res = []
-    chi_squared = []
-    for i in range(len(roi_coords)):
-        # extract ROI
-        roi = extract_ROI(img, roi_coords[i])
-        # fit gaussian in ROI
-        init_params = np.array([
-            amps[i], 
-            centers_guess[i, 2],
-            centers_guess[i, 1],
-            centers_guess[i, 0],
-            sigma_xy, 
-            sigma_z, 
-            roi.min(),
-        ])
-        fit_results = localize.fit_gauss_roi(
-            roi, 
-            (localize.get_coords(roi_sizes[i], drs=[1, 1, 1])), 
-            init_params,
-            fixed_params=np.full_like(init_params, False),
-        )
-        chi_squared.append(fit_results['chi_squared'])
-        all_res.append(fit_results['fit_params'])
+    # localize_psf method:
+    rois, img_rois, coords = zip(*[localize.get_roi(c, img, axes, roi_size_pix) for c in centers_guess])
+    zrois, yrois, xrois = zip(*coords)
+    rois = np.asarray(rois)
+
+    # extract guess values
+    # TODO: compare fit quality and speed with simpler guesses
+    bgs = np.array([np.mean(r) for r in img_rois])
+    sxs = np.array([np.sqrt(np.sum(ir * (xr - cg[2]) ** 2) / np.sum(ir)) for ir, xr, cg in
+                    zip(img_rois, xrois, centers_guess)])
+    sys = np.array([np.sqrt(np.sum(ir * (yr - cg[1]) ** 2) / np.sum(ir)) for ir, yr, cg in
+                    zip(img_rois, yrois, centers_guess)])
+    sxys = 0.5 * (sxs + sys)
+
+    if data_is_2d:
+        cz_guess = np.zeros(len(img_rois))
+        szs = np.ones(len(img_rois))
+    else:
+        cz_guess = centers_guess[:, 0]
+        szs = np.array([np.sqrt(np.sum(ir * (zr - cg[0]) ** 2) / np.sum(ir)) for ir, zr, cg in
+                        zip(img_rois, zrois, centers_guess)])
+
+    # get initial parameter guesses
+    init_params = np.stack((amps,
+                            centers_guess[:, 2], centers_guess[:, 1], cz_guess,
+                            sxys, szs, bgs), axis=1)
+
+    # ------------ Fit ------------
+    if verbose:
+        print("starting fitting for %d rois" % centers_guess.shape[0])
+    tstart = time.perf_counter()
+
+    fixed_params = [False] * 7
+
+    # if 2D, don't want to fit cz or sz
+    if data_is_2d:
+        fixed_params[5] = True
+        fixed_params[3] = True
+
+    fit_params, fit_states, chi_squared, niters, fit_t = localize.fit_gauss_rois(img_rois, (zrois, yrois, xrois),
+                                                                              init_params, estimator="LSE",
+                                                                              sf=sf, dc=dc, angles=angles,
+                                                                              fixed_params=fixed_params)
+
+    tend = time.perf_counter()
+    if verbose:
+        print("Localization took %0.2fs" % (tend - tstart))
         
     # process all the results
-    all_res = np.array(all_res)
+    all_res = np.array(fit_params)
     amplitudes = all_res[:, 0]
     centers = all_res[:, 3:0:-1]
     sigmas_xy = all_res[:, 4]
     sigmas_z = all_res[:, 5]
-    # offsets = all_res[:, 6]
+    offsets = all_res[:, 6]
     chi_squared = np.array(chi_squared)
     # distances from initial guess
     dist_center = np.sqrt(np.sum((centers - centers_guess)**2, axis=1))
-    # add origin coordinates of each ROI
-    centers = centers + roi_coords[:, 0, :]
     # composed variables for filtering
     sigma_ratios = sigmas_z / sigmas_xy
     
@@ -294,7 +452,7 @@ def fit_gaussian_spot(img, centers, fit_roi_sizes, min_fit_roi_sizes, amps, sigm
     'amplitudes': amplitudes,
     'sigmas_xy': sigmas_xy,
     'sigmas_z': sigmas_z,
-    # 'offsets': offsets,
+    'offsets': offsets,
     'chi_squared': chi_squared,
     'dist_center': dist_center,
     'sigma_ratios': sigma_ratios,
@@ -741,56 +899,56 @@ def merge_cluster_nodes(coords, pairs, weights=None, split_big_clust=False, clus
     return merged_coords
 
 
-def filter_nearby_peaks(coords, max_z, max_xy, weight_img=None,
-                        split_big_clust=False, cluster_size=None):
-    """
-    Merge nearby peaks in an image by building a radial distance graph and cutting it given
-    distance thresholds in the xy plane and along the z axis.
+# def filter_nearby_peaks(coords, max_z, max_xy, weight_img=None,
+#                         split_big_clust=False, cluster_size=None):
+#     """
+#     Merge nearby peaks in an image by building a radial distance graph and cutting it given
+#     distance thresholds in the xy plane and along the z axis.
 
-    Parameters
-    ----------
-    coords : ndarray
-        Coordinates of nodes, array of shape nb_nodes x 3.
-    max_z : float
-        Distance threshold along the z axis.
-    max_xy : float
-        Distance threshold in the xy plane.
-    weight_img : ndarray
-        Image used to find peaks, now used to weight peaks coordinates during merge.
-        If None, equal weight is given to peaks coordinates.
-    split_big_clust : bool
-        If True, cluster big enough to contain multiple objects of interest (like spots)
-        are split into sub-clusters.
-    cluster_size : list | array
-        The threshold z and x/y size of clusters above which they are split.
+#     Parameters
+#     ----------
+#     coords : ndarray
+#         Coordinates of nodes, array of shape nb_nodes x 3.
+#     max_z : float
+#         Distance threshold along the z axis.
+#     max_xy : float
+#         Distance threshold in the xy plane.
+#     weight_img : ndarray
+#         Image used to find peaks, now used to weight peaks coordinates during merge.
+#         If None, equal weight is given to peaks coordinates.
+#     split_big_clust : bool
+#         If True, cluster big enough to contain multiple objects of interest (like spots)
+#         are split into sub-clusters.
+#     cluster_size : list | array
+#         The threshold z and x/y size of clusters above which they are split.
     
-    Returns
-    -------
-    merged_coords : ndarray
-        The coordinates of merged peaks.
-    """
+#     Returns
+#     -------
+#     merged_coords : ndarray
+#         The coordinates of merged peaks.
+#     """
 
-    # build the radial distance network using the bigest radius: max distance along z axis
-    pairs = ty.build_rdn(coords=coords, r=max_z)
-    source = coords[pairs[:, 0]]
-    target = coords[pairs[:, 1]]
-    # compute the 2 distances arrays
-    dist_z, dist_xy = compute_distances(source, target)
-    # perform grph cut from the 2 distance thresholds
-    _, pairs = cut_graph_bidistance(dist_z, dist_xy, max_z, max_xy, pairs=pairs)
+#     # build the radial distance network using the bigest radius: max distance along z axis
+#     pairs = ty.build_rdn(coords=coords, r=max_z)
+#     source = coords[pairs[:, 0]]
+#     target = coords[pairs[:, 1]]
+#     # compute the 2 distances arrays
+#     dist_z, dist_xy = compute_distances(source, target)
+#     # perform grph cut from the 2 distance thresholds
+#     _, pairs = cut_graph_bidistance(dist_z, dist_xy, max_z, max_xy, pairs=pairs)
 
-    if weight_img is not None:
-        # need ravel_multi_index to get pixel values of weight_img at several 3D coordinates
-        amplitudes_id = np.ravel_multi_index(coords.transpose(), weight_img.shape)
-        weights = weight_img.ravel()[amplitudes_id]
-    else:
-        weights = None  # array of ones will be generated in merge_cluster_nodes
-    # merge nearby nodes coordinates
-    merged_coords = merge_cluster_nodes(coords, pairs, weights,
-                                        split_big_clust=split_big_clust, 
-                                        cluster_size=cluster_size)
+#     if weight_img is not None:
+#         # need ravel_multi_index to get pixel values of weight_img at several 3D coordinates
+#         amplitudes_id = np.ravel_multi_index(coords.transpose(), weight_img.shape)
+#         weights = weight_img.ravel()[amplitudes_id]
+#     else:
+#         weights = None  # array of ones will be generated in merge_cluster_nodes
+#     # merge nearby nodes coordinates
+#     merged_coords = merge_cluster_nodes(coords, pairs, weights,
+#                                         split_big_clust=split_big_clust, 
+#                                         cluster_size=cluster_size)
 
-    return merged_coords
+#     return merged_coords
 
 # ------ parameters saving and loading ------
 

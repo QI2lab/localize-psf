@@ -53,7 +53,10 @@ def get_coords(sizes, drs):
     :param drs: (dr0, dr1, ..., drn)
     :return coords: (coords0, coords1, ..., coordsn)
     """
-    ndims = len(drs)
+
+    ndims = len(sizes)
+    if isinstance(drs, (float, int)):
+        drs = [drs] * ndims
     coords = [np.expand_dims(np.arange(sz) * dr, axis=list(range(ii)) + list(range(ii + 1, ndims)))
               for ii, (sz, dr) in enumerate(zip(sizes, drs))]
 
@@ -1046,9 +1049,8 @@ def filter_localizations(fit_params, init_params, coords, fit_dist_max_err, min_
     return to_keep, conditions, condition_names, filter_settings
 
 
-def localize_beads(imgs, dxy, dz, threshold, roi_size, filter_sigma_small, filter_sigma_large,
-                   min_spot_sep, sigma_bounds, fit_amp_min, fit_dist_max_err=(np.inf, np.inf), dist_boundary_min=(0, 0),
-                   use_gpu_fit=GPUFIT_AVAILABLE, use_gpu_filter=CUPY_AVAILABLE, verbose=True):
+def localize_spots(imgs, dxy, dz, threshold, roi_size, filter_sigma_small, filter_sigma_large,
+                   min_spot_sep, use_gpu_fit=GPUFIT_AVAILABLE, use_gpu_filter=CUPY_AVAILABLE, verbose=True):
     """
     Given an image consisting of diffraction limited spots and background, identify the diffraction limit spots using
     the following procedure
@@ -1056,28 +1058,41 @@ def localize_beads(imgs, dxy, dz, threshold, roi_size, filter_sigma_small, filte
     (2) Identify candidate spots from the filtered image using a threshold and maximum filter
     (3) Fit candidate spots to a 2D or 3D Gaussian function. Note the fitting is done on the raw image, not the
     filtered image
-    (4) Filter out likely candidate spots based on the results of the fitting
-    the various parameters used in this function are set in terms of real units, i.e. um, and not pixels.
 
-    @param imgs: an image of size ny x nx or an image stack of size nz x ny x nx
-    @param dxy: xy-pixel spacing in um
-    @param dz: z-plane spacing in um
-    @param threshold: threshold used for identifying spots. This is applied after filtering of image
-    @param roi_size: (sz, sy, sx) in um
-    @param filter_sigma_small: (sz, sy, sx) small sigmas to be used in difference-of-Gaussian filter. Roughly speaking,
-    features which are smaller than these sigmas will be high pass filtered out.
-    @param filter_sigma_large: (sz, sy, sx) large sigmas to be used in difference-of-Gaussian filter. Roughly speaking,
-    features which are large than these sigmas will be low pass filtered out.
-    @param min_spot_sep: (dz, dxy) minimum separation allowed between adjacent peaks
-    @param sigma_bounds: ((sz_min, sxy_min), (sz_max, sxy_max))
-    @param fit_amp_min: minimum amplitude value for fit to be kept
-    @param fit_dist_max_err: (dz_max, dxy_max) maximum distance between guess value and fit value
-    @param dist_boundary_min: (dz_min, dxy_min) filter out spots which are closer to the boundary than this
-    @param bool use_gpu_fit: whether or not to do spot fitting on the GPU
-    @param bool use_gpu_filter: whether or not to do difference-of-Gaussian filtering on GPU
-    @param bool verbose: whether or not to print information
-    @return coords, fit_params, init_params, rois, to_keep, conditions, condition_names, filter_settings:
-    coords = (z, y, x)
+    Parameters
+    ----------
+    imgs: ndarray
+        an image of size ny x nx or an image stack of size nz x ny x nx
+    dxy: float
+        xy-pixel spacing in um
+    dz: float
+        z-plane spacing in um
+    threshold: int or float
+        threshold used for identifying spots. This is applied after filtering of image
+    roi_size: list(floats)
+        (sz, sy, sx) in um
+    filter_sigma_small: list(floats)
+        (sz, sy, sx) small sigmas to be used in difference-of-Gaussian filter. Roughly speaking,
+        features which are smaller than these sigmas will be high pass filtered out.
+    filter_sigma_large: list(floats)
+        (sz, sy, sx) large sigmas to be used in difference-of-Gaussian filter. Roughly speaking,
+        features which are large than these sigmas will be low pass filtered out.
+    min_spot_sep: list(floats)
+        (dz, dxy) minimum separation allowed between adjacent peaks
+    use_gpu_fit: bool
+        whether or not to do spot fitting on the GPU
+    use_gpu_filter: bool
+        whether or not to do difference-of-Gaussian filtering on GPU
+    verbose: bool
+        whether or not to print information
+
+    Returns
+    -------
+    coords: tuple(ndarray)
+        The z, y, x broadcastable coordinates
+    fit_params:
+    init_params:
+    rois:
     """
 
     # make sure inputs correct types

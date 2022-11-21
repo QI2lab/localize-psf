@@ -151,3 +151,64 @@ def return_affine_xform(path_to_xml,r_idx,y_idx,z_idx,total_z_pos):
             read_affine_success = True
 
     return affine_xforms
+
+def open_NDTiff(dataset, channels=None, squeeze=True):
+    """
+    Open an NDTiff image.
+
+    Parameters
+    ----------
+    dataset : NDTiff object
+        NDTiff dataset.
+    channels : None or list(int)
+        If None, load all channels, else load a list of channels.
+    
+    Returns:
+    img : ndarray
+        A numpy ndimage.
+    """
+
+    # use metadata to guess how to load the image
+    meta = dataset.axes
+    c = np.array([x for x in meta['c']])  # array([1, 2, 3])
+    chan = np.array([x for x in meta['channel']])
+    # print('c:', c)
+    # print('chan:', chan)
+    # print('unique:', np.unique(c - chan))
+    # shift = np.unique(c - chan)
+    if len(np.unique(chan)) == 1 and len(np.unique(c)) > 1:
+        chs = {x: chan[0] for x in np.unique(c)}
+    else:
+        chs = {x: y for x, y in zip(np.unique(c), np.unique(chan))}
+    # shift = int(np.unique(c - chan)[0])
+    z_levels = np.array([x for x in meta['z']])
+    # load one image to get more info
+    sample = dataset.read_image(z=int(np.median(z_levels)), c=c[0], channel=chs[c[0]])
+    nb_z = z_levels.size
+    nb_y, nb_x = sample.shape
+
+    # iterativelly load all z planes of all channels
+    if channels is None:
+        channels = list(c) # convert to list for downstream compatibility
+    else:
+        if isinstance(channels, int):
+            channels = [channels]
+        # detect what could go wrong
+        warn_channels = [x for x in channels if x not in c]
+        if len(warn_channels) > 0:
+            print("WARNING these channels are not in the dataset:")
+            print(warn_channels)
+        channels = [x for x in channels if x in c]
+        if len(channels) == 0:
+            print("WARNING there is no requested channel in the dataset, returning")
+            return
+    nb_ch = len(channels)
+    img = np.zeros((nb_ch, nb_z, nb_y, nb_x), dtype=sample.dtype)
+    for i, channel_id in enumerate(channels):
+        print("    channel id: {}".format(channel_id))
+        for z in z_levels:
+            img[i, z, :, :] = dataset.read_image(z=z, c=channel_id, channel=chs[channel_id])
+    
+    if squeeze:
+        img = np.squeeze(img)
+    return img
