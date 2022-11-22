@@ -213,9 +213,178 @@ class coordinate_model():
         return results
 
 
-class gauss1dm(coordinate_model):
+class rotated_model(coordinate_model):
+    """
+    Take any 3D model and parameterize its arbitrary rotation using by Euler angles.
+
+    This is a helper function to avoid needing to write rotation code more than once
+
+    r_body = U_z(psi)^-1 U_y(theta)^-1 U_z(phi)^-1 * r_lab
+    U_z(phi)^-1 = [[cos(phi), -sin(phi), 0], [sin(phi), cos(phi), 0], [0, 0, 1]]
+    f_rot(r_lab) = f(r_body) = f(U^{-1} * r_lab)
+
+    Take the z-axis in the frame of the object, and consider the z-axis in the lab frame. phi and theta describe
+    how the transformation to overlap these two. psi gives the angle the object is rotated about its own axis
+    """
+
+    def __init__(self,
+                 model: coordinate_model,
+                 center_inds):
+
+        if model.ndims != 3:
+            raise ValueError(f"model.ndim = {model.ndim:d}, but only 3D models are supported")
+
+        param_names = model.parameter_names + ["phi", "theta", "psi"]
+        has_jacobian = model.has_jacobian
+        ndims = model.ndims
+
+        if ndims != 3:
+            raise ValueError(f"pixel oversampling only implemented for 3D models,"
+                             f" but provided model has ndims={ndims:d}")
+
+        super().__init__(param_names,
+                         has_jacobian=has_jacobian,
+                         ndims=ndims)
+
+        self.base_model = model
+        self.center_inds = center_inds
+
+    def model(self,
+              coordinates: tuple[np.ndarray],
+              parameters: np.ndarray) -> np.ndarray:
+        z, y, x = coordinates
+
+        phi = parameters[-3]
+        theta = parameters[-2]
+        psi = parameters[-1]
+        rot_mat = affine.euler_mat_inv(phi, theta, psi)
+
+        cx = parameters[self.center_inds[2]]
+        cy = parameters[self.center_inds[1]]
+        cz = parameters[self.center_inds[0]]
+
+        # rotated coordinates
+        xrot = (x - cx) * rot_mat[0, 0] + (y - cy) * rot_mat[0, 1] + (z - cz) * rot_mat[0, 2]
+        yrot = (x - cx) * rot_mat[1, 0] + (y - cy) * rot_mat[1, 1] + (z - cz) * rot_mat[1, 2]
+        zrot = (x - cx) * rot_mat[2, 0] + (y - cy) * rot_mat[2, 1] + (z - cz) * rot_mat[2, 2]
+
+        # evaluate base model at rotated coordinates
+        params_base = np.array(parameters[:-3], copy=True)
+        params_base[self.center_inds[2]] = 0
+        params_base[self.center_inds[1]] = 0
+        params_base[self.center_inds[0]] = 0
+
+        return self.base_model.model((zrot, yrot, xrot), params_base)
+
+    def jacobian(self,
+                 coordinates: tuple[np.ndarray],
+                 parameters: np.ndarray) -> list[np.ndarray]:
+        z, y, x = coordinates
+
+        phi = parameters[-3]
+        theta = parameters[-2]
+        psi = parameters[-1]
+        rot_mat = affine.euler_mat_inv(phi, theta, psi)
+
+        cx = parameters[self.center_inds[2]]
+        cy = parameters[self.center_inds[1]]
+        cz = parameters[self.center_inds[0]]
+
+        # rotated coordinates
+        xrot = (x - cx) * rot_mat[0, 0] + (y - cy) * rot_mat[0, 1] + (z - cz) * rot_mat[0, 2]
+        yrot = (x - cx) * rot_mat[1, 0] + (y - cy) * rot_mat[1, 1] + (z - cz) * rot_mat[1, 2]
+        zrot = (x - cx) * rot_mat[2, 0] + (y - cy) * rot_mat[2, 1] + (z - cz) * rot_mat[2, 2]
+
+        dxrot_dcx = -rot_mat[0, 0]
+        dxrot_dcy = -rot_mat[0, 1]
+        dxrot_dcz = -rot_mat[0, 2]
+
+        dyrot_dcx = -rot_mat[1, 0]
+        dyrot_dcy = -rot_mat[1, 1]
+        dyrot_dcz = -rot_mat[1, 2]
+
+        dzrot_dcx = -rot_mat[2, 0]
+        dzrot_dcy = -rot_mat[2, 1]
+        dzrot_dcz = -rot_mat[2, 2]
+
+        # evaluate base model at rotated coordinates
+        params_base = np.array(parameters[:-3], copy=True)
+        params_base[self.center_inds[2]] = 0.
+        params_base[self.center_inds[1]] = 0.
+        params_base[self.center_inds[0]] = 0.
+        jac_base = self.base_model.jacobian((zrot, yrot, xrot), params_base)
+
+        # need to correct jacobian with
+        # (1) derivatives of rotated coordinates wrt centers
+        # (2) derivatives wrt Euler angles
+        j_cx = np.array(jac_base[self.center_inds[2]], copy=True)
+        j_cy = np.array(jac_base[self.center_inds[1]], copy=True)
+        j_cz = np.array(jac_base[self.center_inds[0]], copy=True)
+
+        # need negative sign, because thinking the j_cx and etc. terms as actually taking derivative wrt x, y, z coords
+        # since these enter in the same way as cx, cy, cz, but with opposite sign
+        jac_base[self.center_inds[2]] = -(j_cx * dxrot_dcx + j_cy * dyrot_dcx + j_cz * dzrot_dcx)
+        jac_base[self.center_inds[1]] = -(j_cx * dxrot_dcy + j_cy * dyrot_dcy + j_cz * dzrot_dcy)
+        jac_base[self.center_inds[0]] = -(j_cx * dxrot_dcz + j_cy * dyrot_dcz + j_cz * dzrot_dcz)
+
+        # euler angle derivatives
+        dphi, dtheta, dpsi = affine.euler_mat_inv_derivatives(phi, theta, psi)
+        dxrot_dphi = (x - cx) * dphi[0, 0] + (y - cy) * dphi[0, 1] + (z - cz) * dphi[0, 2]
+        dyrot_dphi = (x - cx) * dphi[1, 0] + (y - cy) * dphi[1, 1] + (z - cz) * dphi[1, 2]
+        dzrot_dphi = (x - cx) * dphi[2, 0] + (y - cy) * dphi[2, 1] + (z - cz) * dphi[2, 2]
+
+        dxrot_dtheta = (x - cx) * dtheta[0, 0] + (y - cy) * dtheta[0, 1] + (z - cz) * dtheta[0, 2]
+        dyrot_dtheta = (x - cx) * dtheta[1, 0] + (y - cy) * dtheta[1, 1] + (z - cz) * dtheta[1, 2]
+        dzrot_dtheta = (x - cx) * dtheta[2, 0] + (y - cy) * dtheta[2, 1] + (z - cz) * dtheta[2, 2]
+
+        dxrot_dpsi = (x - cx) * dpsi[0, 0] + (y - cy) * dpsi[0, 1] + (z - cz) * dpsi[0, 2]
+        dyrot_dpsi = (x - cx) * dpsi[1, 0] + (y - cy) * dpsi[1, 1] + (z - cz) * dpsi[1, 2]
+        dzrot_dpsi = (x - cx) * dpsi[2, 0] + (y - cy) * dpsi[2, 1] + (z - cz) * dpsi[2, 2]
+
+        # need negative sign, because thinking the j_cx and etc. terms as actually taking derivative wrt x, y, z coords
+        # since these enter in the same way as cx, cy, cz, but with opposite sign
+        jphi   = -(j_cx * dxrot_dphi   + j_cy * dyrot_dphi   + j_cz * dzrot_dphi)
+        jtheta = -(j_cx * dxrot_dtheta + j_cy * dyrot_dtheta + j_cz * dzrot_dtheta)
+        jpsi   = -(j_cx * dxrot_dpsi   + j_cy * dyrot_dpsi   + j_cz * dzrot_dpsi)
+
+        jac = jac_base + [jphi, jtheta, jpsi]
+
+        return jac
+
+    def estimate_parameters(self,
+                            data: np.ndarray,
+                            coordinates: tuple[np.ndarray]):
+        pguess_no_rot = self.base_model.estimate_parameters(data, coordinates)
+        pguess = np.concatenate((pguess_no_rot, np.array([0., 0., 0.])))
+        return pguess
+
+    def estimate_bounds(self,
+                        coordinates: tuple[np.ndarray]) -> (tuple[float], tuple[float]):
+        lbs_no_rot, ubs_no_rot = self.base_model.estimate_bounds(coordinates)
+        lbs_angles = (-np.inf, -np.inf, -np.inf)
+        ubs_angles = (np.inf, np.inf, np.inf)
+
+        lbs = lbs_no_rot + lbs_angles
+        ubs = ubs_no_rot + ubs_angles
+
+        return lbs, ubs
+
+    def normalize_parameters(self,
+                             parameters) -> np.ndarray:
+        normalized_params_no_rot = self.base_model.normalize_parameters(parameters[..., :-3])
+
+        if parameters.ndim > 1:
+            normalized_params = np.concatenate((normalized_params_no_rot, parameters[..., -3:]), axis=1)
+        else:
+            normalized_params = np.concatenate((normalized_params_no_rot, parameters[..., -3:]), axis=0)
+
+        return normalized_params
+
+
+class gauss1d(coordinate_model):
     def __init__(self):
         super().__init__(["amp", "center", "sigma", "bg"], 1, has_jacobian=True)
+
     def model(self,
               coordinates: tuple[np.ndarray],
               parameters: np.ndarray):
@@ -270,7 +439,7 @@ class gauss1dm(coordinate_model):
         return param_norm
 
 
-class gauss2dm(coordinate_model):
+class gauss2d(coordinate_model):
     def __init__(self, use_sigma_ratio_parameterization=False):
         if use_sigma_ratio_parameterization:
             super().__init__(["amp", "cx", "cy", "sx", "sy/sx", "bg", "theta"], 2, has_jacobian=True)
@@ -389,11 +558,11 @@ class gauss2d_sum(coordinate_model):
         val = 0
         for ii in range(self.ngaussians - 1):
             ps = np.concatenate((np.array(p[6*ii: 6*ii + 5]), np.array([0]), np.atleast_1d([p[ii * 6 + 5]])))
-            val += gauss2dm().model(coordinates, ps)
+            val += gauss2d().model(coordinates, ps)
 
         # deal with last gaussian, which also gets background term
         ps = np.concatenate((np.array(p[-7:-2]), np.atleast_1d(p[-1]), np.atleast_1d(p[-2])))
-        val += gauss2dm().model(coordinates, ps)
+        val += gauss2d().model(coordinates, ps)
 
         return val
 
@@ -405,12 +574,12 @@ class gauss2d_sum(coordinate_model):
         jac_list = []
         for ii in range(self.ngaussians - 1):
             ps = np.concatenate((np.array(p[6 * ii: 6 * ii + 5]), np.array([0]), np.atleast_1d([p[ii * 6 + 5]])))
-            jac_current = gauss2dm().jacobian(coordinates, ps)
+            jac_current = gauss2d().jacobian(coordinates, ps)
             jac_list += jac_current[:-2] + [jac_current[-1]]
 
         # deal with last gaussian, which also gets background term
         ps = np.concatenate((np.array(p[-7:-2]), np.atleast_1d(p[-1]), np.atleast_1d(p[-2])))
-        jac_current = gauss2dm().jacobian(coordinates, ps)
+        jac_current = gauss2d().jacobian(coordinates, ps)
         jac_list += jac_current[:-2] + [jac_current[-1]] + [jac_current[-2]]
 
         return jac_list
@@ -427,6 +596,7 @@ class gauss2d_sum(coordinate_model):
         return param_norm
 
 
+# todo: should derive this from gauss3d_asymmetric
 class gauss3d(coordinate_model):
     def __init__(self):
         """
@@ -528,10 +698,16 @@ class gauss3d(coordinate_model):
         return norm_params
 
 
-class asymmetric_gaussian3d(coordinate_model):
-    def __init__(self):
-        super().__init__(["A", "cx", "cy", "cz", "sx", "sy/sx", "sz", "theta_xy", "bg"],
-                         3, has_jacobian=True)
+class gauss3d_asymmetric(coordinate_model):
+    def __init__(self, use_sigma_ratio_parameterization: bool = False):
+        self.use_sigma_ratio_parameterization = use_sigma_ratio_parameterization
+
+        if use_sigma_ratio_parameterization:
+            super().__init__(["A", "cx", "cy", "cz", "sx", "sy/sx", "sz", "bg"],
+                             3, has_jacobian=True)
+        else:
+            super().__init__(["A", "cx", "cy", "cz", "sx", "sy", "sz", "bg"],
+                             3, has_jacobian=True)
 
 
     def model(self,
@@ -539,13 +715,15 @@ class asymmetric_gaussian3d(coordinate_model):
               params: np.ndarray):
         z, y, x, = coords
 
-        # rotated coordinates
-        xx_rot = np.cos(params[7]) * (x - params[1]) - np.sin(params[7]) * (y - params[2])
-        yy_rot = np.cos(params[7]) * (y - params[2]) + np.sin(params[7]) * (x - params[1])
+        if self.use_sigma_ratio_parameterization:
+            amp, cx, cy, cz, sx, ratio, sz, bg = params
+            sy = sx * ratio
+        else:
+            amp, cx, cy, cz, sx, sy, sz, bg = params
 
-        vals = params[0] * np.exp(-xx_rot ** 2 / 2 / params[4] ** 2
-                                  - yy_rot ** 2 / 2 / (params[4] * params[5]) ** 2
-                                  - (z - params[3]) ** 2 / 2 / params[6] ** 2) + params[8]
+        vals = amp * np.exp(- (x - cx) ** 2 / 2 / sx ** 2
+                            - (y - cy) ** 2 / 2 / sy ** 2
+                            - (z - cy) ** 2 / 2 / sz ** 2) + bg
 
         return vals
 
@@ -557,45 +735,37 @@ class asymmetric_gaussian3d(coordinate_model):
         z, y, x, = coords
         bcast_shape = (x + y + z).shape
 
-        p = params
-        # rotated coordinates
-        xx_rot = np.cos(p[7]) * (x - p[1]) - np.sin(p[7]) * (y - p[2])
-        yy_rot = np.cos(p[7]) * (y - p[2]) + np.sin(p[7]) * (x - p[1])
-
-        dx_dphi = -np.sin(p[7]) * (x - p[1]) - np.cos(p[7]) * (y - p[2])
-        dy_dphi = -np.sin(p[7]) * (y - p[2]) + np.cos(p[7]) * (x - p[1])
+        if self.use_sigma_ratio_parameterization:
+            amp, cx, cy, cz, sx, ratio, sz, bg = params
+            sy = sx * ratio
+        else:
+            amp, cx, cy, cz, sx, sy, sz, bg = params
 
         # calculate psf at oversampled points
-        val0  = np.exp(-xx_rot ** 2 / 2 / p[4] ** 2
-                       -yy_rot ** 2 / 2 / (p[4] * p[5]) ** 2
-                       -(z - p[3]) ** 2 / 2 / p[6] ** 2)
+        val0 = np.exp(-(x - cx) ** 2 / 2 / sx ** 2
+                      -(y - cy) ** 2 / 2 / sy ** 2
+                      -(z - cz) ** 2 / 2 / sz ** 2)
 
-        dpsf_dcx = 2 * xx_rot * np.cos(p[7]) / 2 / p[4]**2 + \
-                   2 * yy_rot * np.sin(p[7]) / 2 / (p[4] * p[5])**2
+        dpsf_dcx = 2 * (x - cx) / 2 / sx ** 2
+        dpsf_dcy = 2 * (y - cy) / 2 / sy ** 2
+        dpsf_dcz = 2 * (z - cz) / 2 / sz ** 2
 
-        dpsf_dcy = -2 * xx_rot * np.sin(p[7]) / 2 / p[4] ** 2 + \
-                    2 * yy_rot * np.cos(p[7]) / 2 / (p[4] * p[5]) ** 2
+        dpsf_dsx = 2 / sx ** 3 * (x - cx) ** 2 / 2
 
-        dpsf_dcz = 2 * (z - p[3]) / 2 / p[6] ** 2
+        if self.use_sigma_ratio_parameterization:
+            dpsf_dsy_like = 2 / params[5] ** 3 * (y - cy) ** 2 / 2 / params[4] ** 2
+        else:
+            dpsf_dsy_like = 2 / sy ** 3 * (y - cy) ** 2 / 2
 
-        dpsf_dsx = 2 / p[4] ** 3 * xx_rot ** 2 / 2 + \
-                   2 / p[4] ** 3 * yy_rot ** 2 / 2 / p[5] ** 2
-
-        dpsf_dsrat = 2 / p[5] ** 3 * yy_rot**2 / 2 / p[4] ** 2
-
-        dpsf_dsz = 2 / p[6] ** 3 * (z - p[3]) ** 2 / 2
-
-        dpsf_dtheta = 2 * xx_rot / 2 / p[4] ** 2 * dx_dphi + \
-                      2 * yy_rot / 2 / (p[4] * p[5]) ** 2 * dy_dphi
+        dpsf_dsz = 2 / sz ** 3 * (z - cz) ** 2 / 2
 
         jac = [val0,  # A
-               p[0] * dpsf_dcx * val0,  # cx
-               p[0] * dpsf_dcy * val0,  # cy
-               p[0] * dpsf_dcz * val0,  # cz
-               p[0] * dpsf_dsx * val0,  # sx
-               p[0] * dpsf_dsrat * val0,  # sy/sx
-               p[0] * dpsf_dsz * val0,  # sz
-               p[0] * dpsf_dtheta * val0, # theta
+               amp * dpsf_dcx * val0,  # cx
+               amp * dpsf_dcy * val0,  # cy
+               amp * dpsf_dcz * val0,  # cz
+               amp * dpsf_dsx * val0,  # sx
+               amp * dpsf_dsy_like * val0,  # sy/sx or sy
+               amp * dpsf_dsz * val0,  # sz
                np.ones(bcast_shape)  # bg
                ]
 
@@ -621,12 +791,15 @@ class asymmetric_gaussian3d(coordinate_model):
             c1s[ii] = np.sum(img_temp[to_use] * coords[ii][to_use]) / np.sum(img_temp[to_use])
             c2s[ii] = np.sum(img_temp[to_use] * coords[ii][to_use] ** 2) / np.sum(img_temp[to_use])
 
+        # sz, sy, sx
         sigmas = np.sqrt(c2s - c1s ** 2)
+
+        if self.use_sigma_ratio_parameterization:
+            sigmas[1] = sigmas[1] / sigmas[2]
 
         guess_params = np.concatenate((np.array([np.nanmax(img) - np.nanmean(img)]),
                                        np.flip(c1s),
                                        np.flip(sigmas),
-                                       np.array([0.]),
                                        np.array([np.nanmean(img)])
                                        ),
                                       )
@@ -638,8 +811,8 @@ class asymmetric_gaussian3d(coordinate_model):
                         coordinates: tuple[np.ndarray]) -> (tuple[float], tuple[float]):
         z, y, x = coordinates
 
-        lbs = (-np.inf, x.min(), y.min(), z.min(), 0, 0, 0, -np.inf, -np.inf)
-        ubs = (np.inf, x.max(), y.max(), z.max(), np.inf, np.inf, np.inf, np.inf, np.inf)
+        lbs = (-np.inf, x.min(), y.min(), z.min(), 0, 0, 0, -np.inf)
+        ubs = (np.inf, x.max(), y.max(), z.max(), np.inf, np.inf, np.inf, np.inf)
         return lbs, ubs
 
 
@@ -652,158 +825,82 @@ class asymmetric_gaussian3d(coordinate_model):
         return norm_params
 
 
-class gauss3d_rotated(coordinate_model):
-
-    def __init__(self):
+class ellipsoid3d(coordinate_model):
+    def __init__(self, decay_length):
         """
-        3D gaussian, with arbitrary rotation parameterized by Euler angles
-
-        r_body = U_z(psi)^-1 U_y(theta)^-1 U_z(phi)^-1 * r_lab
-        U_z(phi)^-1 = [[cos(phi), -sin(phi), 0], [sin(phi), cos(phi), 0], [0, 0, 1]]
-        f_rot(r_lab) = f(r_body) = f(U^{-1} * r_lab)
-
-        Take the z-axis in the frame of the object, and consider the z-axis in the lab frame. phi and theta describe
-        how the transformation to overlap these two. psi gives the angle the object is rotated about its own axis
-
-        :param p: [A, cx, cy, cz, sigma x_rot, sigma y_rot, sigma z_rot, bg, phi, theta, psi]
-        :return value:
+        3D ellipsoid symmetric in xy
+        @param decay_length: to facilitate fitting, the value outside of the ellipsoid decays exponentially instead of
+        instantly cutting off
         """
-        super().__init__(["amp", "cx", "cy", "cz", "sx", "sy", "sz", "bg", "phi", "theta", "psi"], 3, has_jacobian=True)
-
+        self.decay_length = decay_length
+        super().__init__(["amp", "cx", "cy", "cz", "ax", "ay", "az", "bg"], 3, has_jacobian=True)
 
     def model(self,
               coordinates: tuple[np.ndarray],
-              params: np.ndarray):
+              parameters: np.ndarray) -> np.ndarray:
+        z, y, x = coordinates
+        bcast_shape = (x + y + z).shape
+        
+        amp, cx, cy, cz, ax, ay, az, bg = parameters
 
-        z, y, x, = coordinates
+        surface_val = (x - cx)**2 / ax**2 + (y - cy)**2 / ay**2 + (z - cz)**2 / az**2
+        inside = surface_val <= 1
 
-        phi = params[8]
-        theta = params[9]
-        psi = params[10]
-        rot_mat = affine.euler_mat_inv(phi, theta, psi)
-        xrot = (x - params[1]) * rot_mat[0, 0] + (y - params[2]) * rot_mat[0, 1] + (z - params[3]) * rot_mat[0, 2]
-        yrot = (x - params[1]) * rot_mat[1, 0] + (y - params[2]) * rot_mat[1, 1] + (z - params[3]) * rot_mat[1, 2]
-        zrot = (x - params[1]) * rot_mat[2, 0] + (y - params[2]) * rot_mat[2, 1] + (z - params[3]) * rot_mat[2, 2]
-        val = params[0] * np.exp(-xrot ** 2 / (2 * params[4] ** 2) - yrot ** 2 / (2 * params[5] ** 2) - zrot ** 2 / (2 * params[6] ** 2)) + \
-              params[7]
+        val = np.zeros(bcast_shape)
+        val[inside] = amp
+        val[np.logical_not(inside)] = amp * np.exp(-surface_val[np.logical_not(inside)] / self.decay_length)
+        val += bg
 
         return val
 
-
     def jacobian(self,
                  coordinates: tuple[np.ndarray],
-                 parameters: np.ndarray):
+                 parameters: np.ndarray) -> list[np.ndarray]:
 
-        z, y, x = coordinates
-        bcast_shape = (x + y + z).shape
+        z, y, x = np.broadcast_arrays(*coordinates)
+        bcast_shape = x.shape
 
-        p = parameters
-        phi = p[8]
-        theta = p[9]
-        psi = p[10]
+        amp, cx, cy, cz, ax, ay, az, bg = parameters
 
-        rot_mat = affine.euler_mat_inv(phi, theta, psi)
-        dphi, dtheta, dpsi = affine.euler_mat_inv_derivatives(phi, theta, psi)
+        # building blocks of jacobian
+        surface_val = (x - cx) ** 2 / ax ** 2 + (y - cy) ** 2 / ay ** 2 + (z - cz) ** 2 / az ** 2
+        ds_dcx = - 2 * (x - cx) / ax ** 2
+        ds_dcy = - 2 * (y - cy) / ay ** 2
+        ds_dcz = - 2 * (z - cz) / az ** 2
+        ds_dax = - 2 * (x - cx)**2 / ax ** 3
+        ds_day = - 2 * (y - cy)**2 / ay ** 3
+        ds_daz = -2 * (z - cz)**2 / az ** 2
 
-        xrot = (x - p[1]) * rot_mat[0, 0] + (y - p[2]) * rot_mat[0, 1] + (z - p[3]) * rot_mat[0, 2]
-        yrot = (x - p[1]) * rot_mat[1, 0] + (y - p[2]) * rot_mat[1, 1] + (z - p[3]) * rot_mat[1, 2]
-        zrot = (x - p[1]) * rot_mat[2, 0] + (y - p[2]) * rot_mat[2, 1] + (z - p[3]) * rot_mat[2, 2]
-        exp = np.exp(-xrot ** 2 / (2 * p[4] ** 2) - yrot ** 2 / (2 * p[5] ** 2) - zrot ** 2 / (2 * p[6] ** 2))
+        exp_decay = np.exp(-surface_val / self.decay_length)
+        inside = surface_val <= 1
+        outside = np.logical_not(inside)
 
-        jac = [exp,
-               p[0] * exp * (xrot / p[4] ** 2 * rot_mat[0, 0] + yrot / p[5] ** 2 * rot_mat[1, 0] + zrot / p[6] ** 2 *
-                             rot_mat[2, 0]),
-               p[0] * exp * (xrot / p[4] ** 2 * rot_mat[0, 1] + yrot / p[5] ** 2 * rot_mat[1, 1] + zrot / p[6] ** 2 *
-                             rot_mat[2, 1]),
-               p[0] * exp * (xrot / p[4] ** 2 * rot_mat[0, 2] + yrot / p[5] ** 2 * rot_mat[1, 2] + zrot / p[6] ** 2 *
-                             rot_mat[2, 2]),
-               p[0] * exp * xrot ** 2 / p[4] ** 3,
-               p[0] * exp * yrot ** 2 / p[5] ** 3,
-               p[0] * exp * zrot ** 2 / p[6] ** 3,
-               np.ones(bcast_shape),
-               -p[0] * exp * (
-                       (xrot / p[4] ** 2) * (
-                           (x - p[1]) * dphi[0, 0] + (y - p[2]) * dphi[0, 1] + (z - p[3]) * dphi[0, 2]) +
-                       (yrot / p[5] ** 2) * (
-                                   (x - p[1]) * dphi[1, 0] + (y - p[2]) * dphi[1, 1] + (z - p[3]) * dphi[1, 2]) +
-                       (zrot / p[6] ** 2) * (
-                                   (x - p[1]) * dphi[2, 0] + (y - p[2]) * dphi[2, 1] + (z - p[3]) * dphi[2, 2])),
-               -p[0] * exp * (
-                       (xrot / p[4] ** 2) * (
-                           (x - p[1]) * dtheta[0, 0] + (y - p[2]) * dtheta[0, 1] + (z - p[3]) * dtheta[0, 2]) +
-                       (yrot / p[5] ** 2) * (
-                                   (x - p[1]) * dtheta[1, 0] + (y - p[2]) * dtheta[1, 1] + (z - p[3]) * dtheta[1, 2]) +
-                       (zrot / p[6] ** 2) * (
-                                   (x - p[1]) * dtheta[2, 0] + (y - p[2]) * dtheta[2, 1] + (z - p[3]) * dtheta[2, 2])),
-               -p[0] * exp * (
-                       (xrot / p[4] ** 2) * (
-                           (x - p[1]) * dpsi[0, 0] + (y - p[2]) * dpsi[0, 1] + (z - p[3]) * dpsi[0, 2]) +
-                       (yrot / p[5] ** 2) * (
-                                   (x - p[1]) * dpsi[1, 0] + (y - p[2]) * dpsi[1, 1] + (z - p[3]) * dpsi[1, 2]) +
-                       (zrot / p[6] ** 2) * (
-                                   (x - p[1]) * dpsi[2, 0] + (y - p[2]) * dpsi[2, 1] + (z - p[3]) * dpsi[2, 2]))
-               ]
+        dexp_ds = np.zeros(bcast_shape)
+        dexp_ds[outside] = amp * -1 / self.decay_length * exp_decay[outside]
+
+        # jacobian components
+        df_damp = np.zeros(bcast_shape)
+        df_damp[outside] = exp_decay[outside]
+
+        jac = [df_damp,
+               dexp_ds * ds_dcx,
+               dexp_ds * ds_dcy,
+               dexp_ds * ds_dcz,
+               dexp_ds * ds_dax,
+               dexp_ds * ds_day,
+               dexp_ds * ds_daz,
+               np.ones(bcast_shape)]
 
         return jac
-
 
     def estimate_parameters(self,
                             data: np.ndarray,
                             coordinates: tuple[np.ndarray]):
-        z, y, x = coordinates
-
-        # subtract smallest value so positive
-        img_temp = data
-        to_use = np.logical_and(np.logical_not(np.isnan(img_temp)), img_temp > 0)
-
-        if data.ndim != len(coordinates):
-            raise ValueError("len(coords) != img.ndim")
-
-        # compute moments
-        c1s = np.zeros(data.ndim)
-        c2s = np.zeros(data.ndim)
-        for ii in range(data.ndim):
-            c1s[ii] = np.sum(img_temp[to_use] * coordinates[ii][to_use]) / np.sum(img_temp[to_use])
-            c2s[ii] = np.sum(img_temp[to_use] * coordinates[ii][to_use] ** 2) / np.sum(img_temp[to_use])
-
-        sigmas = np.sqrt(c2s - c1s ** 2)
-
-        guess_params = np.concatenate((np.array([np.nanmax(data) - np.nanmean(data)]),
-                                       np.flip(c1s),
-                                       np.flip(sigmas),
-                                       np.array([np.nanmean(data)]),
-                                       np.array([0.]),
-                                       np.array([0.]),
-                                       np.array([0.]),
-                                       ),
-                                      )
-
-        return self.normalize_parameters(guess_params)
-
+        return gauss3d_asymmetric().estimate_parameters(data, coordinates)
 
     def estimate_bounds(self,
-                        coordinates: tuple[np.ndarray]):
-        z, y, x = coordinates
-        diff_max = np.max([x.max() - x.min(), y.max() - y.min(), z.max() - z.min()])
-
-        lbs = (-np.inf, x.min(), y.min(), z.min(), 0, 0, 0, -np.inf, -np.inf, -np.inf, -np.inf)
-        ubs = (np.inf, x.max(), y.max(), z.max(), diff_max, diff_max, diff_max, np.inf, np.inf, np.inf, np.inf)
-        return lbs, ubs
-
-
-    def normalize_parameters(self,
-                             parameters):
-        param_norm = np.array(parameters, copy=True)
-        # normalize sigmas
-        param_norm[..., 4] = np.abs(param_norm[..., 4])
-        param_norm[..., 5] = np.abs(param_norm[..., 5])
-        param_norm[..., 6] = np.abs(param_norm[..., 6])
-        # normalize angles
-        # param_norm[..., 8] = np.mod(param_norm[..., 8], 2*np.pi)
-        # param_norm[..., 9] = np.mod(param_norm[..., 9], 2*np.pi)
-        # param_norm[..., 10] = np.mode(param_norm[..., 10], 2*np.pi)
-
-        return param_norm
+                        coordinates: tuple[np.ndarray]) -> (tuple[float], tuple[float]):
+        return gauss3d_asymmetric().estimate_bounds(coordinates)
 
 
 class line_piecewisem(coordinate_model):

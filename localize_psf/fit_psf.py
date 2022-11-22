@@ -522,7 +522,7 @@ class asymmetric_gaussian3d(from_coordinate_model):
                  angles: tuple[float] = (0., 0., 0.)
                  ):
 
-        super().__init__(fit.asymmetric_gaussian3d(), dc=dc, sf=sf, angles=angles)
+        super().__init__(fit.gauss3d_asymmetric(), dc=dc, sf=sf, angles=angles)
 
 
 class gaussian3d_rotated(from_coordinate_model):
@@ -532,7 +532,10 @@ class gaussian3d_rotated(from_coordinate_model):
                  angles: tuple[float] = (0., 0., 0.)
                  ):
 
-        super().__init__(fit.gauss3d_rotated(), dc=dc, sf=sf, angles=angles)
+        gauss3d = fit.gauss3d()
+        gauss3d_rotated = fit.rotated_model(gauss3d, (3, 2, 1))
+
+        super().__init__(gauss3d_rotated, dc=dc, sf=sf, angles=angles)
 
 
 class gaussian2d_psf_model(pixelated_psf_model):
