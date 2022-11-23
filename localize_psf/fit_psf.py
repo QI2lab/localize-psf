@@ -495,13 +495,13 @@ class gaussian3d_psf_model(from_coordinate_model):
     """
     Gaussian approximation to PSF.
 
-    Since a diffraction limited PSF does not trully have a Gaussian form, we must choose some metric measuring
+    Since a diffraction limited PSF does not truly have a Gaussian form, we must choose some metric measuring
     the difference between the real PSF and the Gaussian PSF. For example, minimizing the difference between
     the two using an L1 metric results in the estimate
     sigma_xy = 0.22 * lambda / NA.
     See https://doi.org/10.1364/AO.46.001819 for more details.
 
-    TWee arrive at a similar estimate from equating the FWHM of the Gaussian and the airy function.
+    We arrive at a similar estimate from equating the FWHM of the Gaussian and the airy function.
     FWHM = 2 * sqrt{2*log(2)} * sigma ~ 0.51 * wavelength / NA
 
     sigma_z = np.sqrt(6) / np.pi * ni * wavelength / NA ** 2
@@ -515,7 +515,10 @@ class gaussian3d_psf_model(from_coordinate_model):
         super().__init__(fit.gauss3d(), dc=dc, sf=sf, angles=angles)
 
 
-class asymmetric_gaussian3d(from_coordinate_model):
+class gaussian3d_asymmetric_pixelated(from_coordinate_model):
+    """
+    3D gaussian with equal sigma_x and sigma_y
+    """
     def __init__(self,
                  dc: Optional[float] = None,
                  sf: int = 1,
@@ -525,7 +528,10 @@ class asymmetric_gaussian3d(from_coordinate_model):
         super().__init__(fit.gauss3d_asymmetric(), dc=dc, sf=sf, angles=angles)
 
 
-class gaussian3d_rotated(from_coordinate_model):
+class gaussian3d_rotated_pixelated(from_coordinate_model):
+    """
+    3D gaussian with equal sigma_x and sigma_y rotated by an arbitrary angle
+    """
     def __init__(self,
                  dc: Optional[float] = None,
                  sf: int = 1,
@@ -536,6 +542,21 @@ class gaussian3d_rotated(from_coordinate_model):
         gauss3d_rotated = fit.rotated_model(gauss3d, (3, 2, 1))
 
         super().__init__(gauss3d_rotated, dc=dc, sf=sf, angles=angles)
+
+
+class gaussian3d_asymmetric_rotated_pixelated(from_coordinate_model):
+    """
+    3D gaussian with arbitrary sigma_x, sigma_y, sigma_z rotated by an arbitrary angle
+    """
+
+    def __init__(self,
+                 dc: Optional[float] = None,
+                 sf: int = 1,
+                 angles: tuple[float] = (0., 0., 0.)
+                 ):
+        model_rotated = fit.rotated_model(fit.gauss3d_asymmetric(), (3, 2, 1))
+
+        super().__init__(model_rotated, dc=dc, sf=sf, angles=angles)
 
 
 class gaussian2d_psf_model(pixelated_psf_model):

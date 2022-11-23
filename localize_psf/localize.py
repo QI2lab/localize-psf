@@ -703,16 +703,26 @@ def fit_rois(img_rois: list[np.ndarray],
             raise NotImplementedError("sampling factors other than 1 are not implemented for GPU fitting")
         # todo: if requires more memory than GPU has, split into chunks
 
-        if isinstance(model, psf.gaussian3d_psf_model):
-            model_id = gf.ModelID.GAUSS_3D_ARB
-        elif isinstance(model, psf.gaussian_lorentzian_psf_model):
-            model_id = gf.ModelID.GAUSS_LOR_3D_ARB
-        else:
-            raise NotImplementedError("only 'gaussian3d_psf' and 'gaussian_lorentzian_psf' have"
-                                      " corresponding GPU implementations")
-        # todo: implemented on GPU but not CPU
-        # elif fn == 0:
-        #     model_id = gf.ModelID.GAUSS_3D_ROT_ARB
+        models_mapping = ((psf.gaussian3d_psf_model, gf.ModelID.GAUSS_3D_ARB),
+                          (psf.gaussian_lorentzian_psf_model, gf.ModelID.GAUSS_LOR_3D_ARB),
+                          (psf.gaussian3d_asymmetric_rotated_pixelated, gf.ModelID.GAUSS_3D_ROT_ARB)
+                          )
+        model_id = None
+        for mod, mod_gpu in models_mapping:
+            if isinstance(model, mod):
+                model_id = mod_gpu
+
+        if model_id is None:
+            raise NotImplementedError(f"model of type {type(model)} has not been implemented in gpufit."
+                                      f"The models which have been implemented are {[a for a, b in models_mapping]}")
+
+        # if isinstance(model, psf.gaussian3d_psf_model):
+        #     model_id = gf.ModelID.GAUSS_3D_ARB
+        # elif isinstance(model, psf.gaussian_lorentzian_psf_model):
+        #     model_id = gf.ModelID.GAUSS_LOR_3D_ARB
+        # else:
+        #     raise NotImplementedError("only 'gaussian3d_psf' and 'gaussian_lorentzian_psf' have"
+        #                               " corresponding GPU implementations")
 
         nparams = model.nparams
 
