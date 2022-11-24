@@ -381,9 +381,87 @@ class rotated_model(coordinate_model):
         return normalized_params
 
 
+class fixed_parameter_model(coordinate_model):
+    """
+    Create a new model by fixing some parameters in a different model
+    """
+
+    def __init__(self,
+                 model,
+                 fixed_inds: tuple[int],
+                 fixed_values: tuple[float]):
+        self.base_model = model
+        self.fixed_inds = fixed_inds
+        self.fixed_mask = np.array([True if ii in fixed_inds else False for ii in range(model.nparams)])
+        self.fixed_values = fixed_values
+
+        self.unfixed_inds = tuple([ii for ii in range(model.nparams) if ii not in fixed_inds])
+        self.unfixed_mask = np.logical_not(self.fixed_mask)
+
+        param_names_not_fixed = [p for ii, p in enumerate(model.parameter_names) if ii not in fixed_inds]
+
+        super().__init__(param_names_not_fixed,
+                         has_jacobian=model.has_jacobian,
+                         ndims=model.ndims)
+
+    def model(self,
+              coordinates: tuple[np.ndarray],
+              parameters: np.ndarray) -> np.ndarray:
+
+        p = np.zeros(self.base_model.nparams)
+        p[self.fixed_mask] = np.array(self.fixed_values)
+        p[self.unfixed_mask] = parameters
+
+        return self.base_model.model(coordinates, p)
+
+    def jacobian(self,
+                 coordinates: tuple[np.ndarray],
+                 parameters: np.ndarray) -> list[np.ndarray]:
+
+        p = np.zeros(self.base_model.nparams)
+        p[self.fixed_mask] = np.array(self.fixed_values)
+        p[self.unfixed_mask] = parameters
+
+        jac = [j for ii, j in enumerate(self.base_model.jacobian(coordinates, p)) if ii not in self.fixed_inds]
+        return jac
+
+    def estimate_parameters(self,
+                            data: np.ndarray,
+                            coordinates: tuple[np.ndarray]):
+
+        p = self.base_model.estimate_parameters(data, coordinates)
+        p_out = p[self.unfixed_mask]
+
+        return p_out
+
+    def estimate_bounds(self,
+                        coordinates: tuple[np.ndarray]) -> (tuple[float], tuple[float]):
+
+
+        lbs_full, ubs_full = self.base_model.estimate_bounds(coordinates)
+        lbs = tuple([lb for ii, lb in enumerate(lbs_full) if ii not in self.fixed_inds])
+        ubs = tuple([ub for ii, ub in enumerate(ubs_full) if ii not in self.fixed_inds])
+
+        return lbs, ubs
+
+    def normalize_parameters(self,
+                             parameters) -> np.ndarray:
+
+        p = np.zeros(parameters.shape[:-1] + (self.base_model.nparams,))
+        p[..., self.fixed_mask] = np.array(self.fixed_values)
+        p[..., self.unfixed_mask] = parameters
+
+        p_norm = self.base_model.normalize_parameters(p)
+        p_out = p_norm[..., self.unfixed_mask]
+
+        return p_out
+
+
 class gauss1d(coordinate_model):
     def __init__(self):
-        super().__init__(["amp", "center", "sigma", "bg"], 1, has_jacobian=True)
+        super().__init__(["amp", "center", "sigma", "bg"],
+                         ndims=1,
+                         has_jacobian=True)
 
     def model(self,
               coordinates: tuple[np.ndarray],
@@ -396,13 +474,15 @@ class gauss1d(coordinate_model):
                  coordinates: tuple[np.ndarray],
                  parameters: np.ndarray):
 
+        amp, c, sig, bg = parameters
+
         x, = coordinates
         # useful functions that show up in derivatives
-        exps = np.exp(-(x - parameters[1]) ** 2 / (2 * parameters[2] ** 2))
+        exps = np.exp(-(x - c) ** 2 / (2 * sig ** 2))
 
         jac = [exps,
-               parameters[0] * exps * (x / parameters[2] ** 2 ),
-               parameters[0] * exps * x ** 2 / parameters[2] ** 3,
+               amp * exps * (x - c) / parameters[2] ** 2,
+               amp * exps * (x - c) ** 2 / parameters[2] ** 3,
                np.ones(x.shape),
                ]
 
@@ -596,7 +676,7 @@ class gauss2d_sum(coordinate_model):
         return param_norm
 
 
-# todo: should derive this from gauss3d_asymmetric
+# todo: should derive this from gauss3d_asymmetric?
 class gauss3d(coordinate_model):
     def __init__(self):
         """
@@ -723,7 +803,7 @@ class gauss3d_asymmetric(coordinate_model):
 
         vals = amp * np.exp(- (x - cx) ** 2 / 2 / sx ** 2
                             - (y - cy) ** 2 / 2 / sy ** 2
-                            - (z - cy) ** 2 / 2 / sz ** 2) + bg
+                            - (z - cz) ** 2 / 2 / sz ** 2) + bg
 
         return vals
 
@@ -750,10 +830,14 @@ class gauss3d_asymmetric(coordinate_model):
         dpsf_dcy = 2 * (y - cy) / 2 / sy ** 2
         dpsf_dcz = 2 * (z - cz) / 2 / sz ** 2
 
-        dpsf_dsx = 2 / sx ** 3 * (x - cx) ** 2 / 2
+        if self.use_sigma_ratio_parameterization:
+            dpsf_dsx = 2 / sx ** 3 * (x - cx) ** 2 / 2 + \
+                       2 / sx ** 3 * (y - cy) ** 2 / 2 / ratio ** 2
+        else:
+            dpsf_dsx = 2 / sx ** 3 * (x - cx) ** 2 / 2
 
         if self.use_sigma_ratio_parameterization:
-            dpsf_dsy_like = 2 / params[5] ** 3 * (y - cy) ** 2 / 2 / params[4] ** 2
+            dpsf_dsy_like = 2 / ratio ** 3 * (y - cy) ** 2 / 2 / sx ** 2
         else:
             dpsf_dsy_like = 2 / sy ** 3 * (y - cy) ** 2 / 2
 
