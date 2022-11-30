@@ -37,14 +37,15 @@ def adc2photons(img: array,
 
 
 def simulated_img(ground_truth: array,
-                  gains: array,
-                  offsets: array,
-                  readout_noise_sds: array,
+                  gains: Union[array, float, int],
+                  offsets: Union[array, float, int],
+                  readout_noise_sds: Union[array, float, int],
                   psf: Optional[array] = None,
                   photon_shot_noise: bool = True,
                   bin_size: int = 1,
                   apodization: array = 1,
-                  saturation: Optional[int] = None) -> (array, array):
+                  saturation: Optional[int] = None,
+                  image_is_integer: bool = True) -> (array, array):
     """
     Convert ground truth image to simulated camera image including the effects of
     photon shot noise, camera readout noise, and saturation
@@ -59,6 +60,7 @@ def simulated_img(ground_truth: array,
     finer pixel grid.
     :param apodization: apodization used during PSF blurring
     :param saturation: set any values in final image larger than this value to this value
+    :param image_is_integer: force image to be integer value
     :return img, snr:
     """
 
@@ -93,7 +95,11 @@ def simulated_img(ground_truth: array,
 
     # convert from photons to ADU
     # todo: is this the appropriate way to convert to integer, or does it introduce some bias?
-    img = xp.round(gains * img_shot_noise + readout_noise + offsets).astype(int)
+    img = gains * img_shot_noise + readout_noise + offsets
+
+    if image_is_integer:
+        img = xp.round(img).astype(int)
+
     img[img < 0] = 0
 
     if saturation is not None:
