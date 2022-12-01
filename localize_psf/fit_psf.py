@@ -509,10 +509,11 @@ class gaussian3d_psf_model(from_coordinate_model):
     def __init__(self,
                  dc: Optional[float] = None,
                  sf: int = 1,
-                 angles: tuple[float] = (0., 0., 0.)
+                 angles: tuple[float] = (0., 0., 0.),
+                 minimum_sigmas: tuple[float] = (0., 0.)
                  ):
 
-        super().__init__(fit.gauss3d(), dc=dc, sf=sf, angles=angles)
+        super().__init__(fit.gauss3d(minimum_sigmas=minimum_sigmas), dc=dc, sf=sf, angles=angles)
 
 
 class gaussian3d_asymmetric_pixelated(from_coordinate_model):
@@ -522,10 +523,11 @@ class gaussian3d_asymmetric_pixelated(from_coordinate_model):
     def __init__(self,
                  dc: Optional[float] = None,
                  sf: int = 1,
-                 angles: tuple[float] = (0., 0., 0.)
+                 angles: tuple[float] = (0., 0., 0.),
+                 minimum_sigmas: tuple[float] = (0., 0., 0.)
                  ):
 
-        super().__init__(fit.gauss3d_asymmetric(), dc=dc, sf=sf, angles=angles)
+        super().__init__(fit.gauss3d_asymmetric(minimum_sigmas=minimum_sigmas), dc=dc, sf=sf, angles=angles)
 
 
 class gaussian3d_rotated_pixelated(from_coordinate_model):
@@ -535,10 +537,11 @@ class gaussian3d_rotated_pixelated(from_coordinate_model):
     def __init__(self,
                  dc: Optional[float] = None,
                  sf: int = 1,
-                 angles: tuple[float] = (0., 0., 0.)
+                 angles: tuple[float] = (0., 0., 0.),
+                 minimum_sigmas: tuple[float] = (0., 0.)
                  ):
 
-        gauss3d = fit.gauss3d()
+        gauss3d = fit.gauss3d(minimum_sigmas=minimum_sigmas)
         gauss3d_rotated = fit.rotated_model(gauss3d, (3, 2, 1))
 
         super().__init__(gauss3d_rotated, dc=dc, sf=sf, angles=angles)
@@ -552,9 +555,10 @@ class gaussian3d_asymmetric_rotated_pixelated(from_coordinate_model):
     def __init__(self,
                  dc: Optional[float] = None,
                  sf: int = 1,
-                 angles: tuple[float] = (0., 0., 0.)
+                 angles: tuple[float] = (0., 0., 0.),
+                 minimum_sigmas: tuple[float] = (0., 0., 0.)
                  ):
-        model_rotated = fit.rotated_model(fit.gauss3d_asymmetric(), (3, 2, 1))
+        model_rotated = fit.rotated_model(fit.gauss3d_asymmetric(minimum_sigmas=minimum_sigmas), (3, 2, 1))
 
         super().__init__(model_rotated, dc=dc, sf=sf, angles=angles)
 

@@ -678,10 +678,12 @@ class gauss2d_sum(coordinate_model):
 
 # todo: should derive this from gauss3d_asymmetric?
 class gauss3d(coordinate_model):
-    def __init__(self):
+    def __init__(self,
+                 minimum_sigmas: tuple[float] = (0., 0.)):
         """
         3D gaussian symmetric in xy
         """
+        self.minimum_sigmas = minimum_sigmas
         super().__init__(["amp", "cx", "cy", "cz", "sxy", "sz", "bg"], 3, has_jacobian=True)
 
 
@@ -690,12 +692,14 @@ class gauss3d(coordinate_model):
               params: np.ndarray) -> np.ndarray:
 
         z, y, x, = coordinates
+        amp, cx, cy, cz, sxy, sz, bg = params
+        sxy_min, sz_min = self.minimum_sigmas
 
         # calculate psf at oversampled points
-        val = params[0] * np.exp(-(x - params[1]) ** 2 / 2 / params[4] ** 2
-                                 -(y - params[2]) ** 2 / 2 / params[4] ** 2
-                                 -(z - params[3]) ** 2 / 2 / params[5] ** 2
-                                ) + params[6]
+        val = amp * np.exp(-(x - cx) ** 2 / 2 / (sxy_min ** 2 + sxy ** 2)
+                           -(y - cy) ** 2 / 2 / (sxy_min ** 2 + sxy ** 2)
+                           -(z - cz) ** 2 / 2 / (sz_min ** 2 + sz ** 2)
+                           ) + bg
 
         return val
 
@@ -705,22 +709,23 @@ class gauss3d(coordinate_model):
                  params: np.ndarray) -> list[np.ndarray]:
 
         z, y, x = coordinates
+        amp, cx, cy, cz, sxy, sz, bg = params
+        sxy_min, sz_min = self.minimum_sigmas
         bcast_shape = (x + y + z).shape
 
         # use sxy * |sxy| instead of sxy**2 to enforce sxy > 0
-        v = np.exp(-(x - params[1]) ** 2 / 2 / params[4] ** 2
-                   - (y - params[2]) ** 2 / 2 / params[4] ** 2
-                   - (z - params[3]) ** 2 / 2 / params[5] ** 2
+        v = np.exp(-(x - cx) ** 2 / 2 / (sxy_min ** 2 + sxy ** 2)
+                   -(y - cy) ** 2 / 2 / (sxy_min ** 2 + sxy ** 2)
+                   -(z - cz) ** 2 / 2 / (sz_min ** 2 + sz ** 2)
                   )
 
         # [A, cx, cy, cz, sxy, sz, bg]
         jac = [v,
-               params[0] * 2 * (x - params[1]) / 2 / params[4] ** 2 * v,
-               params[0] * 2 * (y - params[2]) / 2 / params[4] ** 2 * v,
-               params[0] * 2 * (z - params[3]) / 2 / params[5] ** 2 * v,
-               params[0] * (2 / params[4] ** 3 * (x - params[1]) ** 2 / 2 +
-                            2 / params[4] ** 3 * (y - params[2]) ** 2 / 2) * v,
-               params[0] * 2 / params[5] ** 3 * (z - params[3]) ** 2 / 2 * v,
+               amp * v * 2 * (x - cx) / 2 / (sxy_min ** 2 + sxy ** 2),
+               amp * v * 2 * (y - params[2]) / 2 / (sxy_min ** 2 + sxy ** 2),
+               amp * v * 2 * (z - params[3]) / 2 / (sz_min ** 2 + sz ** 2),
+               amp * v * (2 * sxy / (sxy_min ** 2 + sxy ** 2) ** 2) * ((x - cx) ** 2 / 2 + (y - cy) ** 2 / 2),
+               amp * v * 2 * sz / (sz_min ** 2 + sz ** 2) ** 2 * (z - cz) ** 2 / 2,
                np.ones(bcast_shape)]
 
         return jac
@@ -779,8 +784,11 @@ class gauss3d(coordinate_model):
 
 
 class gauss3d_asymmetric(coordinate_model):
-    def __init__(self, use_sigma_ratio_parameterization: bool = False):
+    def __init__(self,
+                 use_sigma_ratio_parameterization: bool = False,
+                 minimum_sigmas: tuple[float] = (0., 0., 0.)):
         self.use_sigma_ratio_parameterization = use_sigma_ratio_parameterization
+        self.minimum_sigmas = minimum_sigmas
 
         if use_sigma_ratio_parameterization:
             super().__init__(["A", "cx", "cy", "cz", "sx", "sy/sx", "sz", "bg"],
@@ -793,7 +801,9 @@ class gauss3d_asymmetric(coordinate_model):
     def model(self,
               coords: tuple[np.ndarray],
               params: np.ndarray):
+
         z, y, x, = coords
+        sx_min, sy_min, sz_min = self.minimum_sigmas
 
         if self.use_sigma_ratio_parameterization:
             amp, cx, cy, cz, sx, ratio, sz, bg = params
@@ -801,9 +811,9 @@ class gauss3d_asymmetric(coordinate_model):
         else:
             amp, cx, cy, cz, sx, sy, sz, bg = params
 
-        vals = amp * np.exp(- (x - cx) ** 2 / 2 / sx ** 2
-                            - (y - cy) ** 2 / 2 / sy ** 2
-                            - (z - cz) ** 2 / 2 / sz ** 2) + bg
+        vals = amp * np.exp(- (x - cx) ** 2 / 2 / (sx_min ** 2 + sx ** 2)
+                            - (y - cy) ** 2 / 2 / (sy_min ** 2 + sy ** 2)
+                            - (z - cz) ** 2 / 2 / (sz_min ** 2 + sz ** 2)) + bg
 
         return vals
 
@@ -813,6 +823,7 @@ class gauss3d_asymmetric(coordinate_model):
                  params: np.ndarray):
 
         z, y, x, = coords
+        sx_min, sy_min, sz_min = self.minimum_sigmas
         bcast_shape = (x + y + z).shape
 
         if self.use_sigma_ratio_parameterization:
@@ -822,26 +833,26 @@ class gauss3d_asymmetric(coordinate_model):
             amp, cx, cy, cz, sx, sy, sz, bg = params
 
         # calculate psf at oversampled points
-        val0 = np.exp(-(x - cx) ** 2 / 2 / sx ** 2
-                      -(y - cy) ** 2 / 2 / sy ** 2
-                      -(z - cz) ** 2 / 2 / sz ** 2)
+        val0 = np.exp(-(x - cx) ** 2 / 2 / (sx_min ** 2 + sx ** 2)
+                      -(y - cy) ** 2 / 2 / (sy_min ** 2 + sy ** 2)
+                      -(z - cz) ** 2 / 2 / (sz_min ** 2 + sz ** 2))
 
-        dpsf_dcx = 2 * (x - cx) / 2 / sx ** 2
-        dpsf_dcy = 2 * (y - cy) / 2 / sy ** 2
-        dpsf_dcz = 2 * (z - cz) / 2 / sz ** 2
-
-        if self.use_sigma_ratio_parameterization:
-            dpsf_dsx = 2 / sx ** 3 * (x - cx) ** 2 / 2 + \
-                       2 / sx ** 3 * (y - cy) ** 2 / 2 / ratio ** 2
-        else:
-            dpsf_dsx = 2 / sx ** 3 * (x - cx) ** 2 / 2
+        dpsf_dcx = 2 * (x - cx) / 2 / (sx_min ** 2 + sx ** 2)
+        dpsf_dcy = 2 * (y - cy) / 2 / (sy_min ** 2 + sy ** 2)
+        dpsf_dcz = 2 * (z - cz) / 2 / (sz_min ** 2 + sz ** 2)
 
         if self.use_sigma_ratio_parameterization:
-            dpsf_dsy_like = 2 / ratio ** 3 * (y - cy) ** 2 / 2 / sx ** 2
+            dpsf_dsx = 2 * sx / (sx_min ** 2 + sx ** 2) ** 2 * (x - cx) ** 2 / 2 + \
+                       2 * sx * ratio ** 2 / (sy_min ** 2 + ratio ** 2 * sx ** 2) ** 2 * (y - cy) ** 2 / 2
         else:
-            dpsf_dsy_like = 2 / sy ** 3 * (y - cy) ** 2 / 2
+            dpsf_dsx = 2 * sx / (sx_min ** 2 + sx ** 2) ** 2 * (x - cx) ** 2 / 2
 
-        dpsf_dsz = 2 / sz ** 3 * (z - cz) ** 2 / 2
+        if self.use_sigma_ratio_parameterization:
+            dpsf_dsy_like = 2 * ratio * sx ** 2 / (sy_min ** 2 + ratio ** 2 * sx ** 2)**2 * (y - cy) ** 2 / 2
+        else:
+            dpsf_dsy_like = 2 * sy / (sy_min ** 2 + sy ** 2) ** 2 * (y - cy) ** 2 / 2
+
+        dpsf_dsz = 2 * sz / (sz_min ** 2 + sz ** 2) ** 2 * (z - cz) ** 2 / 2
 
         jac = [val0,  # A
                amp * dpsf_dcx * val0,  # cx
