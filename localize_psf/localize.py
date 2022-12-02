@@ -814,21 +814,22 @@ def fit_rois(img_rois: list[np.ndarray],
     return fit_results
 
 
-def plot_gauss_roi(fit_params: list[float],
-                   roi: list[int],
-                   imgs: np.ndarray,
-                   coords: Optional[tuple[np.ndarray]] = None,
-                   init_params: Optional[np.ndarray] = None,
-                   model: psf.pixelated_psf_model = psf.gaussian3d_psf_model(),
-                   string: Optional[str] = None,
-                   same_color_scale: bool = True,
-                   vmin: Optional[float] = None,
-                   vmax: Optional[float] = None,
-                   cmap="bone",
-                   gamma: float = 1.,
-                   figsize: tuple[float] = (16, 8),
-                   prefix: str = "",
-                   save_dir: Optional[str] = None):
+def plot_fit_roi(fit_params: list[float],
+                 roi: list[int],
+                 imgs: np.ndarray,
+                 coords: Optional[tuple[np.ndarray]] = None,
+                 init_params: Optional[np.ndarray] = None,
+                 model: psf.pixelated_psf_model = psf.gaussian3d_psf_model(),
+                 string: Optional[str] = None,
+                 same_color_scale: bool = True,
+                 vmin: Optional[float] = None,
+                 vmax: Optional[float] = None,
+                 cmap="bone",
+                 gamma: float = 1.,
+                 scale_z_display: float = 1.,
+                 figsize: tuple[float] = (16, 8),
+                 prefix: str = "",
+                 save_dir: Optional[str] = None):
     """
     Plot results obtained from fitting functions fit_gauss_roi() or fit_gauss_rois()
     :param fit_params:
@@ -883,18 +884,18 @@ def plot_gauss_roi(fit_params: list[float],
     img_fit = model.model((z_roi, y_roi, x_roi), fit_params)
 
     # set extents
-    extent_yx = [y_roi[0, 0, 0] - 0.5 * dc, y_roi[0, -1, 0] + 0.5 * dc,
-                 x_roi[0, 0, 0] - 0.5 * dc, x_roi[0, 0, -1] + 0.5 * dc]
+    extent_xy = [x_roi[0, 0, 0] - 0.5 * dc, x_roi[0, 0, -1] + 0.5 * dc,
+                 y_roi[0, -1, 0] + 0.5 * dc, y_roi[0, 0, 0] - 0.5 * dc]
 
-    extent_zx = [z_roi[0, 0, 0] - 0.5 * dz, z_roi[-1, 0, 0] + 0.5 * dz,
-                 x_roi[0, 0, 0] - 0.5 * dc, x_roi[0, 0, -1] + 0.5 * dc]
+    extent_xz = [x_roi[0, 0, 0] - 0.5 * dc, x_roi[0, 0, -1] + 0.5 * dc,
+                 z_roi[-1, 0, 0] + 0.5 * dz, z_roi[0, 0, 0] - 0.5 * dz]
 
-    extent_yz = [y_roi[0, 0, 0] - 0.5 * dc, y_roi[0, -1, 0] + 0.5 * dc,
-                 z_roi[0, 0, 0] - 0.5 * dz, z_roi[-1, 0, 0] + 0.5 * dz]
+    extent_zy = [z_roi[0, 0, 0] - 0.5 * dz, z_roi[-1, 0, 0] + 0.5 * dz,
+                 y_roi[0, -1, 0] + 0.5 * dc, y_roi[0, 0, 0] - 0.5 * dc]
 
-    wx = extent_yx[3] - extent_yx[2]
-    wy = extent_yx[1] - extent_yx[0]
-    wz = extent_zx[1] - extent_zx[0]
+    wx = extent_xy[1] - extent_xy[0]
+    wy = extent_xy[2] - extent_xy[3]
+    wz = extent_xz[2] - extent_xz[3]
 
     # ################################
     # plot results interpolated on regular grid
@@ -911,58 +912,65 @@ def plot_gauss_roi(fit_params: list[float],
 
     figh_interp.suptitle(st_str)
 
-    grid = figh_interp.add_gridspec(nrows=2, height_ratios=[1, wz / wy], hspace=0,
-                                    ncols=7, width_ratios=[wz / wx, 1, 0.2, wz / wx, 1, 0.2, 0.2], wspace=0)
+    grid = figh_interp.add_gridspec(nrows=2, height_ratios=[1, wz / wy * scale_z_display], hspace=0,
+                                    ncols=7, width_ratios=[wz / wx * scale_z_display, 1, 0.2, wz / wx * scale_z_display, 1, 0.2, 0.2], wspace=0)
 
     # ################################
     # XY, data
     # ################################
     ax = figh_interp.add_subplot(grid[0, 1])
-    im = ax.imshow(np.nanmax(img_roi, axis=0).transpose(), origin="lower", extent=extent_yx, cmap=cmap,
+    im = ax.imshow(np.nanmax(img_roi, axis=0),
+                   extent=extent_xy,
+                   cmap=cmap,
                    norm=PowerNorm(vmin=vmin, vmax=vmax, gamma=gamma))
 
-    ax.plot(center_fit[1], center_fit[2], 'm+')
+    ax.plot(center_fit[2], center_fit[1], 'm+')
     if init_params is not None:
-        ax.plot(center_guess[1], center_guess[2], 'gx')
+        ax.plot(center_guess[2], center_guess[1], 'gx')
 
-    ax.set_ylim(extent_yx[2:4])
-    ax.set_xlim(extent_yx[0:2])
+    ax.set_ylim(extent_xy[2:4])
+    ax.set_xlim(extent_xy[0:2])
     ax.set_xticks([])
     ax.set_yticks([])
 
     # ################################
     # XZ, data
     # ################################
-    ax = figh_interp.add_subplot(grid[0, 0])
+    ax = figh_interp.add_subplot(grid[1, 1])
 
-    ax.imshow(np.nanmax(img_roi, axis=1).transpose(), origin="lower", extent=extent_zx, cmap=cmap,
+    ax.imshow(np.nanmax(img_roi, axis=1),
+              extent=extent_xz,
+              cmap=cmap,
               norm=PowerNorm(vmin=vmin, vmax=vmax, gamma=gamma))
-    ax.plot(center_fit[0], center_fit[2], 'm+')
+    ax.plot(center_fit[2], center_fit[0], 'm+')
     if init_params is not None:
-        ax.plot(center_guess[0], center_guess[2], 'gx')
-    ax.set_ylim(extent_zx[2:4])
-    ax.set_xlim(extent_zx[0:2])
+        ax.plot(center_guess[2], center_guess[0], 'gx')
 
-    ax.set_ylabel("X (um)")
+    ax.set_ylim(extent_xz[2:4])
+    ax.set_xlim(extent_xz[0:2])
+
+    ax.set_xlabel("X (um)")
 
     # ################################
     # YZ, data
     # ################################
-    ax = figh_interp.add_subplot(grid[1, 1])
+    ax = figh_interp.add_subplot(grid[0, 0])
     with warnings.catch_warnings():
         warnings.filterwarnings('ignore', r'All-NaN (slice|axis) encountered')
 
-        ax.imshow(np.nanmax(img_roi, axis=2),  origin="lower", extent=extent_yz, cmap="bone",
+        ax.imshow(np.nanmax(img_roi, axis=2).transpose(),
+                  extent=extent_zy,
+                  cmap="bone",
                   norm=PowerNorm(vmin=vmin, vmax=vmax, gamma=gamma))
 
-    ax.plot(center_fit[1], center_fit[0], 'm+')
+    ax.plot(center_fit[0], center_fit[1], 'm+')
     if init_params is not None:
-        ax.plot(center_guess[1], center_guess[0], 'gx')
+        ax.plot(center_guess[0], center_guess[1], 'gx')
 
-    ax.set_ylim(extent_yz[2:4])
-    ax.set_xlim(extent_yz[0:2])
-    ax.set_xlabel("Y (um)")
-    ax.set_ylabel("Z (um)")
+    ax.set_ylim(extent_zy[2:4])
+    ax.set_xlim([extent_zy[1], extent_zy[0]])
+    ax.set_xlabel("Z (um)")
+    ax.set_ylabel("Y (um)")
 
     if same_color_scale:
         vmin_fit = vmin
@@ -975,51 +983,59 @@ def plot_gauss_roi(fit_params: list[float],
     # YX, fit
     # ################################
     ax = figh_interp.add_subplot(grid[0, 4])
-    extent = [y_roi[0, 0, 0] - 0.5 * dc, y_roi[0, -1, 0] + 0.5 * dc,
-              x_roi[0, 0, 0] - 0.5 * dc, x_roi[0, 0, -1] + 0.5 * dc]
-    ax.imshow(np.nanmax(img_fit, axis=0).transpose(), origin="lower", extent=extent, cmap=cmap,
-              norm=PowerNorm(vmin=vmin_fit, vmax=vmax_fit, gamma=gamma))
-    ax.plot(center_fit[1], center_fit[2], 'm+')
-    if init_params is not None:
-        ax.plot(center_guess[1], center_guess[2], 'gx')
 
-    ax.set_ylim(extent[2:4])
-    ax.set_xlim(extent[0:2])
+    ax.imshow(np.nanmax(img_fit, axis=0),
+              extent=extent_xy,
+              cmap=cmap,
+              norm=PowerNorm(vmin=vmin_fit, vmax=vmax_fit, gamma=gamma))
+
+    ax.plot(center_fit[2], center_fit[1], 'm+')
+    if init_params is not None:
+        ax.plot(center_guess[2], center_guess[1], 'gx')
+
+    ax.set_ylim(extent_xy[2:4])
+    ax.set_xlim(extent_xy[0:2])
     ax.set_xticks([])
     ax.set_yticks([])
 
     # ################################
     # ZX, fit
     # ################################
-    ax = figh_interp.add_subplot(grid[0, 3])
-    extent = [z_roi[0, 0, 0] - 0.5 * dz, z_roi[-1, 0, 0] + 0.5 * dz,
-              x_roi[0, 0, 0] - 0.5 * dc, x_roi[0, 0, -1] + 0.5 * dc]
-    ax.imshow(np.nanmax(img_fit, axis=1).transpose(), origin="lower", extent=extent, cmap=cmap,
-              norm=PowerNorm(vmin=vmin_fit, vmax=vmax_fit, gamma=gamma))
-    ax.plot(center_fit[0], center_fit[2], 'm+')
-    if init_params is not None:
-        ax.plot(center_guess[0], center_guess[2], 'gx')
-    ax.set_ylim(extent[2:4])
-    ax.set_xlim(extent[0:2])
+    ax = figh_interp.add_subplot(grid[1, 4])
 
-    ax.set_ylabel("X (um)")
+    ax.imshow(np.nanmax(img_fit, axis=1),
+              extent=extent_xz,
+              cmap=cmap,
+              norm=PowerNorm(vmin=vmin_fit, vmax=vmax_fit, gamma=gamma))
+
+    ax.plot(center_fit[2], center_fit[0], 'm+')
+    if init_params is not None:
+        ax.plot(center_guess[2], center_guess[0], 'gx')
+
+    ax.set_ylim(extent_xz[2:4])
+    ax.set_xlim(extent_xz[0:2])
+
+    ax.set_xlabel("X (um)")
 
     # ################################
     # YZ, fit
     # ################################
-    ax = figh_interp.add_subplot(grid[1, 4])
-    extent = [y_roi[0, 0, 0] - 0.5 * dc, y_roi[0, -1, 0] + 0.5 * dc,
-              z_roi[0, 0, 0] - 0.5 * dz, z_roi[-1, 0, 0] + 0.5 * dz]
-    ax.imshow(np.nanmax(img_fit, axis=2), origin="lower", extent=extent, cmap=cmap,
-              norm=PowerNorm(vmin=vmin_fit, vmax=vmax_fit, gamma=gamma))
-    ax.plot(center_fit[1], center_fit[0], 'm+')
-    if init_params is not None:
-        ax.plot(center_guess[1], center_guess[0], 'gx')
-    ax.set_ylim(extent[2:4])
-    ax.set_xlim(extent[0:2])
+    ax = figh_interp.add_subplot(grid[0, 3])
 
-    ax.set_xlabel("Y (um)")
-    ax.set_ylabel("Z (um)")
+    ax.imshow(np.nanmax(img_fit, axis=2).transpose(),
+              extent=extent_zy,
+              cmap=cmap,
+              norm=PowerNorm(vmin=vmin_fit, vmax=vmax_fit, gamma=gamma))
+    ax.plot(center_fit[0], center_fit[1], 'm+')
+
+    if init_params is not None:
+        ax.plot(center_guess[0], center_guess[1], 'gx')
+
+    ax.set_ylim(extent_zy[2:4])
+    ax.set_xlim([extent_zy[1], extent_zy[0]])
+
+    ax.set_xlabel("Z (um)")
+    ax.set_ylabel("Y (um)")
 
     # ################################
     # colorbar
@@ -1936,16 +1952,16 @@ def autofit_psfs(imgs: np.ndarray,
             im_to_plot = imgs
 
         for ind in ind_to_plot:
-            delayed.append(dask.delayed(plot_gauss_roi)(fit_params[ind],
-                                                        rois[ind],
-                                                        im_to_plot,
-                                                        coords,
-                                                        init_params[ind],
-                                                        figsize=figsize,
-                                                        prefix="localization_roi_%d" % ind,
-                                                        string="filter conditions = " + " ".join(["%d," % c for c in conditions[ind]]),
-                                                        save_dir=save_dir
-                                                       )
+            delayed.append(dask.delayed(plot_fit_roi)(fit_params[ind],
+                                                      rois[ind],
+                                                      im_to_plot,
+                                                      coords,
+                                                      init_params[ind],
+                                                      figsize=figsize,
+                                                      prefix="localization_roi_%d" % ind,
+                                                      string="filter conditions = " + " ".join(["%d," % c for c in conditions[ind]]),
+                                                      save_dir=save_dir
+                                                      )
                            )
 
         # with ProgressBar():
@@ -2011,20 +2027,20 @@ def autofit_psfs(imgs: np.ndarray,
             fit_params_real[ii] = results["fit_params"]
 
             if plot_results:
-                figh = plot_gauss_roi(fit_params_real[ii],
-                                      [0, psfs_real[ii].shape[0],
+                figh = plot_fit_roi(fit_params_real[ii],
+                                    [0, psfs_real[ii].shape[0],
                                        0, psfs_real[ii].shape[1],
                                        0, psfs_real[ii].shape[2]],
-                                      psfs_real[ii],
-                                      psf_coords,
-                                      model=summary_model,
-                                      string=f"smallest {psf_percentiles[ii]:.0f} percent,"
+                                    psfs_real[ii],
+                                    psf_coords,
+                                    model=summary_model,
+                                    string=f"smallest {psf_percentiles[ii]:.0f} percent,"
                                              f" {type(summary_model)}, sf={summary_model.sf}",
-                                      vmin=0,
-                                      vmax=1,
-                                      gamma=gamma,
-                                      figsize=figsize,
-                                      **kwargs)
+                                    vmin=0,
+                                    vmax=1,
+                                    gamma=gamma,
+                                    figsize=figsize,
+                                    **kwargs)
 
                 if saving:
                     figh.savefig(Path(save_dir) / f"experimental_psf_smallest_{psf_percentiles[ii]:.2f}.png")
