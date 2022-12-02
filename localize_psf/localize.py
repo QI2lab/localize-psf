@@ -624,6 +624,7 @@ def fit_rois(img_rois: list[np.ndarray],
              coords_rois: tuple[np.ndarray],
              init_params: np.ndarray,
              max_number_iterations: int = 100,
+             tolerance: Optional[float] = None,
              estimator: str = "LSE",
              fixed_params: Optional[np.ndarray] = None,
              guess_bounds: bool = False,
@@ -638,8 +639,9 @@ def fit_rois(img_rois: list[np.ndarray],
     :param img_rois: list of image rois
     :param coords_rois: ((z0, y0, x0), (z1, y1, x1), ....)
     :param init_params: initial parameters for fits, size nfits x nparams
-    :param int max_number_iterations: maximum number of iterations to be used for each fit
-    :param estimator: "LSE" or "MLE"
+    :param max_number_iterations: maximum number of iterations to be used for each fit
+    :param tolerance: only for GPUFIT. Default is 1e-4.
+    :param estimator: "LSE" or "MLE", only for GPUFIT
     :param model: "gaussian", "rotated-gaussian", "gaussian-lorentzian"
     :param fixed_params: length nparams vector of parameters to fix. only supports fixing/unfixing
     each parameter for all fits
@@ -716,14 +718,6 @@ def fit_rois(img_rois: list[np.ndarray],
             raise NotImplementedError(f"model of type {type(model)} has not been implemented in gpufit."
                                       f"The models which have been implemented are {[a for a, b in models_mapping]}")
 
-        # if isinstance(model, psf.gaussian3d_psf_model):
-        #     model_id = gf.ModelID.GAUSS_3D_ARB
-        # elif isinstance(model, psf.gaussian_lorentzian_psf_model):
-        #     model_id = gf.ModelID.GAUSS_LOR_3D_ARB
-        # else:
-        #     raise NotImplementedError("only 'gaussian3d_psf' and 'gaussian_lorentzian_psf' have"
-        #                               " corresponding GPU implementations")
-
         nparams = model.nparams
 
         # ensure arrays are row vectors
@@ -757,6 +751,11 @@ def fit_rois(img_rois: list[np.ndarray],
         user_info = np.concatenate((coords.astype(np.float32),
                                     roi_sizes.astype(np.float32)))
 
+        # some models have extra non-fit parameters appended at end of user_info
+        if model_id == gf.ModelID.GAUSS_3D_ARB or model_id == gf.ModelID.GAUSS_3D_ROT_ARB:
+            user_info = np.concatenate((user_info,
+                                        np.array(model.minimum_sigmas).astype(np.float32)))
+
         # initial parameters
         init_params = init_params.astype(np.float32)
 
@@ -765,8 +764,8 @@ def fit_rois(img_rois: list[np.ndarray],
             raise ValueError(f"data.ndim should = 2 but was {data.ndim:d}")
         if init_params.ndim != 2 or init_params.shape != (nfits, nparams):
             raise ValueError(f"init_params should have shape ({nfits:d}, {nparams:d}), but had shape {init_params.shape}")
-        if user_info.ndim != 1 or user_info.size != (3 * nfits * n_pts_per_fit + nfits):
-            raise ValueError(f"user_info should have size ({3 * nfits * n_pts_per_fit + nfits:d}), but had size {user_info.size:d}")
+        # if user_info.ndim != 1 or user_info.size != (3 * nfits * n_pts_per_fit + nfits):
+        #     raise ValueError(f"user_info should have size ({3 * nfits * n_pts_per_fit + nfits:d}), but had size {user_info.size:d}")
 
         if estimator == "MLE":
             est_id = gf.EstimatorID.MLE
@@ -786,6 +785,7 @@ def fit_rois(img_rois: list[np.ndarray],
                                                                  None,
                                                                  model_id,
                                                                  init_params,
+                                                                 tolerance=tolerance,
                                                                  max_number_iterations=max_number_iterations,
                                                                  estimator_id=est_id,
                                                                  parameters_to_fit=params_to_fit,
@@ -1358,7 +1358,8 @@ def localize_beads_generic(imgs: np.ndarray,
                            verbose: bool = True,
                            model: psf.pixelated_psf_model = psf.gaussian3d_psf_model(),
                            guess_bounds: bool = False,
-                           debug: bool = False):
+                           debug: bool = False,
+                           **kwargs):
     """
     Given an image consisting of diffraction limited features and background, identify the diffraction limited features
     using the following procedure:
@@ -1377,7 +1378,7 @@ def localize_beads_generic(imgs: np.ndarray,
     @param filter_sigma_small: (sz, sy, sx) small sigmas to be used in difference-of-Gaussian filter. Roughly speaking,
     features which are smaller than these sigmas will be high pass filtered out. To turn off this filter, set to None
     @param filter_sigma_large: (sz, sy, sx) large sigmas to be used in difference-of-Gaussian filter. Roughly speaking,
-    features which are large than these sigmas will be low pass filtered out. To turn off this filter, set to None
+    features which are larger than these sigmas will be low pass filtered out. To turn off this filter, set to None
     @param min_spot_sep: (dz, dxy) minimum separation allowed between adjacent peaks
     @param filter: filter will be applied with args = [fit_params, ref_params, chi_sqrs, niters, rois]
     and kwargs "image" and "image_filtered"
@@ -1385,14 +1386,15 @@ def localize_beads_generic(imgs: np.ndarray,
     @param sigma_bounds: ((sz_min, sxy_min), (sz_max, sxy_max))
     @param max_nfit_iterations: maximum number of iterations in fitting function
     @param fit_filtered_images: whether to perform fitting on raw images or filtered images
-    @param use_gpu_fit: whether or not to do spot fitting on the GPU
-    @param use_gpu_filter: whether or not to do difference-of-Gaussian filtering on GPU
-    @param verbose: whether or not to print information
+    @param use_gpu_fit: whether to do spot fitting on the GPU
+    @param use_gpu_filter: whether to do difference-of-Gaussian filtering on GPU
+    @param verbose: whether to print information
     @param model: an instance of a class derived from psf.psf_model. The model describes the PSF and how to 'fit' data
     to it. Information e.g. about pixelation can be provided to the model. See psf.psf_model and the derived classes
     for more details
     @param guess_bounds: whether to use bounds for each ROI guessed from the coordinates. If so, will use
     bound guesses from model.estimate_bounds().
+    @param **kwargs: passed through to fit_rois() function
     @return coords, fit_results, imgs_filtered: coords = (z, y, x)
     """
 
@@ -1550,8 +1552,6 @@ def localize_beads_generic(imgs: np.ndarray,
         fixed_params = [False] * model.nparams
         # if 2D, don't want to fit cz or sz
         if data_is_2d:
-            # todo: how to make this model independent?
-
             if model.parameter_names[5] != "sz":
                 raise ValueError(f"Data was 2D, but model {str(model):s} is not supported because"
                                  f" parameter 5 is not 'sz'.")
@@ -1569,14 +1569,15 @@ def localize_beads_generic(imgs: np.ndarray,
         fit_results = fit_rois(img_rois,
                                (zrois, yrois, xrois),
                                init_params,
-                               max_nfit_iterations,
+                               max_number_iterations=max_nfit_iterations,
                                estimator="LSE",
                                fixed_params=fixed_params,
                                model=model,
                                guess_bounds=guess_bounds,
                                use_gpu=use_gpu_fit,
                                debug=debug,
-                               verbose=verbose
+                               verbose=verbose,
+                               **kwargs
                                )
 
         if verbose:

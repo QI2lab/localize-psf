@@ -249,6 +249,11 @@ class rotated_model(coordinate_model):
         self.base_model = model
         self.center_inds = center_inds
 
+        # copy any attributes that don't overlap
+        for k, v in model.__dict__.items():
+            if not hasattr(self, k):
+                setattr(self, k, v)
+
     def model(self,
               coordinates: tuple[np.ndarray],
               parameters: np.ndarray) -> np.ndarray:

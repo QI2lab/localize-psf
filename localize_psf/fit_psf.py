@@ -443,6 +443,11 @@ class from_coordinate_model(pixelated_psf_model):
                          ndims=ndims)
         self.coord_model = model
 
+        # copy any attributes that don't overlap
+        for k, v in model.__dict__.items():
+            if not hasattr(self, k):
+                setattr(self, k, v)
+
     def model(self,
               coordinates: tuple[np.ndarray],
               parameters: np.ndarray) -> np.ndarray:
