@@ -758,7 +758,15 @@ class gauss3d(coordinate_model):
 
         sigmas = np.sqrt(c2s - c1s ** 2)
         sz = sigmas[0]
+
+        # if e.g. all img_temp values are the same, sigmas can be zero and to machine precision can get NaN. avoid this
+        if np.isnan(sz):
+            sz = 0.5 * (z.max() - z.min())
+
         sxy = np.mean(sigmas[1:])
+        if np.isnan(sxy):
+            sxy = np.mean([0.5 * (x.max() - x.min()),
+                           0.5 * (y.max() - y.min())])
 
         guess_params = np.concatenate((np.array([np.nanmax(data) - np.nanmin(data)]),
                                        np.flip(c1s),
