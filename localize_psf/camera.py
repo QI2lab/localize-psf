@@ -145,7 +145,7 @@ def bin(img: array,
     if mode == "sum":
         img_binned = img_reshape.sum(axis=sum_axes)
     elif mode == "mean":
-        img_binned = img_reshape.sum(axis=sum_axes)
+        img_binned = img_reshape.mean(axis=sum_axes)
     else:
         raise ValueError(f"'mode' must be 'sum' or 'mean' but was '{mode:s}'")
 
