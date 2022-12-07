@@ -1427,6 +1427,7 @@ def localize_beads_generic(imgs: np.ndarray,
                            min_spot_sep: tuple[float] = (0, 0),
                            filter: Optional[filter] = None,
                            mask: Optional[np.ndarray] = None,
+                           average_duplicates_before_fit: bool = True,
                            max_nfit_iterations: int = 100,
                            fit_filtered_images: bool = False,
                            use_gpu_fit: bool = _gpufit_available,
@@ -1435,6 +1436,7 @@ def localize_beads_generic(imgs: np.ndarray,
                            model: psf.pixelated_psf_model = psf.gaussian3d_psf_model(),
                            guess_bounds: bool = False,
                            debug: bool = False,
+                           return_filtered_images: bool = False,
                            **kwargs):
     """
     Given an image consisting of diffraction limited features and background, identify the diffraction limited features
@@ -1459,6 +1461,7 @@ def localize_beads_generic(imgs: np.ndarray,
     @param filter: filter will be applied with args = [fit_params, ref_params, chi_sqrs, niters, rois]
     and kwargs "image" and "image_filtered"
     @param mask: optionally boolean array of same size as image which indicates where to search for peaks
+    @param average_duplicates_before_fit: test if points are "unique" within region defined by min_spot_sep before fitting
     @param sigma_bounds: ((sz_min, sxy_min), (sz_max, sxy_max))
     @param max_nfit_iterations: maximum number of iterations in fitting function
     @param fit_filtered_images: whether to perform fitting on raw images or filtered images
@@ -1568,25 +1571,27 @@ def localize_beads_generic(imgs: np.ndarray,
     # identify candidate beads
     # ###################################
     if len(centers_guess_inds) != 0:
-        # ###################################################
-        # average multiple points too close together. Necessary bc if naive threshold, may identify several points
-        # from same spot. Particularly important if spots have very different brightness levels.
-        # ###################################################
-        tstart = time.perf_counter()
 
-        inds = np.ravel_multi_index(centers_guess_inds.transpose(), imgs_filtered.shape)
-        weights = imgs_filtered.ravel()[inds]
-        centers_guess, inds_comb = filter_nearby_peaks(centers_guess,
-                                                       dxy_min_sep,
-                                                       dz_min_sep,
-                                                       weights=weights,
-                                                       mode="average",
-                                                       nmax=np.inf)
+        if average_duplicates_before_fit:
+            # ###################################################
+            # average multiple points too close together. Necessary bc if naive threshold, may identify several points
+            # from same spot. Particularly important if spots have very different brightness levels.
+            # ###################################################
+            tstart = time.perf_counter()
 
-        if verbose:
-            print(f"Found {len(centers_guess):d} points separated by"
-                  f" dxy > {dxy_min_sep:0.5g} and dz > {dz_min_sep:0.5g}"
-                  f" in {time.perf_counter() - tstart:.1f}s")
+            inds = np.ravel_multi_index(centers_guess_inds.transpose(), imgs_filtered.shape)
+            weights = imgs_filtered.ravel()[inds]
+            centers_guess, inds_comb = filter_nearby_peaks(centers_guess,
+                                                           dxy_min_sep,
+                                                           dz_min_sep,
+                                                           weights=weights,
+                                                           mode="average",
+                                                           nmax=np.inf)
+
+            if verbose:
+                print(f"Found {len(centers_guess):d} points separated by"
+                      f" dxy > {dxy_min_sep:0.5g} and dz > {dz_min_sep:0.5g}"
+                      f" in {time.perf_counter() - tstart:.1f}s")
 
         # ###################################################
         # prepare ROIs
@@ -1700,7 +1705,10 @@ def localize_beads_generic(imgs: np.ndarray,
     else:
         fit_results = None
 
-    return (z, y, x), fit_results, imgs_filtered
+    if return_filtered_images:
+        return (z, y, x), fit_results, imgs_filtered
+    else:
+        return (z, y, x), fit_results, None
 
 
 def localize_beads(imgs: np.ndarray,
