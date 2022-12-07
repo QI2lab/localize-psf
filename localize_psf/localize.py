@@ -1143,14 +1143,20 @@ class range_filter(filter):
     """
     Filter based on value being in a certain range
     """
-    def __init__(self, low, high, index, name):
+    def __init__(self,
+                 low: float,
+                 high: float,
+                 index: int,
+                 name: str):
+
         self.low = low
         self.high = high
         self.index = index
         self.condition_names = [f"{name:s} too small", f"{name:s} too large"]
 
     def filter(self, fit_params, *args, **kwargs):
-        conditions = np.stack((fit_params[:, self.index] >= self.low, fit_params[:, self.index] <= self.high), axis=1)
+        conditions = np.stack((fit_params[:, self.index] >= self.low,
+                               fit_params[:, self.index] <= self.high), axis=1)
 
         return conditions
 
@@ -1177,9 +1183,22 @@ class unique_filter(filter):
     """
     Filter spots so that only keep one in a certain area, to avoid one spot being picked up multiple times by max filter
     """
-    def __init__(self, dxy_min_dist, dz_min_dist, name="not unique"):
+    def __init__(self,
+                 dxy_min_dist: float,
+                 dz_min_dist: float,
+                 name="not unique",
+                 center_indices: tuple[int] = (3, 2, 1)):
+        """
+
+        @param dxy_min_dist:
+        @param dz_min_dist:
+        @param name:
+        @param center_indices: indices of cz, cy, cx in model respectively
+        """
+
         self.dxy_min_dist = dxy_min_dist
         self.dz_min_dist = dz_min_dist
+        self.center_indices = center_indices
         self.condition_names = [f"{name:s}"]
 
     def filter(self, fit_params, *args, **kwargs):
@@ -1189,7 +1208,7 @@ class unique_filter(filter):
         @param kwargs:
         @return:
         """
-        _, unique_inds = filter_nearby_peaks(fit_params[:, (3, 2, 1)],
+        _, unique_inds = filter_nearby_peaks(fit_params[:, self.center_indices],
                                              self.dxy_min_dist,
                                              self.dz_min_dist,
                                              mode="keep-one")
@@ -1249,6 +1268,47 @@ def get_param_filter(coords: tuple[np.ndarray],
     filter_combined = filter_unique * (filter_in_bounds + filter_size + filter_amp + filter_proximity)
 
     return filter_combined
+
+
+def get_param_filter_model(model: psf.pixelated_psf_model,
+                           fit_dist_max_err: tuple[float],
+                           min_spot_sep: tuple[float] = (0, 0),
+                           param_bounds: Optional[tuple[tuple[float]]] = None,
+                           center_param_inds: tuple[int] = (3, 2, 1),
+                           ):
+    """
+    Simple composite filter testing bounds of fit parameters
+
+    @param model: fit model
+    @param coords:
+    @param fit_dist_max_err:
+    @param min_spot_sep:
+    @param param_bounds:
+    @param center_param_inds:
+    @return:
+    """
+
+    filter = no_filter()
+
+    # filter on parameters
+    for ii in range(model.nparams):
+        filter += range_filter(param_bounds[0][ii], param_bounds[1][ii], ii, model.parameter_names[ii])
+
+    # proximity to initial guess
+    # maximum distance between fit center and guess center
+    z_err_fit_max, xy_fit_err_max = fit_dist_max_err
+
+    filter += proximity_filter(center_param_inds[1:], 0, xy_fit_err_max, "xy") + \
+              proximity_filter((center_param_inds[0],), 0, z_err_fit_max, "z")
+
+    # spots separated by distance
+    dz, dxy = min_spot_sep
+    filter_unique = unique_filter(dxy, dz, center_indices=center_param_inds)
+
+    filter = filter_unique * filter
+
+    return filter
+
 
 
 def filter_localizations(fit_params: np.ndarray,
