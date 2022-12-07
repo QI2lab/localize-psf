@@ -902,6 +902,13 @@ class gauss3d_asymmetric(coordinate_model):
         # sz, sy, sx
         sigmas = np.sqrt(c2s - c1s ** 2)
 
+        if np.isnan(sigmas[0]):
+            sigmas[0] = 0.5 * (z.max() - z.min())
+        if np.isnan(sigmas[1]):
+            sigmas[1] = 0.5 * (y.max() - y.min())
+        if np.isnan(sigmas[2]):
+            sigmas[2] = 0.5 * (x.max() - x.min())
+
         if self.use_sigma_ratio_parameterization:
             sigmas[1] = sigmas[1] / sigmas[2]
 
