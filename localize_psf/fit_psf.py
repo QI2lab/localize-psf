@@ -921,13 +921,20 @@ class gridded_psf_model(pixelated_psf_model):
         z = zz[:, 0, 0]
 
         dxy = x[0, 0, 1] - x[0, 0, 0]
+        nz = zz.shape[0]
+        ny = y.shape[1]
         nx = x.shape[2]
 
         if 'NA' in kwargs.keys():
             raise ValueError("'NA' is not allowed to be passed as a named parameter. It is specified in p.")
 
         if self.model_name == 'vectorial':
-            model_params = {'NA': p[4], 'sf': self.sf, 'ni': self.ni, 'ni0': self.ni}
+
+            # on even grids results are not symmetric about any pixel
+            if ny % 2 != 1 or nx % 2 != 1:
+                raise ValueError(f"'vectorial' model requires odd xy sizes, but where ({ny:d}, {nx:d})")
+
+            model_params = {'NA': p[4], 'ni': self.ni, 'ni0': self.ni} #'sf': self.sf
             model_params.update(kwargs)
 
             psf_norm = psfm.vectorial_psf(0, 1, dxy, wvl=self.wavelength, params=model_params, normalize=False)
@@ -935,7 +942,12 @@ class gridded_psf_model(pixelated_psf_model):
             val = p[0] / psf_norm * shift(val, [0, p[2] / dxy, p[1] / dxy], mode='nearest') + p[5]
 
         elif self.model_name == 'gibson-lanni':
-            model_params = {'NA': p[4], 'sf': self.sf, 'ni': self.ni, 'ni0': self.ni}
+
+            # on even grids results are not symmetric about any pixel
+            if ny % 2 != 1 or nx % 2 != 1:
+                raise ValueError(f"'gibson-lanni' model requires odd xy sizes, but where ({ny:d}, {nx:d})")
+
+            model_params = {'NA': p[4], 'ni': self.ni, 'ni0': self.ni} # 'sf': self.sf,
             model_params.update(kwargs)
 
             psf_norm = psfm.scalar_psf(0, 1, dxy, wvl=self.wavelength, params=model_params, normalize=False)
@@ -956,7 +968,7 @@ class gridded_psf_model(pixelated_psf_model):
 
             # normalize so that amplitude parameter is actually amplitude
             psf_norm = gauss_model.model((p[3], p[2], p[1]), p_gauss) - p[5]
-            val = p[0] / psf_norm * (gauss_model.model((z, y, x), p_gauss) - p[5]) + p[5]
+            val = p[0] / psf_norm * (gauss_model.model(coords, p_gauss) - p[5]) + p[5]
         else:
             raise ValueError(f"model_name was '{self.model_name:s}',"
                              f" but must be 'vectorial', 'gibson-lanni', 'born-wolf', or 'gaussian'")
