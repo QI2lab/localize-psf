@@ -157,7 +157,9 @@ class coordinate_model():
         to_use = np.logical_not(np.isnan(data))
 
         # set initial parameters that were set to None
-        if np.any([ip is None for ip in init_params]):
+        if init_params is None:
+            init_params = self.estimate_parameters(data, coordinates)
+        elif np.any([ip is None for ip in init_params]):
             ip_default = self.estimate_parameters(data, coordinates)
 
             # set any parameters that were None to the default values
