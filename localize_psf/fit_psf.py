@@ -11,7 +11,7 @@ from scipy.ndimage import shift
 from scipy.special import j0, j1
 from scipy.integrate import quad
 from scipy.interpolate import interp1d
-from scipy.signal import fftconvolve
+from scipy.signal import fftconvolve, convolve
 from scipy import fft
 from localize_psf import affine, rois, fit
 
@@ -39,7 +39,8 @@ def blur_img_otf(ground_truth: array,
                  otf: array,
                  apodization: array = 1) -> array:
     """
-    Blur image with OTF
+    Blur image with OTF. OTF must be on a grid with coordinates obtained from
+    fx = fft.fftshift(fft.fftfrq(nx, d=dx))
 
     :param ground_truth: NumPy or CuPy array. If CuPy array operations will be performed on the GPU
     :param otf: optical transfer function evalated at the FFT frequencies (with f=0 near the center of the array)
@@ -65,16 +66,28 @@ def blur_img_psf(ground_truth: array,
                  psf: array,
                  apodization: array = 1) -> array:
     """
-    Blur image with PSF
+    Blur image with PSF. For odd-sized PSF's, there is no ambiguity about the convolution process. For even PSF's,
+    we have to adopt some convention. We choose the PSF coordinate grid to be x = (arange(nx) - nx // 2) * dx.
+    Which is appropriate for directly blurring using an OTF.
+
+    Note that this grid is different than what one would adopt if using scipy.signal(mode="same"). In that case
+    the PSF should be shifted one pixel up and to the left wrt to the convention used here
 
     :param ground_truth:
-    :param psf: point-spread function. this array should be centered at ny//2, nx//2
+    :param psf: point-spread function. This array should be centered at coordinate (ny//2, nx//2)
     :return blurred_img:
     """
 
     # todo: allow PSF of different size than image
-    otf, _ = psf2otf(psf)
-    img_blurred = blur_img_otf(ground_truth, otf, apodization=apodization)
+
+    if psf.shape == ground_truth.shape:
+        otf, _ = psf2otf(psf)
+        img_blurred = blur_img_otf(ground_truth, otf, apodization=apodization)
+    else:
+        ns = ground_truth.shape
+        ms = psf.shape
+        slices = tuple([slice(m//2, m//2 + n) for m, n in zip(ms, ns)])
+        img_blurred = convolve(ground_truth, psf, mode="full")[slices]
 
     return img_blurred
 
