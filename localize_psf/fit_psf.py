@@ -1026,7 +1026,12 @@ def oversample_pixel(x: np.ndarray,
     # generate new points in pixel, each of which is centered about an equal area of the pixel, so summing them is
     # giving an approximation of the integral
     if sf > 1:
-        pts = np.arange(1 / (2*sf), 1 - 1 / (2*sf), 1 / sf) - 0.5
+        # pts = np.arange(1 / (2*sf), 1 - 1 / (2*sf), 1 / sf) - 0.5 # todo: this version only correct is sf odd
+        pts = np.arange(1 / (2 * sf), 1, 1 / sf) - 0.5
+
+        if len(pts) != sf:
+            raise ValueError()
+
         xp, yp = np.meshgrid(ds * pts, ds * pts)
         zp = np.zeros(xp.shape)
 
@@ -1064,7 +1069,12 @@ def oversample_voxel(coords: tuple[np.ndarray],
     :return coords_upsample: tuple of coordinates, e.g. (z_os, y_os, x_os). e.g. x_os has one more dimension than x
     with  this extra dimension giving the oversampled coordinates
     """
-    pts = np.arange(1 / (2 * sf), 1 - 1 / (2 * sf), 1 / sf) - 0.5
+    # pts = np.arange(1 / (2 * sf), 1 - 1 / (2 * sf), 1 / sf) - 0.5
+    pts = np.arange(1 / (2 * sf), 1, 1 / sf) - 0.5
+
+    if len(pts) != sf:
+        raise ValueError()
+
     pts_dims = np.meshgrid(*[pts * dr for dr in drs], indexing="ij")
 
     coords_upsample = [np.expand_dims(c, axis=-1) + np.expand_dims(np.ravel(r), axis=0)
