@@ -69,7 +69,7 @@ def simulated_img(ground_truth: array,
     else:
         xp = np
 
-    ground_truth = xp.array(ground_truth)
+    ground_truth = xp.asarray(ground_truth)
 
     # optional blur image with PSF
     if psf is not None:
@@ -82,13 +82,13 @@ def simulated_img(ground_truth: array,
 
     # resample image by binning
     bin_size_list = (1,) * (img_blurred.ndim - 2) + (bin_size, bin_size)
-    img_blurred = bin(img_blurred, bin_size_list, mode='sum')
+    img_binned = bin(img_blurred, bin_size_list, mode='sum')
 
     # add shot noise
     if photon_shot_noise:
-        img_shot_noise = xp.random.poisson(img_blurred)
+        img_shot_noise = xp.random.poisson(img_binned)
     else:
-        img_shot_noise = img_blurred
+        img_shot_noise = img_binned
 
     # generate camera noise in ADU
     readout_noise = xp.random.standard_normal(img_shot_noise.shape) * readout_noise_sds
@@ -107,7 +107,7 @@ def simulated_img(ground_truth: array,
 
     # spatially resolved signal-to-noise ratio
     # get noise from adding in quadrature, assuming photon number large enough ~gaussian
-    snr = (gains * img_blurred) / xp.sqrt(readout_noise_sds ** 2 + gains ** 2 * img_blurred)
+    snr = (gains * img_binned) / xp.sqrt(readout_noise_sds ** 2 + gains ** 2 * img_binned)
 
     return img, snr
 
