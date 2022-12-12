@@ -28,6 +28,7 @@ except ImportError:
 _cupy_available = True
 try:
     import cupy as cp
+    from cupyx.scipy.signal import convolve as convolve_gpu
 except ImportError:
     cp = np
     _cupy_available = False
@@ -37,7 +38,7 @@ array = Union[np.ndarray, cp.ndarray]
 
 def blur_img_otf(ground_truth: array,
                  otf: array,
-                 apodization: array = 1) -> array:
+                 apodization: Optional[array] = None) -> array:
     """
     Blur image with OTF. OTF must be on a grid with coordinates obtained from
     fx = fft.fftshift(fft.fftfrq(nx, d=dx))
@@ -53,8 +54,11 @@ def blur_img_otf(ground_truth: array,
     else:
         xp = np
 
-    otf = xp.array(otf)
-    apodization = xp.array(apodization)
+    if apodization is None:
+        apodization = 1.
+
+    otf = xp.asarray(otf)
+    apodization = xp.asarray(apodization)
 
     gt_ft = xp.fft.fftshift(xp.fft.fftn(xp.fft.ifftshift(ground_truth)))
     img_blurred = xp.fft.fftshift(xp.fft.ifftn(xp.fft.ifftshift(gt_ft * otf * apodization)))
@@ -64,7 +68,7 @@ def blur_img_otf(ground_truth: array,
 
 def blur_img_psf(ground_truth: array,
                  psf: array,
-                 apodization: array = 1) -> array:
+                 apodization: Optional[array] = None) -> array:
     """
     Blur image with PSF. For odd-sized PSF's, there is no ambiguity about the convolution process. For even PSF's,
     we have to adopt some convention. We choose the PSF coordinate grid to be x = (arange(nx) - nx // 2) * dx.
@@ -74,27 +78,51 @@ def blur_img_psf(ground_truth: array,
     the PSF should be shifted one pixel up and to the left wrt to the convention used here
 
     :param ground_truth:
-    :param psf: point-spread function. This array should be centered at coordinate (ny//2, nx//2)
+    :param psf: point-spread function, must have same number of dimensions as ground_truth, but possibly
+     different size. This array should be centered at coordinate (ny//2, nx//2).
     :return blurred_img:
     """
 
-    # todo: allow PSF of different size than image
+    if isinstance(ground_truth, cp.ndarray) and _cupy_available:
+        xp = cp
+        conv = convolve_gpu
+    else:
+        xp = np
+        conv = convolve
+
+    psf = xp.asarray(psf)
+
+    # since GPU convolve only implemented for 1D arrays, need to ensure psf correct size
+    if xp == cp and _cupy_available:
+        ns_after = [(n - m) // 2 for n, m in zip(ground_truth.shape, psf.shape)]
+        ns_before = [na + 1 if na != 0 else 0 for na in ns_after]
+        pad_sizes = [(nb, na) for nb, na in zip(ns_before, ns_after)]
+
+        psf = xp.pad(psf,
+                     pad_sizes,
+                     mode="constant",
+                     constant_values=0)
+
+        if psf.shape != ground_truth.shape:
+            raise ValueError()
 
     if psf.shape == ground_truth.shape:
         otf, _ = psf2otf(psf)
         img_blurred = blur_img_otf(ground_truth, otf, apodization=apodization)
     else:
+        # todo: problem, GPU version only implemented for 1D arrays
         ns = ground_truth.shape
         ms = psf.shape
         slices = tuple([slice(m//2, m//2 + n) for m, n in zip(ms, ns)])
-        img_blurred = convolve(ground_truth, psf, mode="full")[slices]
+        img_blurred = conv(ground_truth, psf, mode="full")[slices]
 
     return img_blurred
 
 
 # tools for converting between different otf/psf representations
 def otf2psf(otf: array,
-            dfs: list[float] = 1) -> (array, list[array]):
+            dfs: list[float] = 1,
+            apodization: Optional[array] = None) -> (array, list[array]):
     """
     Compute the point-spread function from the optical transfer function
     :param otf: otf, as a 1D, 2D or 3D array. Assumes that f=0 is near the center of the array, and frequency are
@@ -110,22 +138,28 @@ def otf2psf(otf: array,
     if len(dfs) != otf.ndim:
         raise ValueError("dfs length must be otf.ndim")
 
+    if apodization is None:
+        apodization = 1.
+
     if isinstance(otf, cp.ndarray):
         xp = cp
     else:
         xp = np
 
+    apodization = xp.asarray(apodization)
+
     shape = otf.shape
     drs = np.array([1 / (df * n) for df, n in zip(shape, dfs)])
     coords = [xp.fft.fftshift(xp.fft.fftfreq(n, 1 / (dr * n))) for n, dr in zip(shape, drs)]
 
-    psf = xp.fft.fftshift(xp.fft.ifftn(xp.fft.ifftshift(otf))).real
+    psf = xp.fft.fftshift(xp.fft.ifftn(xp.fft.ifftshift(otf * apodization))).real
 
     return psf, coords
 
 
 def psf2otf(psf: array,
-            drs: list[float] = 1) -> (array, list[array]):
+            drs: list[float] = 1,
+            apodization: Optional[array] = None) -> (array, list[array]):
     """
     Compute the optical transfer function from the point-spread function
 
@@ -147,10 +181,15 @@ def psf2otf(psf: array,
     else:
         xp = np
 
+    if apodization is None:
+        apodization = 1.
+
+    apodization = xp.asarray(apodization)
+
     shape = psf.shape
     coords = [xp.fft.fftshift(xp.fft.fftfreq(n, dr)) for n, dr in zip(shape, drs)]
 
-    otf = xp.fft.fftshift(xp.fft.fftn(xp.fft.ifftshift(psf)))
+    otf = xp.fft.fftshift(xp.fft.fftn(xp.fft.ifftshift(psf * apodization)))
 
     return otf, coords
 
@@ -928,31 +967,42 @@ class gridded_psf_model(pixelated_psf_model):
         if 'NA' in kwargs.keys():
             raise ValueError("'NA' is not allowed to be passed as a named parameter. It is specified in p.")
 
+        model_params = {'NA': p[4], 'ni': self.ni, 'ni0': self.ni, "sf": self.sf}  # 'sf': self.sf
+        model_params.update(kwargs)
+
         if self.model_name == 'vectorial':
+            if nx != ny:
+                raise ValueError("only nx=ny is supported")
 
-            # on even grids results are not symmetric about any pixel
-            if ny % 2 != 1 or nx % 2 != 1:
-                raise ValueError(f"'vectorial' model requires odd xy sizes, but where ({ny:d}, {nx:d})")
-
-            model_params = {'NA': p[4], 'ni': self.ni, 'ni0': self.ni} #'sf': self.sf
-            model_params.update(kwargs)
+            if ny % 2 == 0 and self.sf != 1:
+                raise ValueError(f"psfmodel model has even sizes ({ny:d}, {nx:d}), but this is not compatible with sf != 1")
 
             psf_norm = psfm.vectorial_psf(0, 1, dxy, wvl=self.wavelength, params=model_params, normalize=False)
             val = psfm.vectorial_psf(z - p[3], nx, dxy, wvl=self.wavelength, params=model_params, normalize=False)
-            val = p[0] / psf_norm * shift(val, [0, p[2] / dxy, p[1] / dxy], mode='nearest') + p[5]
+
+            # add 1 to correct centering, since PSFmodels naturally centered at (n-1)//2, but coordinates centered at n//2
+            if ny % 2 == 0:
+                correction = 1
+            else:
+                correction = 0
+            val = p[0] / psf_norm * shift(val, [0, p[2] / dxy + correction, p[1] / dxy + correction], mode='nearest') + p[5]
 
         elif self.model_name == 'gibson-lanni':
+            if nx != ny:
+                raise ValueError("only nx=ny is supported")
 
-            # on even grids results are not symmetric about any pixel
-            if ny % 2 != 1 or nx % 2 != 1:
-                raise ValueError(f"'gibson-lanni' model requires odd xy sizes, but where ({ny:d}, {nx:d})")
-
-            model_params = {'NA': p[4], 'ni': self.ni, 'ni0': self.ni} # 'sf': self.sf,
-            model_params.update(kwargs)
+            if ny % 2 == 0 and self.sf != 1:
+                raise ValueError(
+                    f"psfmodel model has even sizes ({ny:d}, {nx:d}), but this is not compatible with sf != 1")
 
             psf_norm = psfm.scalar_psf(0, 1, dxy, wvl=self.wavelength, params=model_params, normalize=False)
             val = psfm.scalar_psf(z - p[3], nx, dxy, wvl=self.wavelength, params=model_params, normalize=False)
-            val = p[0] / psf_norm * shift(val, [0, p[2] / dxy, p[1] / dxy], mode='nearest') + p[5]
+            # add 1 to correct centering, since PSFmodels naturally centered at (n-1)//2, but coordinates centered at n//2
+            if ny % 2 == 0:
+                correction = 1
+            else:
+                correction = 0
+            val = p[0] / psf_norm * shift(val, [0, p[2] / dxy + correction, p[1] / dxy + correction], mode='nearest') + p[5]
 
         elif self.model_name == "born-wolf":
             bw_model = born_wolf_psf_model(wavelength=self.wavelength, ni=self.ni, dc=self.dc, sf=self.sf, angles=self.angles)
