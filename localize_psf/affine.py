@@ -192,13 +192,19 @@ def xform_points(coords: np.ndarray,
     """
     Transform coordinates of arbitrary dimension under the action of an affine transformation
 
-    :param coords: given as an N x ndim matrix
-    :param xform: affine transform matrix
-    :return coords_out: N x ndim
+    :param coords: array of shape n0 x n1 x ... nm x ndim
+    :param xform: affine transform matrix of shape (ndim + 1) x (ndim + 1)
+    :return coords_out: n0 x n1 x ... nm x ndim
     """
-    coords_in = np.concatenate((coords.transpose(), np.ones((1, coords.shape[0]))), axis=0)
+    # coords_in = np.concatenate((coords.transpose(), np.ones((1, coords.shape[0]))), axis=0)
     # clip off extra dimension and return
-    coords_out = xform.dot(coords_in)[:-1].transpose()
+    # coords_out = xform.dot(coords_in)[:-1].transpose()
+
+    ndims = coords.shape[-1]
+    coords_in = np.stack([coords[..., ii].ravel() for ii in range(ndims)] + [np.ones((coords[..., 0].size))], axis=0)
+
+    # trim off homogeneous coordinate row and reshape
+    coords_out = xform.dot(coords_in)[:-1].transpose().reshape(coords.shape)
 
     return coords_out
 
