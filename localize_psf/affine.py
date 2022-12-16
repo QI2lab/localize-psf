@@ -496,23 +496,28 @@ def fit_xform_points(from_pts,
     return affine_mat, vars
 
 
-def fit_xform_points_ransac(from_pts,
-                            to_pts,
+def fit_xform_points_ransac(from_pts: np.ndarray,
+                            to_pts: np.ndarray,
                             dist_err_max: float = 0.3,
                             niterations: int = 1000,
                             njobs: int = 1,
                             n_inliers_stop: int = np.inf,
-                            translate_only: bool = False):
+                            translate_only: bool = False) -> (np.ndarray, ):
     """
     Determine affine transformation using the random sample consensus (RANSAC) algorithm. This approach
-    is more robust to false correspondences between some of the from_pts and to_pts
+    is more robust to false correspondences between some of the from_pts and to_pts.
 
-    :param from_pts:
-    :param to_pts:
-    :param float dist_err_max: maximum distance error for points to be considered "inliers"
-    :param int niterations: number of iterations of RANSAC
-    :param int njobs: passed through to joblib to set number of cores to use
-    :param kwargs: passed through to fit_xform_points()
+    The entries in the arrays from_pts and to_pts are assumed to be potential correspondences. If one point in
+    from_pts has two potential identifications in to_pts, then include this point twice in the array from_pts
+    corresponding to two different points in to_pts.
+
+    :param from_pts: array of shape n0 x ... x nm x ndims
+    :param to_pts: array of shape n0 x ... x nm x ndims of points proposed to correspond to from_pts
+    :param dist_err_max: maximum distance error for points to be considered "inliers"
+    :param niterations: number of iterations of RANSAC
+    :param njobs: passed through to joblib to set number of cores to use
+    :param n_inliers_stop: stop iterating when find at least this many inliers
+    :param translate_only: only fit the translation parameters in the affine transformation
 
     :result xform_best, inliers_best, err_best, vars_best:
     """
@@ -520,8 +525,11 @@ def fit_xform_points_ransac(from_pts,
     if njobs > 1:
         niters_each = int(np.ceil(niterations / njobs))
         results = joblib.Parallel(n_jobs=-1, verbose=0, timeout=None)(
-                  joblib.delayed(fit_xform_points_ransac)(from_pts, to_pts, dist_err_max=dist_err_max,
-                                                          niterations=niters_each, njobs=1,
+                  joblib.delayed(fit_xform_points_ransac)(from_pts,
+                                                          to_pts,
+                                                          dist_err_max=dist_err_max,
+                                                          niterations=niters_each,
+                                                          njobs=1,
                                                           n_inliers_stop=n_inliers_stop,
                                                           translate_only=translate_only)
                   for ii in range(njobs))
@@ -536,7 +544,11 @@ def fit_xform_points_ransac(from_pts,
         vars_best = vars[ind_best]
 
     else:
-        npts, ndims = from_pts.shape
+        # npts, ndims = from_pts.shape
+        ndims = from_pts.shape[-1]
+        pts_shape = from_pts.shape[:-1]
+        npts = np.prod(pts_shape)
+
         if translate_only:
             ninit_pts = ndims
         else:
@@ -545,27 +557,29 @@ def fit_xform_points_ransac(from_pts,
         error_best = np.inf
         xform_best = None
         vars_best = None
-        inliers_best = np.zeros(npts, dtype=bool)
+        # inliers_best = np.zeros(npts, dtype=bool)
+        inliers_best = np.zeros(pts_shape, dtype=bool)
         for ii in range(niterations):
             # get initial proposed points and determine transformation
-            is_inlier_prop = np.zeros(npts, dtype=bool)
-            is_inlier_prop[np.sort(np.random.choice(np.arange(npts), size=ninit_pts, replace=False))] = True
+            is_inlier_prop = np.zeros(pts_shape, dtype=bool)
+            is_inlier_prop.ravel()[np.sort(np.random.choice(np.arange(npts), size=ninit_pts, replace=False))] = True
             not_inlier_prop = np.logical_not(is_inlier_prop)
 
-            xform_prop, _ = fit_xform_points(from_pts[is_inlier_prop], to_pts[is_inlier_prop],
+            xform_prop, _ = fit_xform_points(from_pts[is_inlier_prop],
+                                             to_pts[is_inlier_prop],
                                              translate_only=translate_only)
 
             # get distance errors of other points to determine if inliers or outliers
-            dist_errs = np.sqrt(np.linalg.norm(to_pts[not_inlier_prop] -
-                                xform_points(from_pts[not_inlier_prop], xform_prop), axis=1))
+            dist_errs = np.linalg.norm(to_pts[not_inlier_prop] - xform_points(from_pts[not_inlier_prop], xform_prop), axis=-1)
 
             is_inlier_prop[not_inlier_prop] = dist_errs < dist_err_max
 
             # refit using all inliers and compute final error and inliers
-            xform_prop, vars_prop = fit_xform_points(from_pts[is_inlier_prop], to_pts[is_inlier_prop],
+            xform_prop, vars_prop = fit_xform_points(from_pts[is_inlier_prop],
+                                                     to_pts[is_inlier_prop],
                                                      translate_only=translate_only)
 
-            dist_errs = np.sqrt(np.linalg.norm(to_pts - xform_points(from_pts, xform_prop), axis=1))
+            dist_errs = np.linalg.norm(to_pts - xform_points(from_pts, xform_prop), axis=1)
 
             is_inlier_prop = dist_errs < dist_err_max
             if not np.any(is_inlier_prop):
