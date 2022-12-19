@@ -318,22 +318,24 @@ def circ_aperture_otf(fx: array,
     :return otf: numpy or cupy ndarray
     """
     # maximum frequency imaging system can pass
-    fmax = 1 / (0.5 * wavelength / na)
+    fmax = 2 * na / wavelength
 
-    if isinstance(fx, cp.ndarray):
+    if isinstance(fx, cp.ndarray) and _cupy_available:
         xp = cp
     else:
         xp = np
 
     # freq data
-    fx = xp.array(fx)
-    fy = xp.array(fy)
+    fx = xp.asarray(fx)
+    fy = xp.asarray(fy)
     ff = xp.sqrt(fx**2 + fy**2)
 
+    # compute otf
+    otf = xp.zeros(ff.shape)
+    to_use = ff <= fmax
     with np.errstate(invalid='ignore'):
-        # compute otf
-        otf = 2 / np.pi * (xp.arccos(ff / fmax) - (ff / fmax) * xp.sqrt(1 - (ff / fmax)**2))
-        otf[ff > fmax] = 0
+        ff_use = ff[to_use]
+        otf[to_use] = 2 / np.pi * (xp.arccos(ff_use / fmax) - (ff_use / fmax) * xp.sqrt(1 - (ff_use / fmax)**2))
 
     return otf
 
