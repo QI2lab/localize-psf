@@ -1570,6 +1570,7 @@ def localize_beads_generic(imgs: np.ndarray,
     centers_guess_inds, _ = find_peak_candidates(imgs_filtered, footprint, threshold, mask=mask)
 
     if use_gpu_filter and _cupy_available:
+        imgs = imgs.get()
         imgs_filtered = imgs_filtered.get()
         centers_guess_inds = centers_guess_inds.get()
 
