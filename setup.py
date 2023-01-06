@@ -12,13 +12,14 @@ required_pkgs = ['numpy',
                  'matplotlib',
                  'joblib', # todo: only used in affine.py ransac. maybe replace with dask to simplify requirements
                  'dask',
+                 'zarr'
                  ]
 
 # optional required packages
 # e.g. `pip install -e .[gpu]`
 # todo: also need to include https://github.com/QI2lab/Gpufit with extras['gpu'] somehow if possible
 # todo: usually better to install CuPy on your own
-extras = {'gpu': ['cupy'],
+extras = {'gpu': ['cupy-cuda11x'],
           'psfmodels': ['psfmodels @ git+https://git@github.com/tlambert03/PSFmodels-py@main#egg=psfmodels'] # often have trouble installing this, so make optional
           }
 
