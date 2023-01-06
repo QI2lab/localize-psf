@@ -8,11 +8,11 @@ The affine transformation (in homogeneous coordinates) is represented by a matri
 Given a function defined on object space, g(xo, yo), we can define a corresponding function on image space
 gi(xi, yi) = g(T^{-1} [[xi], [yi], [1]])
 """
-from typing import Optional
+from typing import Optional, Sequence
 import joblib
 import numpy as np
 from numpy import fft
-import scipy.interpolate
+from scipy.interpolate import RectBivariateSpline
 from localize_psf import fit
 
 
@@ -47,7 +47,7 @@ def xform2params(affine_mat: np.ndarray) -> np.ndarray:
     return np.array([mx, theta_x, vx, my, theta_y, vy])
 
 
-def params2xform(params: list[float]) -> np.ndarray:
+def params2xform(params: Sequence[float]) -> np.ndarray:
     """
     Construct a 2D affine transformation from parameters. Inverse function for xform2params()
 
@@ -76,7 +76,7 @@ def params2xform(params: list[float]) -> np.ndarray:
 
 
 def rotation2xform(angle: float,
-                   center: list[float]) -> np.ndarray:
+                   center: Sequence[float]) -> np.ndarray:
     """
     Get 2D transform corresponding to a rotation by a given angle about a given center
 
@@ -149,7 +149,7 @@ def xform_mat(mat_obj: np.ndarray,
         mat_img[to_use] = mat_obj[tuple(inds)]
 
     elif mode == 'interp':
-        mat_img = scipy.interpolate.RectBivariateSpline(*coords_obj_bounds, mat_obj.transpose()).ev(*coords_obj_from_img)
+        mat_img = RectBivariateSpline(*coords_obj_bounds, mat_obj.transpose()).ev(*coords_obj_from_img)
         mat_img[np.logical_not(to_use)] = np.nan
     else:
         raise ValueError("'mode' must be 'nearest' or 'interp' but was '%s'" % mode)
@@ -211,8 +211,8 @@ def xform_points(coords: np.ndarray,
 
 # modify affine xform
 def xform_shift_center(xform: np.ndarray,
-                       cobj_new: Optional[tuple[float]] = None,
-                       cimg_new: Optional[tuple[float]] = None) -> np.ndarray:
+                       cobj_new: Optional[Sequence[float]] = None,
+                       cimg_new: Optional[Sequence[float]] = None) -> np.ndarray:
     """
     Modify affine transform for coordinate shift in object or image space.
 
@@ -248,19 +248,19 @@ def xform_shift_center(xform: np.ndarray,
 
 
 # transform sinusoid parameters for coordinate shifts
-def phase_edge2fft(frq: list[float],
+def phase_edge2fft(frq: Sequence[float],
                    phase: float,
-                   img_shape: tuple[int],
+                   img_shape: Sequence[int],
                    dx: float = 1.):
     """
     Give a sinusoidal pattern where we have defined the edge of the image to be x=0, and given the phase determined
     using this coordinate choice, transform the phase to the value referenced to near the center of the image
     (i.e. using the coordinate conventions of the discrete Fourier transform)
 
-    :param list[float] or np.array frq:
-    :param float phase:
-    :param tuple img_shape:
-    :param float dx:
+    :param frq:
+    :param phase:
+    :param img_shape:
+    :param dx:
 
     :return phase_fft:
     """
@@ -276,16 +276,16 @@ def phase_edge2fft(frq: list[float],
     return phase_fft
 
 
-def phase_fft2edge(frq: list[float],
+def phase_fft2edge(frq: Sequence[float],
                    phase: float,
-                   img_shape: tuple[int],
+                   img_shape: Sequence[int],
                    dx: float = 1.):
     """
 
-    :param list[float] or np.array frq:
-    :param float phase:
-    :param tuple or list img_shape:
-    :param float dx:
+    :param frq:
+    :param phase:
+    :param img_shape:
+    :param dx:
 
     :return phase_edge:
     """
@@ -303,7 +303,7 @@ def phase_fft2edge(frq: list[float],
 def xform_phase_translation(fx: float,
                             fy: float,
                             phase: float,
-                            shifted_center: list[float]):
+                            shifted_center: Sequence[float]):
     """
     Transform sinusoid phase based on translating coordinate center. If we make the transformation,
     x' = x - cx
@@ -311,10 +311,10 @@ def xform_phase_translation(fx: float,
     then the phase transforms
     phase' = phase + 2*pi * (fx * cx + fy * cy)
 
-    :param float fx: x-component of frequency
-    :param float fy: y-component of frequency
-    :param float phase:
-    :param list[float] shifted_center: shifted center in initial coordinates, [cx, cy]
+    :param fx: x-component of frequency
+    :param fy: y-component of frequency
+    :param phase:
+    :param shifted_center: shifted center in initial coordinates, [cx, cy]
 
     :return phase_shifted:
     """
@@ -336,10 +336,10 @@ def xform_sinusoid_params(fx_obj: float,
     find the frequency and phase parameters for the corresponding function on image space,
     cos[2pi f_xi * xi + 2pi f_yi * yi + phi_i]
 
-    :param float fx_obj: x-component of frequency in object space
-    :param float fy_obj: y-component of frequency in object space
-    :param float phi_obj: phase in object space
-    :param np.array affine_mat: affine transformation homogeneous coordinate matrix transforming
+    :param fx_obj: x-component of frequency in object space
+    :param fy_obj: y-component of frequency in object space
+    :param phi_obj: phase in object space
+    :param affine_mat: affine transformation homogeneous coordinate matrix transforming
      points in object space to image space
 
     :return fx_img: x-component of frequency in image space
@@ -446,7 +446,8 @@ def fit_xform_points(from_pts,
     :param from_pts: npts x ndims array, where each column gives coordinates for a different dimension, e.g. first
      column is x, second is y,...
     :param to_pts: npts x ndims array. The desired affine transformation acts on from_pts to produce to_pts
-    :param bool translate_only: if True do not allow scaling/shearing in affine transformation, only allow translation
+    :param translate_only: if True do not allow scaling/shearing in affine transformation, only allow translation
+
     :return affine_mat: affine matrix. This is an (ndim + 1) x (ndim + 1) matrix which act on homogeneous coordinates.
     To transform coordinates using this affine transformation use xform_points()
     :return vars: estimated variances of the affine transformation matrix entries
@@ -470,7 +471,7 @@ def fit_xform_points(from_pts,
     # [coord_0_from, coord_1_from, 1] * M1 = coord_0_to; M1 = [[A], [B], [C]]
     # [coord_0_from, coord_1_from, 1] * M2 = coord_1_to; M2 = [[D], [E], [F]]
     # and this naturally generalizes to any number of dimensions
-    affine_mat = np.zeros((ndim + 1,ndim + 1))
+    affine_mat = np.zeros((ndim + 1, ndim + 1))
     affine_mat[-1, -1] = 1
 
     vars = np.zeros(affine_mat.shape)
@@ -602,9 +603,9 @@ def fit_xform_points_ransac(from_pts: np.ndarray,
 
 def fit_xform_img(mat_obj: np.ndarray,
                   mat_img: np.ndarray,
-                  init_params: Optional[list[float]] = None,
-                  fixed_params: Optional[list[bool]] = None,
-                  bounds: Optional[tuple[tuple[float]]] = None) -> (dict, np.ndarray):
+                  init_params: Optional[Sequence[float]] = None,
+                  fixed_params: Optional[Sequence[bool]] = None,
+                  bounds: Optional[Sequence[Sequence[float]]] = None) -> (dict, np.ndarray):
     """
     Fit affine transformation by comparing image with transformed image
 
@@ -614,7 +615,7 @@ def fit_xform_img(mat_obj: np.ndarray,
     image space coordinates. Then the initial parameters are
     [amplitude, background, t[0, 0], t[0, 1], t[0, 2], t[1, 0], t[1, 1], t[1, 2]]
     :param fixed_params:
-    :bounds bounds:
+    :param bounds:
     :return results, xform:
     """
 
@@ -644,7 +645,7 @@ def fit_xform_img(mat_obj: np.ndarray,
 # ######################
 # rotation matrices
 # ######################
-def get_rot_mat(rot_axis: list[float],
+def get_rot_mat(rot_axis: Sequence[float],
                 gamma: float) -> np.ndarray:
     """
     Get matrix which rotates points about the specified axis by the given angle. Think of this rotation matrix
@@ -684,7 +685,6 @@ def get_rot_mat_angle_axis(rot_mat: np.ndarray) -> (np.ndarray, float):
     """
     if np.linalg.norm(rot_mat.dot(rot_mat.transpose()) - np.identity(rot_mat.shape[0])) > 1e-12:
         raise ValueError("rot_mat was not a valid rotation matrix")
-
 
     eig_vals, eig_vects = np.linalg.eig(rot_mat)
 

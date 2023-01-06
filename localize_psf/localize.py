@@ -5,7 +5,7 @@ The fitting code can be run on a CPU using multiprocessing with joblib, or on a 
 to GPUfit which can be found at https://github.com/QI2lab/Gpufit. To use the GPU code, you must download and
 compile this repository and install the python bindings.
 """
-from typing import Union, Optional
+from typing import Union, Optional, Sequence
 from pathlib import Path
 import time
 import warnings
@@ -28,6 +28,7 @@ try:
     import cupyx.scipy.ndimage
     _cupy_available = True
 except ImportError:
+    cp = np
     _cupy_available = False
 
 # custom GPUFit for fitting on GPU
@@ -38,8 +39,11 @@ except ImportError:
     _gpufit_available = False
 
 
-def get_coords(sizes: list[int],
-               drs: list[float],
+array = Union[np.ndarray, cp.ndarray]
+
+
+def get_coords(sizes: Sequence[int],
+               drs: Sequence[float],
                broadcast: bool = False):
     """
     Regularly spaced coordinates which can be broadcast to full size.
@@ -56,6 +60,8 @@ def get_coords(sizes: list[int],
 
     :param sizes: (s0, s1, ..., sn)
     :param drs: (dr0, dr1, ..., drn)
+    :param broadcast: whether to expand all arrays to full size, or keep as 1D arrays with singleton dimensions
+    that will be automatically broadcast during arithmetic
     :return coords: (coords0, coords1, ..., coordsn)
     """
     ndims = len(drs)
@@ -69,9 +75,9 @@ def get_coords(sizes: list[int],
     return coords
 
 
-def get_roi(center: tuple[float],
+def get_roi(center: Sequence[float],
             img: np.ndarray,
-            coords: tuple[np.ndarray],
+            coords: Sequence[np.ndarray],
             sizes: tuple[int]):
     """
     Find ROI which is nearly centered on center. Since center may not correspond to a pixel location, and the
@@ -100,8 +106,8 @@ def get_roi(center: tuple[float],
     return roi, img_roi, coords_roi
 
 
-def get_filter_kernel(sigmas: list[float],
-                      drs: list[float],
+def get_filter_kernel(sigmas: Sequence[float],
+                      drs: Sequence[float],
                       sigma_cutoff: int = 2):
     """
     Gaussian filter kernel for arbitrary dimensions. If drs or sigmas are zero along one dimension, then the kernel
@@ -146,12 +152,13 @@ def get_filter_kernel(sigmas: list[float],
     return kernel
 
 
-def filter_convolve(imgs,
-                    kernel,
-                    use_gpu: bool = _cupy_available):
+def filter_convolve(imgs: array,
+                    kernel: array) -> array:
     """
     Convolution filter using kernel with GPU support. To avoid roll-off effects at the edge, the convolved
     result is "normalized" by being divided by the kernel convolved with an array of ones.
+
+    This function can be run on either the GPU or the CPU. To run on the GPU, ensure that imgs is a cupy array
 
     :param imgs: images to be convolved
     :param kernel: kernel to be convolved. Does not need to be the same shape as image.
@@ -160,30 +167,35 @@ def filter_convolve(imgs,
     """
     # todo: check and make sure kernel and imgs are compatible. e.g. that kernel is smaller than image in all dims
     # todo: estimate how much memory convolution requires? Much more than I expect...
+    # todo: possibly because issue with fft plan caching, which is resolved by forcing cache to zero and clearing it
+
+    use_gpu = isinstance(imgs, cp.ndarray) and _cupy_available
 
     if use_gpu:
         xp = cp
         convolve = cupyx.scipy.signal.fftconvolve
+        cp.fft._cache.PlanCache(memsize=0)
     else:
         xp = np
         convolve = scipy.signal.fftconvolve
 
-    kernel = xp.array(kernel)
-    imgs = xp.array(imgs)
+    kernel = xp.asarray(kernel)
+    imgs = xp.asarray(imgs)
 
     # convolve, and deal with edges by normalizing
     imgs_filtered = convolve(imgs, kernel, mode="same")
     norm = convolve(xp.ones(imgs.shape), kernel, mode="same")
     imgs_filtered /= norm
 
-    # mempool = cp.get_default_memory_pool()
-    # mempool.free_all_blocks()
+    if use_gpu:
+        cache = cp.fft.config.get_plan_cache()
+        cache.clear()
 
     return imgs_filtered
 
 
-def get_max_filter_footprint(min_separations: list[float],
-                             drs: list[float]):
+def get_max_filter_footprint(min_separations: Sequence[float],
+                             drs: Sequence[float]) -> np.ndarray:
     """
     Get footprint for maximum filter. This is a binary mask which is True at points included in the mask
     and False at other points. For doing a square maximum filter can choose a footprint of only Trues, but cannot
@@ -208,21 +220,23 @@ def get_max_filter_footprint(min_separations: list[float],
     return footprint
 
 
-def find_peak_candidates(imgs: np.ndarray,
-                         footprint: np.ndarray,
+def find_peak_candidates(imgs: array,
+                         footprint: array,
                          threshold: float,
-                         mask: Optional[np.ndarray] = None,
-                         use_gpu_filter: bool = _cupy_available):
+                         mask: Optional[np.ndarray] = None) -> (np.ndarray, np.ndarray):
     """
-    Find peak candidates in image using maximum filter
+    Find peak candidates in image using maximum filter. This can be run on either the GPU or the CPU.
 
-    :param imgs: 2D or 3D array
+    :param imgs: 2D or 3D array. If this is a CuPy array, function will be run on the GPU
     :param footprint: footprint to use for maximum filter. Array should have same number of dimensions as imgs.
     This can be obtained from get_max_filter_footprint()
-    :param float threshold: only pixels with values greater than or equal to the threshold will be considered
-    :param bool use_gpu_filter: whether or not to do maximum filter on GPU
+    :param threshold: only pixels with values greater than or equal to the threshold will be considered
+    :param mask:
+
     :return inds, amps: np.array([[i0, i1, i2], ...]) array indices of local maxima
     """
+    use_gpu_filter = isinstance(imgs, cp.ndarray) and _cupy_available
+
     if use_gpu_filter:
         xp = cp
         max_filter = cupyx.scipy.ndimage.maximum_filter
@@ -233,15 +247,16 @@ def find_peak_candidates(imgs: np.ndarray,
     if mask is None:
         mask = xp.ones(imgs.shape, dtype=bool)
 
-    mask = xp.array(mask)
-    imgs = xp.array(imgs)
-    footprint = xp.array(footprint)
+    mask = xp.asarray(mask)
+    imgs = xp.asarray(imgs)
+    footprint = xp.asarray(footprint)
+
     img_max_filtered = max_filter(imgs, footprint=footprint)
     # don't use reduce because CuPy doesn't support it
     is_max = xp.logical_and(xp.logical_and(imgs == img_max_filtered, imgs >= threshold), mask)
 
     amps = imgs[is_max]
-    inds = np.argwhere(is_max)
+    inds = xp.argwhere(is_max)
 
     return inds, amps
 
@@ -264,6 +279,7 @@ def filter_nearby_peaks(centers: np.ndarray,
     :param mode: "average", "keep-one", or "remove"
     :param weights: only used in "average" mode. If weights are provided, a weighted average between nearby
      points is computed
+    :param nmax:
 
     :return centers_unique: array of unique center coordinates
     :return inds: index into the initial array to produce centers_unique. In mode is "keep-one" or "remove"
@@ -337,7 +353,6 @@ def filter_nearby_peaks(centers: np.ndarray,
                 inds_sectors = np.concatenate((inds_sectors[np.logical_not(in_overlap)],
                                                full_inds[inds_sectors][in_overlap][i_overlap]))
 
-
             # full results
             centers_unique = centers_unique_sectors
             inds = inds_sectors
@@ -389,8 +404,7 @@ def localize2d(img: np.ndarray,
     :param img: 2D image of size ny x nx
     :param str mode: 'radial-symmetry' or 'centroid'
 
-    :return xc:
-    :return yc:
+    :return xc, yc:
     """
     if img.ndim != 2:
         raise ValueError("img must be a 2D array, but was %dD" % img.ndim)
@@ -474,9 +488,7 @@ def localize3d(img: np.ndarray,
     :param img: 3D image of size nz x ny x nx
     :param str mode: 'radial-symmetry' or 'centroid'
 
-    :return xc:
-    :return yc:
-    :return zc:
+    :return xc, yc, zc:
     """
     if img.ndim != 3:
         raise ValueError("img must be a 3D array, but was %dD" % img.ndim)
@@ -499,7 +511,7 @@ def localize3d(img: np.ndarray,
         # take a cube of 8 voxels, and compute gradients at the center, using the four pixel diagonals that pass
         # through the center
         grad_n1 = img[1:, 1:, 1:] - img[:-1, :-1, :-1]
-        n1 = np.array([1, 1, 1]) / np.sqrt(3) # vectors go [nz, ny, nx]
+        n1 = np.array([1, 1, 1]) / np.sqrt(3)  # vectors go [nz, ny, nx]
         grad_n2 = img[1:, :-1, 1:] - img[:-1, 1:, :-1]
         n2 = np.array([1, -1, 1]) / np.sqrt(3)
         grad_n3 = img[1:, :-1, :-1] - img[:-1, 1:, 1:]
@@ -545,14 +557,14 @@ def localize3d(img: np.ndarray,
 
         # build 3x3 matrix from above
         mat = np.zeros((3, 3))
-        for ll in range(3): # rows of matrix
-            for ii in range(3): # columns of matrix
+        for ll in range(3):  # rows of matrix
+            for ii in range(3):  # columns of matrix
                 if ii == ll:
                     mat[ll, ii] += np.sum(-wk * (nk[ii] * nk[ll] - 1))
                 else:
                     mat[ll, ii] += np.sum(-wk * nk[ii] * nk[ll])
 
-                for jj in range(3): # internal sum
+                for jj in range(3):  # internal sum
                     if jj == ll:
                         mat[ll, ii] += np.sum(wk * nk[ii] * nk[jj] * (nk[jj] * nk[ll] - 1))
                     else:
@@ -561,8 +573,8 @@ def localize3d(img: np.ndarray,
         # build vector from above
         vec = np.zeros((3, 1))
         coord_sum = zk * nk[0] + yk * nk[1] + xk * nk[2]
-        for ll in range(3): # sum over J, K, L
-            for ii in range(3): # internal sum
+        for ll in range(3):  # sum over J, K, L
+            for ii in range(3):  # internal sum
                 if ii == ll:
                     vec[ll] += -np.sum((coords[ii] - nk[ii] * coord_sum) * (nk[ii] * nk[ll] - 1) * wk)
                 else:
@@ -596,7 +608,9 @@ def fit_roi(img_roi: np.ndarray,
     will determine the optimal value
     :param bounds: ((lower_bounds), (upper_bounds)) where lower_bounds and upper_bounds are each lists/tuples/arrays
     of length nparams
+    :param guess_bounds:
     :param model:
+    :param max_number_iterations:
     :return results: dictionary object containing information about fitting
     """
     z_roi, y_roi, x_roi = coords
@@ -645,7 +659,8 @@ def fit_rois(img_rois: list[np.ndarray],
     :param model: "gaussian", "rotated-gaussian", "gaussian-lorentzian"
     :param fixed_params: length nparams vector of parameters to fix. only supports fixing/unfixing
     each parameter for all fits
-    :param bool use_gpu:
+    :param guess_bounds:
+    :param use_gpu:
     :param debug:
     :param verbose:
     :param model: model to use for PSF fitting. If doing this on the CPU, use implementations in fit_psf.py, otherwise
@@ -837,14 +852,17 @@ def plot_fit_roi(fit_params: list[float],
     :param imgs: full image, such that imgs[zstart:zend, ystart:yend, xstart:xend] is the region that was fit
     :param coords: (z, y, x) broadcastable to same size as imgs
     :param init_params: initial parameters used in fit, optional
-    :param bool same_color_scale: whether or not to use same color scale for data and fits
     :param model:
+    :param string:
+    :param same_color_scale: whether to use same color scale for data and fits
     :param vmin:
     :param vmax:
     :param cmap:
+    :param gamma:
+    :param scale_z_display:
     :param figsize: (sx, sz)
-    :param str prefix: prefix prepended before save name
-    :param str save_dir: if None, do not save results
+    :param prefix: prefix prepended before save name
+    :param save_dir: if None, do not save results
     :return figh:
     """
 
@@ -861,7 +879,6 @@ def plot_fit_roi(fit_params: list[float],
     else:
         # dz = dc
         dz = dc * (roi[5] - roi[4] + 1) / 10
-
 
     if init_params is not None:
         center_guess = np.array([init_params[3], init_params[2], init_params[1]])
@@ -1218,12 +1235,12 @@ class unique_filter(filter):
         return conditions
 
 
-def get_param_filter(coords: tuple[np.ndarray],
-                     fit_dist_max_err: tuple[float],
-                     min_spot_sep: tuple[float],
-                     sigma_bounds: tuple[tuple[float], tuple[float]],
-                     amp_bounds: tuple[float] = (0, 0),
-                     dist_boundary_min: tuple[float] = (0, 0)):
+def get_param_filter(coords: Sequence[np.ndarray],
+                     fit_dist_max_err: Sequence[float],
+                     min_spot_sep: Sequence[float],
+                     sigma_bounds: tuple[Sequence[float], Sequence[float]],
+                     amp_bounds: Sequence[float] = (0, 0),
+                     dist_boundary_min: Sequence[float] = (0, 0)):
     """
     Simple composite filter testing bounds of fit parameters
     @param coords: (z, y, x)
@@ -1271,16 +1288,15 @@ def get_param_filter(coords: tuple[np.ndarray],
 
 
 def get_param_filter_model(model: psf.pixelated_psf_model,
-                           fit_dist_max_err: tuple[float],
-                           min_spot_sep: tuple[float] = (0, 0),
-                           param_bounds: Optional[tuple[tuple[float]]] = None,
+                           fit_dist_max_err: Sequence[float],
+                           min_spot_sep: Sequence[float] = (0, 0),
+                           param_bounds: Optional[tuple[Sequence[float], Sequence[float]]] = None,
                            center_param_inds: tuple[int] = (3, 2, 1),
                            ):
     """
     Simple composite filter testing bounds of fit parameters
 
     @param model: fit model
-    @param coords:
     @param fit_dist_max_err:
     @param min_spot_sep:
     @param param_bounds:
@@ -1310,15 +1326,14 @@ def get_param_filter_model(model: psf.pixelated_psf_model,
     return filter
 
 
-
 def filter_localizations(fit_params: np.ndarray,
                          init_params: np.ndarray,
-                         coords: tuple[np.ndarray],
-                         fit_dist_max_err: tuple[float],
-                         min_spot_sep: tuple[float],
-                         sigma_bounds: tuple[tuple[float], tuple[float]],
+                         coords: Sequence[np.ndarray],
+                         fit_dist_max_err: Sequence[float],
+                         min_spot_sep: Sequence[float],
+                         sigma_bounds: tuple[Sequence[float], Sequence[float]],
                          amp_min: float = 0,
-                         dist_boundary_min: tuple[float] = (0, 0)):
+                         dist_boundary_min: Sequence[float] = (0, 0)):
     """
     Given a list of fit parameters, return boolean arrays indicating which fits pass/fail given a variety
     of tests for reasonability
@@ -1421,10 +1436,10 @@ def filter_localizations(fit_params: np.ndarray,
 def localize_beads_generic(imgs: np.ndarray,
                            drs: tuple[float],
                            threshold: float,
-                           roi_size: tuple[float] = (4, 2, 2),
-                           filter_sigma_small: tuple[float] = (1, 0.1, 0.1),
-                           filter_sigma_large: tuple[float] = (10, 5, 5),
-                           min_spot_sep: tuple[float] = (0, 0),
+                           roi_size: Sequence[float] = (4., 2., 2.),
+                           filter_sigma_small: Sequence[float] = (1., 0.1, 0.1),
+                           filter_sigma_large: Sequence[float] = (10., 5., 5.),
+                           min_spot_sep: Sequence[float] = (0., 0.),
                            filter: Optional[filter] = None,
                            mask: Optional[np.ndarray] = None,
                            average_duplicates_before_fit: bool = True,
@@ -1462,7 +1477,6 @@ def localize_beads_generic(imgs: np.ndarray,
     and kwargs "image" and "image_filtered"
     @param mask: optionally boolean array of same size as image which indicates where to search for peaks
     @param average_duplicates_before_fit: test if points are "unique" within region defined by min_spot_sep before fitting
-    @param sigma_bounds: ((sz_min, sxy_min), (sz_max, sxy_max))
     @param max_nfit_iterations: maximum number of iterations in fitting function
     @param fit_filtered_images: whether to perform fitting on raw images or filtered images
     @param use_gpu_fit: whether to do spot fitting on the GPU
@@ -1473,6 +1487,8 @@ def localize_beads_generic(imgs: np.ndarray,
     for more details
     @param guess_bounds: whether to use bounds for each ROI guessed from the coordinates. If so, will use
     bound guesses from model.estimate_bounds().
+    @param debug:
+    @param return_filtered_images:
     @param **kwargs: passed through to fit_rois() function
     @return coords, fit_results, imgs_filtered: coords = (z, y, x)
     """
@@ -1526,15 +1542,17 @@ def localize_beads_generic(imgs: np.ndarray,
     else:
         xp = np
 
+    imgs = xp.asarray(imgs)
+
     if filter_sigma_small is not None:
-        ks = get_filter_kernel(filter_sigma_small, (dz, dy, dx))
-        imgs_hp = filter_convolve(imgs, ks, use_gpu=use_gpu_filter)
+        ks = xp.asarray(get_filter_kernel(filter_sigma_small, (dz, dy, dx)))
+        imgs_hp = filter_convolve(imgs, ks)
     else:
-        imgs_hp = xp.array(imgs)
+        imgs_hp = xp.asarray(imgs)
 
     if filter_sigma_large is not None:
-        kl = get_filter_kernel(filter_sigma_large, (dz, dy, dx))
-        imgs_lp = filter_convolve(imgs, kl, use_gpu=use_gpu_filter)
+        kl = xp.asarray(get_filter_kernel(filter_sigma_large, (dz, dy, dx)))
+        imgs_lp = filter_convolve(imgs, kl)
     else:
         imgs_lp = 0
 
@@ -1549,9 +1567,9 @@ def localize_beads_generic(imgs: np.ndarray,
     tstart = time.perf_counter()
 
     footprint = get_max_filter_footprint((dz_min_sep, dxy_min_sep, dxy_min_sep), (dz, dy, dx))
-    centers_guess_inds, _ = find_peak_candidates(imgs_filtered, footprint, threshold, mask=mask, use_gpu_filter=use_gpu_filter)
+    centers_guess_inds, _ = find_peak_candidates(imgs_filtered, footprint, threshold, mask=mask)
 
-    if use_gpu_filter:
+    if use_gpu_filter and _cupy_available:
         imgs_filtered = imgs_filtered.get()
         centers_guess_inds = centers_guess_inds.get()
 
@@ -1611,8 +1629,7 @@ def localize_beads_generic(imgs: np.ndarray,
         # ###################################################
         # determine initial guess values for fits
         # ###################################################
-        init_params = np.stack([
-                                model.estimate_parameters(img_rois[ii], (zrois[ii], yrois[ii], xrois[ii]))
+        init_params = np.stack([model.estimate_parameters(img_rois[ii], (zrois[ii], yrois[ii], xrois[ii]))
                                 for ii in range(len(img_rois))], axis=0)
 
         if np.any(np.isnan(init_params)):
@@ -1775,7 +1792,7 @@ def plot_bead_locations(imgs: np.ndarray,
     of center locations, and using different colors to indicate properties of the different centers e.g. sigma,
     amplitude, modulation depth, etc.
 
-    :param imgs: np.array either 3D or 2D. Dimensions order Z, Y, X
+    :param imgs: 3D or 2D array. Dimensions order Z, Y, X
     :param center_lists: [center_array_1, center_array_2, ...] where each center_array is a numpy array of size N_i x 3
     consisting of triples of center values giving cz, cy, cx
     :param str title: title of plot
@@ -1845,7 +1862,10 @@ def plot_bead_locations(imgs: np.ndarray,
     vmin = np.percentile(img_max_proj, vlims_percentile[0])
     vmax = np.percentile(img_max_proj, vlims_percentile[1])
 
-    im = ax.imshow(img_max_proj, norm=PowerNorm(gamma=gamma, vmin=vmin, vmax=vmax), cmap=plt.cm.get_cmap("bone"), extent=extent_xy)
+    im = ax.imshow(img_max_proj,
+                   norm=PowerNorm(gamma=gamma, vmin=vmin, vmax=vmax),
+                   cmap=plt.cm.get_cmap("bone"),
+                   extent=extent_xy)
     xlim = ax.get_xlim()
     ylim = ax.get_ylim()
 
@@ -1920,20 +1940,24 @@ def autofit_psfs(imgs: np.ndarray,
     :param min_spot_sep: (sz, sxy) minimum spot separation between different beads in um
     :param filter_sigma_small: (sz, sy, sx) sigmas of Gaussian filter used to smooth image in um
     :param filter_sigma_large: (sz, sy, sx) sigmas of Gaussian filter used to removed background in um
-     :param sigma_bounds: ((sz_min, sxy_min), (sz_max, sxy_max)) in um. exclude fits with sigmas that fall outside
+    :param sigma_bounds: ((sz_min, sxy_min), (sz_max, sxy_max)) in um. exclude fits with sigmas that fall outside
     these ranges
+    :param amp_bounds:
     :param roi_size_loc: (sz, sy, sx) size of ROI to used in localization, in um
-    :param float fit_amp_thresh: only consider spots which have fit values larger tha this amplitude
     :param dist_boundary_min:
+    :param localization_model:
+    :param max_number_iterations:
     :param fit_dist_max_err:
-    :param int num_localizations_to_plot: number of ROI's to plot
-    :param tuple psf_percentiles: calculate the averaged PSF from the smallest supplied percentage of spots. When
+    :param num_localizations_to_plot: number of ROI's to plot
+    :param psf_percentiles: calculate the averaged PSF from the smallest supplied percentage of spots. When
     a tuple is given, compute PSF's corresponding to each supplied percentage.
-    :param bool plot_results: optionally plot diagnostics
-    :param bool only_plot_good_fits: when plotting ROI, plot only fits that passed all filtering tests or plot all fits
-    :param bool plot_filtered_image: plot ROI's against filtered image also
-    :param float gamma: gamma to use when plotting
-    :param str save_dir: directory to save diagnostic plots. If None, these will not be saved
+    :param plot_results: optionally plot diagnostics
+    :param only_plot_good_fits: when plotting ROI, plot only fits that passed all filtering tests or plot all fits
+    :param plot_filtered_image: plot ROI's against filtered image also
+    :param use_gpu_filter:
+    :param use_gpu_fit:
+    :param gamma: gamma to use when plotting
+    :param save_dir: directory to save diagnostic plots. If None, these will not be saved
     :param figsize: (sx, sy)
     :param **kwargs: passed through to plt.figure()
 
@@ -2010,7 +2034,6 @@ def autofit_psfs(imgs: np.ndarray,
             ind_to_plot = np.arange(len(to_keep), dtype=int)[to_keep][:num_localizations_to_plot]
         else:
             ind_to_plot = np.arange(len(to_keep), dtype=int)[:num_localizations_to_plot]
-
 
         delayed = []
 
@@ -2151,7 +2174,7 @@ def autofit_psfs(imgs: np.ndarray,
             "to_keep": to_keep,
             "conditions": conditions,
             "condition_names": condition_names,
-            #"filter_settings": filter_settings,
+            # "filter_settings": filter_settings,
             "fit_states": fit_states,
             "chi_sqrs": chi_sqrs,
             "niterations": niters,
@@ -2167,6 +2190,5 @@ def autofit_psfs(imgs: np.ndarray,
         for k, v in data.items():
             if v is not None:
                 z.array(k, v, compressor="none")
-
 
     return data

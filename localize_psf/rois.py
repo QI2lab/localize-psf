@@ -1,12 +1,12 @@
 """
 Tools for dealing with regions of interest (ROI's)
 """
-from typing import Optional
+from typing import Optional, Sequence
 import numpy as np
 
 
-def roi2global(coords_roi: list[float],
-               roi: list[int]):
+def roi2global(coords_roi: Sequence[float],
+               roi: Sequence[int]):
     """
     Convert from ROI coordinates to global coordinates. i.e. if we have an array M then
     ROI(M)[c1, c2, ..., cn] = M[c1_full, c2_full, ..., cn_full]
@@ -23,8 +23,8 @@ def roi2global(coords_roi: list[float],
     return coords_full
 
 
-def global2roi(coords_full: list[float],
-               roi: list[int]):
+def global2roi(coords_full: Sequence[float],
+               roi: Sequence[int]):
     """
     Convert from global coordinates to ROI coordinates. i.e. if we have an array M, then
     M[c1, c2, ..., cn] = ROI(M)[c1_xform, c2_xform, ..., cn_xform]
@@ -42,10 +42,10 @@ def global2roi(coords_full: list[float],
     return coords_roi
 
 
-def get_centered_roi(centers: list,
-                     sizes: list[int],
-                     min_vals: Optional[list[int]] = None,
-                     max_vals: Optional[list[int]] = None):
+def get_centered_roi(centers: Sequence,
+                     sizes: Sequence[int],
+                     min_vals: Optional[Sequence[int]] = None,
+                     max_vals: Optional[Sequence[int]] = None):
     """
     Get end points of an roi centered about centers (as close as possible) with length sizes.
     If the ROI size is odd, the ROI will be perfectly centered. Otherwise, the centering will
@@ -95,9 +95,9 @@ def get_centered_roi(centers: list,
     return roi
 
 
-def cut_roi(roi: list[int],
+def cut_roi(roi: Sequence[int],
             arr: np.ndarray,
-            axes: Optional[tuple[int]] = None,
+            axes: Optional[np.ndarray] = None,
             allow_broadcastable_arrays: bool = True) -> np.ndarray:
     """
     Return region of interest from an array
@@ -125,7 +125,7 @@ def cut_roi(roi: list[int],
     slices = [slice(0, arr.shape[ii]) for ii in range(arr.ndim)]
     # update whichever axes need updating
     for ii, ax in enumerate(axes):
-        # get slices, unless array has unit size over this dimension and then we will assume is broadcasting ...
+        # get slices, unless array has unit size over this dimension, and then we will assume is broadcasting ...
         if allow_broadcastable_arrays and arr.shape[ax] == 1:
             slices[ax] = slice(0, 1)
         else:
@@ -134,8 +134,8 @@ def cut_roi(roi: list[int],
     return arr[tuple(slices)]
 
 
-def get_roi_size(sizes: list[float],
-                 drs: list[float],
+def get_roi_size(sizes: Sequence[float],
+                 drs: Sequence[float],
                  ensure_odd: bool = True):
     """
     Get closest larger ROI size in pixels given a set of sizes in real units

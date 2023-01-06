@@ -3,7 +3,7 @@ Tools for working with or simulating camera data
 """
 import numpy as np
 from localize_psf import fit_psf
-from typing import Optional, Union
+from typing import Optional, Union, Sequence
 
 _cupy_available = True
 try:
@@ -24,13 +24,14 @@ def adc2photons(img: array,
     :param img:
     :param gain_map:
     :param background_map:
+    :param precision:
     :return photons: array of same size as img. Will be of type float
     """
 
     # subtraction
     photons = (img.astype(float) - background_map) / gain_map
 
-    # set anything less than zero to machine precision
+    # set anything less than value to zero
     photons[photons <= precision] = 0
 
     return photons
@@ -111,8 +112,9 @@ def simulated_img(ground_truth: array,
 
     return img, snr
 
+
 def bin(img: array,
-        bin_sizes: list[int],
+        bin_sizes: Sequence[int],
         mode: str = "sum") -> array:
     """
     Bin image by summing or averaging adjacent pixels
