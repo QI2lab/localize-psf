@@ -615,13 +615,14 @@ def fit_roi(img_roi: np.ndarray,
     """
     z_roi, y_roi, x_roi = coords
 
+    # todo: this causes problems with skewed CPU fitting
     # if img_roi is 2D and z- dimension size is 0, treat as 3D
-    if img_roi.ndim == 2 and z_roi.shape[0] == 1:
-        img_roi = np.expand_dims(img_roi, axis=0)
+    #if img_roi.ndim == 2 and z_roi.shape[0] == 1:
+    #    img_roi = np.expand_dims(img_roi, axis=0)
 
     # img_roi must be 3D
-    if img_roi.ndim != 3:
-        raise ValueError(f"img_roi must have 3 dimensions but had {img_roi.ndim:d}")
+    #if img_roi.ndim != 3:
+    #    raise ValueError(f"img_roi must have 3 dimensions but had {img_roi.ndim:d}")
 
     results = model.fit(img_roi,
                         coords,
@@ -674,9 +675,10 @@ def fit_rois(img_rois: list[np.ndarray],
 
     zrois, yrois, xrois = coords_rois
 
-    for ii in range(len(img_rois)):
-        if img_rois[ii].ndim != 3:
-            raise ValueError(f"img_rois position {ii:d} was not 3-dimensional")
+    # PTB: todo: this should not need to be true, but need to resolve this story to fit skewed regions on the CPU
+    #for ii in range(len(img_rois)):
+    #    if img_rois[ii].ndim != 3:
+    #        raise ValueError(f"img_rois position {ii:d} was not 3-dimensional"
 
     if not use_gpu:
         tstart = time.perf_counter()
