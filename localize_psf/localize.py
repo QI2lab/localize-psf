@@ -1747,7 +1747,9 @@ def localize_beads(imgs: np.ndarray,
                    fit_filtered_images: bool = False,
                    use_gpu_fit: bool = _gpufit_available,
                    use_gpu_filter: bool = _cupy_available,
-                   verbose: bool = True):
+                   return_filtered_images: bool = False,
+                   verbose: bool = True,
+                   **kwargs):
     """
     Wrapper around localize_beads_generic() which also takes all filter parameters as arguments. Mostly for
     historical convenience. Avoids the need to instantiate a separate filter object.
@@ -1775,7 +1777,9 @@ def localize_beads(imgs: np.ndarray,
                                   fit_filtered_images=fit_filtered_images,
                                   use_gpu_fit=use_gpu_fit,
                                   use_gpu_filter=use_gpu_filter,
-                                  verbose=verbose)
+                                  return_filtered_images=return_filtered_images,
+                                  verbose=verbose,
+                                  **kwargs)
 
 
 def plot_bead_locations(imgs: np.ndarray,
