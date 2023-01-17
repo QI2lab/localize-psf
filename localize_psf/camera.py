@@ -152,3 +152,36 @@ def bin(img: array,
         raise ValueError(f"'mode' must be 'sum' or 'mean' but was '{mode:s}'")
 
     return img_binned
+
+
+def bin_adjoint(img_b: array,
+                bin_sizes: Sequence[int],
+                mode: str = "sum") -> array:
+    """
+    Binning adjoint operation
+
+    @param img_b: NumPy or Cupy array of size n0 x n1 x ... x n_{m-1}
+    @param bin_sizes: list [by, bx]
+    @param mode: "sum" or "mean"
+    @return: img
+    """
+
+    if isinstance(img_b, cp.ndarray):
+        xp = cp
+    else:
+        xp = np
+
+    ny, nx = bin_sizes
+
+    extra_dims = img_b.ndim - 2
+
+    if mode == "sum":
+        kernel = xp.ones((1,) * extra_dims + (ny, nx))
+    elif mode == "mean":
+        kernel = xp.ones((1,) * extra_dims + (ny, nx)) / (ny * nx)
+    else:
+        raise ValueError(f"'mode' must be 'sum' or 'mean' but was '{mode:s}'")
+
+    img = xp.kron(img_b, kernel)
+
+    return img
