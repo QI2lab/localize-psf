@@ -615,13 +615,14 @@ def fit_roi(img_roi: np.ndarray,
     """
     z_roi, y_roi, x_roi = coords
 
+    # todo: this causes problems with skewed CPU fitting
     # if img_roi is 2D and z- dimension size is 0, treat as 3D
-    if img_roi.ndim == 2 and z_roi.shape[0] == 1:
-        img_roi = np.expand_dims(img_roi, axis=0)
+    #if img_roi.ndim == 2 and z_roi.shape[0] == 1:
+    #    img_roi = np.expand_dims(img_roi, axis=0)
 
     # img_roi must be 3D
-    if img_roi.ndim != 3:
-        raise ValueError(f"img_roi must have 3 dimensions but had {img_roi.ndim:d}")
+    #if img_roi.ndim != 3:
+    #    raise ValueError(f"img_roi must have 3 dimensions but had {img_roi.ndim:d}")
 
     results = model.fit(img_roi,
                         coords,
@@ -674,9 +675,10 @@ def fit_rois(img_rois: list[np.ndarray],
 
     zrois, yrois, xrois = coords_rois
 
-    for ii in range(len(img_rois)):
-        if img_rois[ii].ndim != 3:
-            raise ValueError(f"img_rois position {ii:d} was not 3-dimensional")
+    # PTB: todo: this should not need to be true, but need to resolve this story to fit skewed regions on the CPU
+    #for ii in range(len(img_rois)):
+    #    if img_rois[ii].ndim != 3:
+    #        raise ValueError(f"img_rois position {ii:d} was not 3-dimensional"
 
     if not use_gpu:
         tstart = time.perf_counter()
@@ -1745,7 +1747,9 @@ def localize_beads(imgs: np.ndarray,
                    fit_filtered_images: bool = False,
                    use_gpu_fit: bool = _gpufit_available,
                    use_gpu_filter: bool = _cupy_available,
-                   verbose: bool = True):
+                   return_filtered_images: bool = False,
+                   verbose: bool = True,
+                   **kwargs):
     """
     Wrapper around localize_beads_generic() which also takes all filter parameters as arguments. Mostly for
     historical convenience. Avoids the need to instantiate a separate filter object.
@@ -1773,7 +1777,9 @@ def localize_beads(imgs: np.ndarray,
                                   fit_filtered_images=fit_filtered_images,
                                   use_gpu_fit=use_gpu_fit,
                                   use_gpu_filter=use_gpu_filter,
-                                  verbose=verbose)
+                                  return_filtered_images=return_filtered_images,
+                                  verbose=verbose,
+                                  **kwargs)
 
 
 def plot_bead_locations(imgs: np.ndarray,
