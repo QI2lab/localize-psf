@@ -65,7 +65,7 @@ def simulated_img(ground_truth: array,
     :return img, snr:
     """
 
-    if isinstance(ground_truth, cp.ndarray):
+    if isinstance(ground_truth, cp.ndarray) and _cupy_available:
         xp = cp
     else:
         xp = np
@@ -120,24 +120,29 @@ def bin(img: array,
     Bin image by summing or averaging adjacent pixels
 
     @param img: NumPy or CuPy array of size n0 x n1 x ... x n_{m-1}
-    @param bin_sizes: list [b0, ..., b_{m-1}]
+    @param bin_sizes: [bk, ..., b_{m-1}] amount to bin for the last m-k dimensions of img.
+    Must be shorter than img.ndim,
     @param mode: "sum" or "mean"
-    @return img_binned:
+    @return img_binned: binned image
     """
 
-    if isinstance(img, cp.ndarray):
+    if isinstance(img, cp.ndarray) and _cupy_available:
         xp = cp
     else:
         xp = np
 
-    img = xp.array(img)
+    img = xp.asarray(img)
+
+    # if bin sizes is not the same size as img dims, apply it to the last len(bin_sizes) dimensions
+    bin_sizes = tuple(bin_sizes)
+    bin_sizes = (1,) * (img.ndim - len(bin_sizes)) + bin_sizes
 
     if len(bin_sizes) != img.ndim:
         raise ValueError("img must have same number of dimensions as bin_sizes")
 
-    for nb, nd in zip(bin_sizes, img.shape):
-        if nd % nb != 0:
-            raise ValueError(f"dimension of size {nd:d} cannot be divided into {nb:d} bins")
+    for ii, (nb, nd) in enumerate(zip(bin_sizes, img.shape)):
+        if nd % nb != 0 and nb != 1:
+            raise ValueError(f"dimension of size {nd:d} cannot be divided into {nb:d} bins along axis {ii:d}")
 
     new_shape = [[nd // nb, nb] for nb, nd in zip(bin_sizes, img.shape)]
     new_shape = [v for sub_list in new_shape for v in sub_list]
@@ -158,7 +163,9 @@ def bin_adjoint(img_b: array,
                 bin_sizes: Sequence[int],
                 mode: str = "sum") -> array:
     """
-    Binning adjoint operation
+    Binning adjoint operation. These operations are adjoing in the sense that
+
+    <w | B*v> = <Badj * w | v>
 
     @param img_b: NumPy or Cupy array of size n0 x n1 x ... x n_{m-1}
     @param bin_sizes: list [by, bx]
@@ -166,7 +173,7 @@ def bin_adjoint(img_b: array,
     @return: img
     """
 
-    if isinstance(img_b, cp.ndarray):
+    if isinstance(img_b, cp.ndarray) and _cupy_available:
         xp = cp
     else:
         xp = np
