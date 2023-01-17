@@ -22,6 +22,7 @@ class Test_psf(unittest.TestCase):
         w = np.random.rand(ny // nbin, nx // nbin)
         v = np.random.rand(ny, nx)
 
+        # sum mode
         Bv = camera.bin(v, [nbin, nbin], mode="sum")
         Badj_w = camera.bin_adjoint(w, [nbin, nbin], mode="sum")
 
@@ -29,3 +30,12 @@ class Test_psf(unittest.TestCase):
         prod2 = np.sum(Badj_w.conj() * v)
 
         self.assertAlmostEqual(prod1, prod2, 9)
+
+        # mean mode
+        Bv_mean = camera.bin(v, [nbin, nbin], mode="mean")
+        Badj_w_mean = camera.bin_adjoint(w, [nbin, nbin], mode="mean")
+
+        prod1_mean = np.sum(w.conj() * Bv_mean)
+        prod2_mean = np.sum(Badj_w_mean.conj() * v)
+
+        self.assertAlmostEqual(prod1_mean, prod2_mean, 9)
