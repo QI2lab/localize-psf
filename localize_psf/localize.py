@@ -1238,11 +1238,11 @@ class unique_filter(filter):
 
 
 def get_param_filter(coords: Sequence[np.ndarray],
-                     fit_dist_max_err: Sequence[float],
-                     min_spot_sep: Sequence[float],
-                     sigma_bounds: tuple[Sequence[float], Sequence[float]],
-                     amp_bounds: Sequence[float] = (0, 0),
-                     dist_boundary_min: Sequence[float] = (0, 0)):
+                     fit_dist_max_err: Sequence[float] = (np.inf, np.inf),
+                     min_spot_sep: Sequence[float] = (0., 0.),
+                     sigma_bounds: tuple[Sequence[float], Sequence[float]] = ((0., 0.), (np.inf, np.inf)),
+                     amp_bounds: Sequence[float] = (0., np.inf),
+                     dist_boundary_min: Sequence[float] = (0., 0.)):
     """
     Simple composite filter testing bounds of fit parameters
     @param coords: (z, y, x)
