@@ -1454,6 +1454,8 @@ def localize_beads_generic(imgs: np.ndarray,
                            guess_bounds: bool = False,
                            debug: bool = False,
                            return_filtered_images: bool = False,
+                           model_zsize_index: int = 5,
+                           model_zposition_index: int = 3,
                            **kwargs):
     """
     Given an image consisting of diffraction limited features and background, identify the diffraction limited features
@@ -1653,19 +1655,21 @@ def localize_beads_generic(imgs: np.ndarray,
         fixed_params = [False] * model.nparams
         # if 2D, don't want to fit cz or sz
         if data_is_2d:
-            if model.parameter_names[5] != "sz":
+            if model.parameter_names[model_zsize_index] != "sz":
+                # todo: should probably remove this check...
                 raise ValueError(f"Data was 2D, but model {str(model):s} is not supported because"
-                                 f" parameter 5 is not 'sz'.")
+                                 f" parameter {model_zsize_index:d} is not 'sz'.")
             # fix sigma-z
-            fixed_params[5] = True
-            init_params[:, 5] = 1.
+            fixed_params[model_zsize_index] = True
+            init_params[:, model_zsize_index] = 1.
 
-            if model.parameter_names[3] != "cz":
+            if model.parameter_names[model_zposition_index] != "cz":
+                # todo: should probably remove this check
                 raise ValueError(f"Data was 2D, but model {str(model):s} is not supported because"
-                                 f" parameter 3 is not 'cz'.")
+                                 f" parameter {model_zposition_index:d} is not 'cz'.")
             # fix cz
-            fixed_params[3] = True
-            init_params[:, 3] = z[0, 0, 0]
+            fixed_params[model_zposition_index] = True
+            init_params[:, model_zposition_index] = z[0, 0, 0]
 
         fit_results = fit_rois(img_rois,
                                (zrois, yrois, xrois),
