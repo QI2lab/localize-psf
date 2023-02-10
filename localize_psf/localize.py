@@ -724,7 +724,8 @@ def fit_rois(img_rois: list[np.ndarray],
 
         models_mapping = ((psf.gaussian3d_psf_model, gf.ModelID.GAUSS_3D_ARB),
                           (psf.gaussian_lorentzian_psf_model, gf.ModelID.GAUSS_LOR_3D_ARB),
-                          (psf.gaussian3d_asymmetric_rotated_pixelated, gf.ModelID.GAUSS_3D_ROT_ARB)
+                          (psf.gaussian3d_asymmetric_rotated_pixelated, gf.ModelID.GAUSS_3D_ROT_ARB),
+                          (psf.gaussian3d_asymmetric_pixelated, gf.ModelID.GAUSS_3D_ASYM_ARB)
                           )
         model_id = None
         for mod, mod_gpu in models_mapping:
@@ -769,7 +770,10 @@ def fit_rois(img_rois: list[np.ndarray],
                                     roi_sizes.astype(np.float32)))
 
         # some models have extra non-fit parameters appended at end of user_info
-        if model_id == gf.ModelID.GAUSS_3D_ARB or model_id == gf.ModelID.GAUSS_3D_ROT_ARB:
+        if model_id == gf.ModelID.GAUSS_3D_ARB or \
+           model_id == gf.ModelID.GAUSS_3D_ROT_ARB or \
+           model_id == gf.ModelID.GAUSS_3D_ASYM_ARB:
+
             user_info = np.concatenate((user_info,
                                         np.array(model.minimum_sigmas).astype(np.float32)))
 
