@@ -38,7 +38,6 @@ try:
 except ImportError:
     _gpufit_available = False
 
-
 array = Union[np.ndarray, cp.ndarray]
 
 
@@ -1916,7 +1915,7 @@ def autofit_psfs(imgs: np.ndarray,
                  psf_roi_size: list[float],
                  dxy: float,
                  dz: float,
-                 summary_model: psf.pixelated_psf_model = psf.gridded_psf_model(wavelength=0.532, ni=1.5, model_name="vectorial"),
+                 summary_model: psf.pixelated_psf_model = psf.gridded_psf_model(wavelength=0.532, ni=1.5, model_name="gaussian"),
                  threshold: float = 100.,
                  min_spot_sep: tuple[float] = (0., 0.),
                  filter_sigma_small: tuple[float] = (1, 0.5, 0.5),
