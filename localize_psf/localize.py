@@ -1479,7 +1479,9 @@ def localize_beads_generic(imgs: np.ndarray,
     features which are smaller than these sigmas will be high pass filtered out. To turn off this filter, set to None
     @param filter_sigma_large: (sz, sy, sx) large sigmas to be used in difference-of-Gaussian filter. Roughly speaking,
     features which are larger than these sigmas will be low pass filtered out. To turn off this filter, set to None
-    @param min_spot_sep: (dz, dxy) minimum separation allowed between adjacent peaks
+    @param min_spot_sep: (dz, dxy) minimum separation allowed between adjacent peaks. This is used to determine
+    (1) the size of the maximum filter used to identify spot candidates and (2) as the threshold distance for
+    combining two nearby spots. These must be larger than the pixel sizes along the corresponding dimensions
     @param filter: filter will be applied with args = [fit_params, ref_params, chi_sqrs, niters, rois]
     and kwargs "image" and "image_filtered"
     @param mask: optionally boolean array of same size as image which indicates where to search for peaks
@@ -1538,6 +1540,13 @@ def localize_beads_generic(imgs: np.ndarray,
     z, y, x = get_coords(imgs.shape, (dz, dy, dx))
     dz_min_sep, dxy_min_sep = min_spot_sep
     roi_size_pix = roi_fns.get_roi_size(roi_size, [dz, dy, dx], ensure_odd=True)
+
+    if dz_min_sep < dz and not data_is_2d:
+        raise ValueError(f"minimum separation along the z-direction was {dz_min_sep:.2f}, but this must be greater than the z-pixel size={dz:.2f}")
+
+    if dxy_min_sep < dx or dxy_min_sep < dy:
+        raise ValueError(
+            f"minimum separation along the xy-direction was {dxy_min_sep:.2f}, but this must be greater than the x- and y-pixel sizes=({dx:.2f}, {dy:.2f})")
 
     # ###################################
     # filter images
