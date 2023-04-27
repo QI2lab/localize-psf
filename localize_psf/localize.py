@@ -60,7 +60,7 @@ def get_coords(sizes: Sequence[int],
     :param sizes: (s0, s1, ..., sn)
     :param drs: (dr0, dr1, ..., drn)
     :param broadcast: whether to expand all arrays to full size, or keep as 1D arrays with singleton dimensions
-    that will be automatically broadcast during arithmetic
+      that will be automatically broadcast during arithmetic
     :return coords: (coords0, coords1, ..., coordsn)
     """
     ndims = len(drs)
@@ -228,10 +228,9 @@ def find_peak_candidates(imgs: array,
 
     :param imgs: 2D or 3D array. If this is a CuPy array, function will be run on the GPU
     :param footprint: footprint to use for maximum filter. Array should have same number of dimensions as imgs.
-    This can be obtained from get_max_filter_footprint()
+      This can be obtained from get_max_filter_footprint()
     :param threshold: only pixels with values greater than or equal to the threshold will be considered
     :param mask:
-
     :return inds, amps: np.array([[i0, i1, i2], ...]) array indices of local maxima
     """
     use_gpu_filter = isinstance(imgs, cp.ndarray) and _cupy_available
@@ -279,12 +278,11 @@ def filter_nearby_peaks(centers: np.ndarray,
     :param weights: only used in "average" mode. If weights are provided, a weighted average between nearby
      points is computed
     :param nmax:
-
     :return centers_unique: array of unique center coordinates
     :return inds: index into the initial array to produce centers_unique. In mode is "keep-one" or "remove"
-    then centers_unique = centers[inds]. If mode is "average", this will not be true as centers_unique will
-    not be elements of centers. However, centers[inds] will correspond to one point which was averaged to produce
-    the corresponding element of centers_unique
+      then centers_unique = centers[inds]. If mode is "average", this will not be true as centers_unique will
+      not be elements of centers. However, centers[inds] will correspond to one point which was averaged to produce
+      the corresponding element of centers_unique
     """
 
     if centers.ndim != 2 or centers.shape[1] != 3:
@@ -401,8 +399,7 @@ def localize2d(img: np.ndarray,
     Perform 2D localization using the radial symmetry approach of https://doi.org/10.1038/nmeth.2071
 
     :param img: 2D image of size ny x nx
-    :param str mode: 'radial-symmetry' or 'centroid'
-
+    :param mode: 'radial-symmetry' or 'centroid'
     :return xc, yc:
     """
     if img.ndim != 2:
@@ -486,7 +483,6 @@ def localize3d(img: np.ndarray,
 
     :param img: 3D image of size nz x ny x nx
     :param str mode: 'radial-symmetry' or 'centroid'
-
     :return xc, yc, zc:
     """
     if img.ndim != 3:
@@ -601,12 +597,12 @@ def fit_roi(img_roi: np.ndarray,
     :param img_roi: array of size nz x ny x nx which will be fit
     :param coords: (z_roi, y_roi, x_roi). These coordinate arrays must be broadcastable to the same size as img_roi
     :param init_params: array of length model.nparams, where the parameters are
-    [amplitude, center-x, center-y, center-z, sigma-xy, sigma_z, offset]
+      [amplitude, center-x, center-y, center-z, sigma-xy, sigma_z, offset]
     :param fixed_params: boolean array of length 7. For entries which are True, the fit function will force
-    that parameter to be identical to the value in init_params. For entries which are False, the fit function
-    will determine the optimal value
+      that parameter to be identical to the value in init_params. For entries which are False, the fit function
+      will determine the optimal value
     :param bounds: ((lower_bounds), (upper_bounds)) where lower_bounds and upper_bounds are each lists/tuples/arrays
-    of length nparams
+      of length nparams
     :param guess_bounds:
     :param model:
     :param max_number_iterations:
@@ -658,13 +654,13 @@ def fit_rois(img_rois: list[np.ndarray],
     :param estimator: "LSE" or "MLE", only for GPUFIT
     :param model: "gaussian", "rotated-gaussian", "gaussian-lorentzian"
     :param fixed_params: length nparams vector of parameters to fix. only supports fixing/unfixing
-    each parameter for all fits
+      each parameter for all fits
     :param guess_bounds:
     :param use_gpu:
     :param debug:
     :param verbose:
     :param model: model to use for PSF fitting. If doing this on the CPU, use implementations in fit_psf.py, otherwise
-    model must have a corresponding version in GPU fit.
+      model must have a corresponding version in GPU fit.
     :return fit_results:
     """
 
@@ -852,6 +848,7 @@ def plot_fit_roi(fit_params: list[float],
                  save_dir: Optional[str] = None):
     """
     Plot results obtained from fitting functions fit_gauss_roi() or fit_gauss_rois()
+
     :param fit_params:
     :param roi: [zstart, zend, ystart, yend, xstart, xend]
     :param imgs: full image, such that imgs[zstart:zend, ystart:yend, xstart:xend] is the region that was fit
@@ -1087,17 +1084,16 @@ class filter:
     def filter(self, fit_params, *args, **kwargs):
         """
         Filter function requis parameters and can optionally accept other arguments, e.g. if want
-        to comapre fit_params with initial parameters or etc.
+        to compare fit_params with initial parameters or etc. Filter functions are free to ignore all
+        parameters besides fit_params, but must accept arbitrary number of arguments.
 
-        filter functions are free to ignore all parameters besides fit_params,
-        but must accept arbitrary number of arguments
-        @param fit_params:
-        @param args: additional arguments which must all be arrays and must all have first dimensions of the same length
-        @param kwargs: key-word arguments, which should be objects which apply to all points. This matter mostly
-        if you want to us the __mul__ method. When applying filters where order matters, each element of *args
-        will be reduced to an array which only keeps those elements that passed the previous filter, but
-        **kwargs will not be touched
-        @return:
+        :param fit_params:
+        :param args: additional arguments which must all be arrays and must all have first dimensions of the same length
+        :param kwargs: key-word arguments, which should be objects which apply to all points. This matter mostly
+          if you want to us the __mul__ method. When applying filters where order matters, each element of *args
+          will be reduced to an array which only keeps those elements that passed the previous filter, but
+          **kwargs will not be touched
+        :return:
         """
 
         if fit_params.ndim == 1:
@@ -1113,8 +1109,9 @@ class filter:
     def __add__(self, other):
         """
         return new filter which concatenates the results from two other filters
-        @param other:
-        @return:
+
+        :param other:
+        :return:
         """
 
         def both_filter(fit_params, *args, **kwargs):
@@ -1130,8 +1127,9 @@ class filter:
     def __mul__(self, other):
         """
         apply rightmost filter first, then apply left filter to only those points which succeeded.
-        @param other:
-        @return:
+
+        :param other:
+        :return:
         """
 
         def sequential_filter(fit_params, *args, **kwargs):
@@ -1153,6 +1151,9 @@ class filter:
 
 
 class no_filter(filter):
+    """
+    Filter which accepts all entries
+    """
     def __init__(self):
         self.condition_names = ["none"]
 
@@ -1212,10 +1213,10 @@ class unique_filter(filter):
                  center_indices: tuple[int] = (3, 2, 1)):
         """
 
-        @param dxy_min_dist:
-        @param dz_min_dist:
-        @param name:
-        @param center_indices: indices of cz, cy, cx in model respectively
+        :param dxy_min_dist:
+        :param dz_min_dist:
+        :param name:
+        :param center_indices: indices of cz, cy, cx in model respectively
         """
 
         self.dxy_min_dist = dxy_min_dist
@@ -1225,10 +1226,11 @@ class unique_filter(filter):
 
     def filter(self, fit_params, *args, **kwargs):
         """
-        @param fit_params: we assume that cx = fit_params[:, 1], cy = fit_params[:, 2], cz = fit_params[:, 3]
-        @param args:
-        @param kwargs:
-        @return:
+
+        :param fit_params: we assume that cx = fit_params[:, 1], cy = fit_params[:, 2], cz = fit_params[:, 3]
+        :param args:
+        :param kwargs:
+        :return:
         """
         _, unique_inds = filter_nearby_peaks(fit_params[:, self.center_indices],
                                              self.dxy_min_dist,
@@ -1248,13 +1250,14 @@ def get_param_filter(coords: Sequence[np.ndarray],
                      dist_boundary_min: Sequence[float] = (0., 0.)):
     """
     Simple composite filter testing bounds of fit parameters
-    @param coords: (z, y, x)
-    @param fit_dist_max_err: (dmax_z, dmax_xy) maximum distance between fit points allowed.
-    @param min_spot_sep: (dz_min, dxy_min)
-    @param sigma_bounds: ((sz_min, sxy_min), (sz_max, sxy_max))
-    @param amp_bounds: (amp_min, amp_max)
-    @param dist_boundary_min: (dz_min, dxy_min)
-    @return filter:
+
+    :param coords: (z, y, x)
+    :param fit_dist_max_err: (dmax_z, dmax_xy) maximum distance between fit points allowed.
+    :param min_spot_sep: (dz_min, dxy_min)
+    :param sigma_bounds: ((sz_min, sxy_min), (sz_max, sxy_max))
+    :param amp_bounds: (amp_min, amp_max)
+    :param dist_boundary_min: (dz_min, dxy_min)
+    :return filter:
     """
 
     z, y, x = coords
@@ -1301,12 +1304,12 @@ def get_param_filter_model(model: psf.pixelated_psf_model,
     """
     Simple composite filter testing bounds of fit parameters
 
-    @param model: fit model
-    @param fit_dist_max_err:
-    @param min_spot_sep:
-    @param param_bounds:
-    @param center_param_inds:
-    @return:
+    :param model: fit model
+    :param fit_dist_max_err:
+    :param min_spot_sep:
+    :param param_bounds:
+    :param center_param_inds:
+    :return:
     """
 
     filter = no_filter()
@@ -1344,17 +1347,17 @@ def filter_localizations(fit_params: np.ndarray,
     of tests for reasonability
 
     :param fit_params: nfits x 7, results of fitting where the parameters are
-     [amplitude, center x, center y, center z, size xy, size z, background]. Most commonly these values come from
-     a 3D Gaussian fit. But other models can be used as well.
+      [amplitude, center x, center y, center z, size xy, size z, background]. Most commonly these values come from
+      a 3D Gaussian fit. But other models can be used as well.
     :param init_params: nfits x 7, initial guess parameters used in fits
     :param coords: (z, y, x)
-    :param fit_dist_max_err = (dz_max, dxy_max) maximum distance between guess value and fit value
+    :param fit_dist_max_err: (dz_max, dxy_max) maximum distance between guess value and fit value
     :param min_spot_sep: (dz, dxy) assume points separated by less than this distance come from one spot
     :param sigma_bounds: ((sz_min, sxy_min), (sz_max, sxy_max)) exclude fits with sigmas that fall outside
-    these ranges
+      these ranges
     :param amp_min: exclude fits with smaller amplitude
     :param dist_boundary_min: (dz_min, dxy_min)
-    :return to_keep, conditions, condition_names, filter_settings:
+    :return: (to_keep, conditions, condition_names, filter_settings)
     """
     # todo: deprecate this and replace with the filter class objects as did in localize_beads_generic
 
@@ -1471,35 +1474,35 @@ def localize_beads_generic(imgs: np.ndarray,
     the various parameters used in this function are set in terms of real units, i.e. um, and not pixels. To use
     pixel units, set dxy=dz=1
 
-    @param imgs: an image of size ny x nx or an image stack of size nz x ny x nx
-    @param drs: (dz, dy, dx))
-    @param threshold: threshold used for identifying spots. This is applied after filtering of image
-    @param roi_size: (sz, sy, sx) in um
-    @param filter_sigma_small: (sz, sy, sx) small sigmas to be used in difference-of-Gaussian filter. Roughly speaking,
-    features which are smaller than these sigmas will be high pass filtered out. To turn off this filter, set to None
-    @param filter_sigma_large: (sz, sy, sx) large sigmas to be used in difference-of-Gaussian filter. Roughly speaking,
-    features which are larger than these sigmas will be low pass filtered out. To turn off this filter, set to None
-    @param min_spot_sep: (dz, dxy) minimum separation allowed between adjacent peaks. This is used to determine
-    (1) the size of the maximum filter used to identify spot candidates and (2) as the threshold distance for
-    combining two nearby spots. These must be larger than the pixel sizes along the corresponding dimensions
-    @param filter: filter will be applied with args = [fit_params, ref_params, chi_sqrs, niters, rois]
-    and kwargs "image" and "image_filtered"
-    @param mask: optionally boolean array of same size as image which indicates where to search for peaks
-    @param average_duplicates_before_fit: test if points are "unique" within region defined by min_spot_sep before fitting
-    @param max_nfit_iterations: maximum number of iterations in fitting function
-    @param fit_filtered_images: whether to perform fitting on raw images or filtered images
-    @param use_gpu_fit: whether to do spot fitting on the GPU
-    @param use_gpu_filter: whether to do difference-of-Gaussian filtering on GPU
-    @param verbose: whether to print information
-    @param model: an instance of a class derived from psf.psf_model. The model describes the PSF and how to 'fit' data
-    to it. Information e.g. about pixelation can be provided to the model. See psf.psf_model and the derived classes
-    for more details
-    @param guess_bounds: whether to use bounds for each ROI guessed from the coordinates. If so, will use
-    bound guesses from model.estimate_bounds().
-    @param debug:
-    @param return_filtered_images:
-    @param **kwargs: passed through to fit_rois() function
-    @return coords, fit_results, imgs_filtered: coords = (z, y, x)
+    :param imgs: an image of size ny x nx or an image stack of size nz x ny x nx
+    :param drs: (dz, dy, dx))
+    :param threshold: threshold used for identifying spots. This is applied after filtering of image
+    :param roi_size: (sz, sy, sx) in um
+    :param filter_sigma_small: (sz, sy, sx) small sigmas to be used in difference-of-Gaussian filter. Roughly speaking,
+      features which are smaller than these sigmas will be high pass filtered out. To turn off this filter, set to None
+    :param filter_sigma_large: (sz, sy, sx) large sigmas to be used in difference-of-Gaussian filter. Roughly speaking,
+      features which are larger than these sigmas will be low pass filtered out. To turn off this filter, set to None
+    :param min_spot_sep: (dz, dxy) minimum separation allowed between adjacent peaks. This is used to determine
+      (1) the size of the maximum filter used to identify spot candidates and (2) as the threshold distance for
+      combining two nearby spots. These must be larger than the pixel sizes along the corresponding dimensions
+    :param filter: filter will be applied with args = [fit_params, ref_params, chi_sqrs, niters, rois]
+      and kwargs "image" and "image_filtered"
+    :param mask: optionally boolean array of same size as image which indicates where to search for peaks
+    :param average_duplicates_before_fit: test if points are "unique" within region defined by min_spot_sep before fitting
+    :param max_nfit_iterations: maximum number of iterations in fitting function
+    :param fit_filtered_images: whether to perform fitting on raw images or filtered images
+    :param use_gpu_fit: whether to do spot fitting on the GPU
+    :param use_gpu_filter: whether to do difference-of-Gaussian filtering on GPU
+    :param verbose: whether to print information
+    :param model: an instance of a class derived from psf.psf_model. The model describes the PSF and how to 'fit' data
+      to it. Information e.g. about pixelation can be provided to the model. See psf.psf_model and the derived classes
+      for more details
+    :param guess_bounds: whether to use bounds for each ROI guessed from the coordinates. If so, will use
+      bound guesses from model.estimate_bounds().
+    :param debug:
+    :param return_filtered_images:
+    :param **kwargs: passed through to fit_rois() function
+    :return coords, fit_results, imgs_filtered: coords = (z, y, x)
     """
 
     # ###################################
@@ -1817,13 +1820,13 @@ def plot_bead_locations(imgs: np.ndarray,
 
     :param imgs: 3D or 2D array. Dimensions order Z, Y, X
     :param center_lists: [center_array_1, center_array_2, ...] where each center_array is a numpy array of size N_i x 3
-    consisting of triples of center values giving cz, cy, cx
+      consisting of triples of center values giving cz, cy, cx
     :param str title: title of plot
     :param color_lists: list of colors for each series to be plotted in
     :param color_limits: [[vmin_1, vmax_1], ...]
     :param legend_labels: labels for each series
     :param weights: list of arrays [w_1, ..., w_n], with w_i the same size as center_array_i, giving the intensity of
-    the color to be plotted
+      the color to be plotted
     :param cbar_labels: list of labels for color bars
     :param coords:
     :param vlims_percentile: (percentile_min, percentile_max) used to set color scale of image
@@ -1947,24 +1950,24 @@ def autofit_psfs(imgs: np.ndarray,
                  gamma: float = 0.5,
                  save_dir: Optional[str] = None,
                  figsize=(18, 10),
-                 **kwargs):
+                 **kwargs) -> dict:
     """
     Given a 2D or 3D image, identify and localize diffraction limited spots. Aggregate the results to create
     an experimental point-spread function and fit the average PSF to a model function.
 
     :param imgs: nz x nx x ny image
     :param psf_roi_size: s(sz, sy, sx) size in um of  ROI to determine PSFs on. This is not necessarily the same as the size of the
-    ROI's used during localization
+      ROI's used during localization
     :param dxy: pixel size in um
     :param dz: z-plane spacing in um
     :param summary_model: This model is used to fit the averaged PSF's
     :param threshold: threshold pixel value to identify peaks. Note: this is applied to the filtered image,
-    and is not directly comparable to the values in the raw image array
+      and is not directly comparable to the values in the raw image array
     :param min_spot_sep: (sz, sxy) minimum spot separation between different beads in um
     :param filter_sigma_small: (sz, sy, sx) sigmas of Gaussian filter used to smooth image in um
     :param filter_sigma_large: (sz, sy, sx) sigmas of Gaussian filter used to removed background in um
     :param sigma_bounds: ((sz_min, sxy_min), (sz_max, sxy_max)) in um. exclude fits with sigmas that fall outside
-    these ranges
+      these ranges
     :param amp_bounds:
     :param roi_size_loc: (sz, sy, sx) size of ROI to used in localization, in um
     :param dist_boundary_min:
@@ -1973,7 +1976,7 @@ def autofit_psfs(imgs: np.ndarray,
     :param fit_dist_max_err:
     :param num_localizations_to_plot: number of ROI's to plot
     :param psf_percentiles: calculate the averaged PSF from the smallest supplied percentage of spots. When
-    a tuple is given, compute PSF's corresponding to each supplied percentage.
+      a tuple is given, compute PSF's corresponding to each supplied percentage.
     :param plot_results: optionally plot diagnostics
     :param only_plot_good_fits: when plotting ROI, plot only fits that passed all filtering tests or plot all fits
     :param plot_filtered_image: plot ROI's against filtered image also
@@ -1983,11 +1986,9 @@ def autofit_psfs(imgs: np.ndarray,
     :param save_dir: directory to save diagnostic plots. If None, these will not be saved
     :param figsize: (sx, sy)
     :param **kwargs: passed through to plt.figure()
-
-    :return coords, fit_params, init_params, rois, \
-           to_keep, conditions, condition_names, filter_settings,\
-           fit_states, chi_sqrs, niters, \
-           psfs_real, psf_coords, otfs_real, otf_coords, psf_percentiles, fit_params_real:
+    :return: dictionary object with entries coords, fit_params, init_params, rois, to_keep, conditions,
+      condition_names, filter_settings, fit_states, chi_sqrs, niters,  psfs_real, psf_coords, otfs_real,
+      otf_coords, psf_percentiles, fit_params_real
     """
 
     plt.switch_backend("agg")

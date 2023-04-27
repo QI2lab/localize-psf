@@ -79,7 +79,7 @@ def blur_img_psf(ground_truth: array,
 
     :param ground_truth:
     :param psf: point-spread function, must have same number of dimensions as ground_truth, but possibly
-     different size. This array should be centered at coordinate (ny//2, nx//2).
+      different size. This array should be centered at coordinate (ny//2, nx//2).
     :return blurred_img:
     """
 
@@ -164,9 +164,8 @@ def psf2otf(psf: array,
     Compute the optical transfer function from the point-spread function
 
     :param psf: psf, as a 1D, 2D or 3D array. Assumes that r=0 is near the center of the array, and positions
-    are arranged by the FFT convention
-    :param drs: (dz, dy, dx), (dy, dx), or (dx). If only a single number is provided, will assume these are the
-    same
+      are arranged by the FFT convention
+    :param drs: (dz, dy, dx), (dy, dx), or (dx). If only a single number is provided, will assume these are the same
     :return otf, coords: where coords = (fz, fy, fx)
     """
 
@@ -201,6 +200,7 @@ def symm_fn_1d_to_2d(arr,
     """
     Convert a 1D function which is symmetric wrt to the radial variable to a 2D matrix.
     Useful helper function when computing PSFs from 2D OTFs
+
     :param arr:
     :param fs:
     :param fmax:
@@ -280,11 +280,11 @@ def circ_aperture_atf(fx: array,
     """
     Amplitude transfer function for circular aperture
 
-    @param fx:
-    @param fy:
-    @param na:
-    @param wavelength:
-    @return atf:
+    :param fx:
+    :param fy:
+    :param na:
+    :param wavelength:
+    :return atf:
     """
 
     if isinstance(fx, cp.ndarray):
@@ -345,7 +345,6 @@ def na2fwhm(na: float,
             wavelength: float):
     """
     Convert numerical aperture to full-width at half-maximum, assuming an Airy-function PSF
-
     FWHM ~ 0.51 * wavelength / na
 
     :param na: numerical aperture
@@ -361,9 +360,9 @@ def fwhm2na(wavelength: float,
     """
     Convert full-width half-maximum PSF value to the equivalent numerical aperture. Inverse function of na2fwhm
 
-    @param wavelength:
-    @param fwhm:
-    @return na:
+    :param wavelength:
+    :param fwhm:
+    :return na:
     """
     na = 1.6163399561827614 / np.pi * wavelength / fwhm
     return na
@@ -390,9 +389,10 @@ def sxy2na(wavelength: float,
            sigma_xy: float):
     """
     Convert sigma xy value to equivalent numerical aperture, assuming these are related as in the Airy function PSF
-    @param wavelength:
-    @param sigma_xy:
-    @return fwhm:
+
+    :param wavelength:
+    :param sigma_xy:
+    :return fwhm:
     """
     fwhm = 2 * 1.6163399561827614 / 1.49686886 * sigma_xy
     # fwhm = na2fwhm(na, wavelength)
@@ -406,10 +406,10 @@ def na2sz(na: float,
     """
     Convert numerical aperture to equivalent sigma-z value,
 
-    @param na: numerical aperture
-    @param wavelength:
-    @param ni: index of refraction
-    @return sz:
+    :param na: numerical aperture
+    :param wavelength:
+    :param ni: index of refraction
+    :return sz:
     """
     # todo: believe this is a gaussian approx. Find reference
     return np.sqrt(6) / np.pi * ni * wavelength / na ** 2
@@ -422,10 +422,10 @@ def sz2na(sigma_z: float,
     Convert sigma-z value to equivalent numerical aperture
 
     todo: believe this is a gaussian approx. Find reference
-    @param wavelength:
-    @param sigma_z:
-    @param ni: index of refraction
-    @ return na:
+    :param wavelength:
+    :param sigma_z:
+    :param ni: index of refraction
+    : return na:
     """
     return np.sqrt(np.sqrt(6) / np.pi * ni * wavelength / sigma_z)
 
@@ -443,18 +443,16 @@ class pixelated_psf_model(fit.coordinate_model):
                  ):
         """
         PSF functions, accounting for image pixelation along an arbitrary direction.
-
         vectorized, i.e. can rely on obeying broadcasting rules for x,y,z
-
         # todo: want any easy way to create pixelated model from a fit.coordinate_model
 
-        @param param_names:
-        @param dc: pixel size
-        @param sf: factor to oversample pixels. The value of each pixel is determined by averaging sf**2 equally spaced
-        @param angles: Euler angles describing orientation of pixel to resample
-        @param has_jacobian:
-        @param ndims: specifies the number of spatial dimensions for this model. coordinates should always be a
-        tuple with length ndims
+        :param param_names:
+        :param dc: pixel size
+        :param sf: factor to oversample pixels. The value of each pixel is determined by averaging sf**2 equally spaced
+        :param angles: Euler angles describing orientation of pixel to resample
+        :param has_jacobian:
+        :param ndims: specifies the number of spatial dimensions for this model. coordinates should always be a
+          tuple with length ndims
         """
 
         super().__init__(param_names, ndims, has_jacobian=has_jacobian)
@@ -642,9 +640,9 @@ class gaussian2d_psf_model(pixelated_psf_model):
     def model(self, coords: tuple[np.ndarray], params: np.ndarray):
         """
 
-        @param coords: [amplitude, cx, cy, sxy, bg]
-        @param params:
-        @return:
+        :param coords: [amplitude, cx, cy, sxy, bg]
+        :param params:
+        :return:
         """
         y, x = coords
         bcast_shape = np.broadcast_shapes(y.shape, x.shape)
@@ -789,11 +787,11 @@ class born_wolf_psf_model(pixelated_psf_model):
                  angles: tuple[float] = (0., 0., 0.)):
         """
 
-        @param wavelength:
-        @param ni: refractive index
-        @param dc:
-        @param sf:
-        @param angles:
+        :param wavelength:
+        :param ni: refractive index
+        :param dc:
+        :param sf:
+        :param angles:
         """
 
         # TODO is it better to put wavelength and ni as arguments to model or as class members?
@@ -810,11 +808,11 @@ class born_wolf_psf_model(pixelated_psf_model):
     def model(self, coords: tuple[np.ndarray], p: np.ndarray):
         """
 
-        @param coords:
-        @param p:
-        @param wavelength:
-        @param ni:
-        @return:
+        :param coords:
+        :param p:
+        :param wavelength:
+        :param ni:
+        :return:
         """
         z, y, x = coords
 
@@ -896,7 +894,7 @@ class gridded_psf_model(pixelated_psf_model):
     """
     Wrapper function for evaluating different PSF models which are constrained to be on gridded coordinates. Therefore
     only grid parameters (i.e. nx and dxy) are provided and not the actual coordinates.
-     The real coordinates can be obtained using get_psf_coords().
+    The real coordinates can be obtained using get_psf_coords().
 
     This class primarily exists to wrap the psfmodel functions, but
 
@@ -919,13 +917,13 @@ class gridded_psf_model(pixelated_psf_model):
                  angles: tuple[float] = (0., 0., 0.)):
         """
 
-        @param wavelength:
-        @param ni: index of refraction
-        @param model_name: 'gaussian', 'gibson-lanni', 'born-wolf', or 'vectorial'. 'gibson-lanni' relies on the
+        :param wavelength:
+        :param ni: index of refraction
+        :param model_name: 'gaussian', 'gibson-lanni', 'born-wolf', or 'vectorial'. 'gibson-lanni' relies on the
         psdmodels function scalar_psf(), while 'vectorial' relies on the psfmodels function vectorial_psf()
-        @param dc:
-        @param sf:
-        @param angles:
+        :param dc:
+        :param sf:
+        :param angles:
         """
         self.wavelength = wavelength
         self.ni = ni
@@ -951,12 +949,11 @@ class gridded_psf_model(pixelated_psf_model):
         Unlike other model functions this ONLY works if coords are of the same style as obtained from
         get_psf_coords()
 
-        @param coords: (z, y, x). Coordinates must be exactly as obtained from get_psf_coords() with
-        nx=ny and dx=dy.
-        @param p:
-        @param kwargs: keywords passed through to vectorial_psf() or scalar_psf(). Note that in most cases
-        these will shift the best focus PSF away from z=0
-        @return:
+        :param coords: (z, y, x). Coordinates must be exactly as obtained from get_psf_coords() with nx=ny and dx=dy.
+        :param p:
+        :param kwargs: keywords passed through to vectorial_psf() or scalar_psf(). Note that in most cases
+          these will shift the best focus PSF away from z=0
+        :return:
         """
         zz, y, x = coords
         z = zz[:, 0, 0]
@@ -1065,13 +1062,13 @@ def oversample_pixel(x: np.ndarray,
     on a 2D grid with an arbitrary orientation.
 
     :param x: x-coordinate with shape such that can be broadcast with y and z. e.g. z.shape = [nz, 1, 1];
-     y.shape = [1, ny, 1]; x.shape = [1, 1, nx]
+      y.shape = [1, ny, 1]; x.shape = [1, 1, nx]
     :param y:
     :param z:
     :param ds: pixel size
     :param sf: sample factor
     :param euler_angles: [phi, theta, psi] where phi and theta are the polar angles describing the normal of the pixel,
-    and psi describes the rotation of the pixel about its normal
+      and psi describes the rotation of the pixel about its normal
     :return xx_s, yy_s, zz_s:
 
     """
@@ -1119,7 +1116,7 @@ def oversample_voxel(coords: tuple[np.ndarray],
     :param drs: tuple giving voxel size (dz, dy, dx)
     :param sf: sampling factor. Assumed to be same for all directions
     :return coords_upsample: tuple of coordinates, e.g. (z_os, y_os, x_os). e.g. x_os has one more dimension than x
-    with  this extra dimension giving the oversampled coordinates
+      with  this extra dimension giving the oversampled coordinates
     """
     # pts = np.arange(1 / (2 * sf), 1 - 1 / (2 * sf), 1 / sf) - 0.5
     pts = np.arange(1 / (2 * sf), 1, 1 / sf) - 0.5
@@ -1140,6 +1137,7 @@ def get_psf_coords(ns: list[int],
                    broadcast: bool = False):
     """
     Get centered coordinates for PSFmodels style PSF's from step size and number of coordinates
+
     :param ns: list of number of points
     :param drs: list of step sizes
     :return coords: list of coordinates [zs, ys, xs, ...]
@@ -1169,7 +1167,6 @@ def average_exp_psfs(imgs: np.ndarray,
     :param centers: n x 3 array, (cz, cy, cx)
     :param roi_sizes: [sz, sy, sx]
     :param backgrounds: values to subtracted from each ROI
-
     :return psf_mean, psf_coords, otf_mean, otf_coords:
     """
 

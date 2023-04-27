@@ -102,12 +102,12 @@ def cut_roi(roi: Sequence[int],
     """
     Return region of interest from an array
 
-    @param roi: [a0_start, a0_end, a1_start, a1_end, ..., am_start, am_end]
-    @param arr: array, which must have dimension m or greater
-    @param axes: which axes are to be sliced by the ROI. Be default these are the last m axes of the array
-     dimensions. If these are allowed, they will not be affected by the slicing operations but will remain unit size
-    @param allow_broadcastable_arrays: whether or not to accept arrays which have size 1 along some of the
-    @return arr_roi: array roi
+    :param roi: [a0_start, a0_end, a1_start, a1_end, ..., am_start, am_end]
+    :param arr: array, which must have dimension m or greater
+    :param axes: which axes are to be sliced by the ROI. Be default these are the last m axes of the array
+      dimensions. If these are allowed, they will not be affected by the slicing operations but will remain unit size
+    :param allow_broadcastable_arrays: whether or not to accept arrays which have size 1 along some of the
+    :return arr_roi: array roi
     """
     if not np.mod(len(roi), 2) == 0:
         raise ValueError("roi array length must be even")
@@ -140,10 +140,10 @@ def get_roi_size(sizes: Sequence[float],
     """
     Get closest larger ROI size in pixels given a set of sizes in real units
 
-    @param sizes: [s0, s1, ...], ROI sizes in real units
-    @param drs: [dr0, dr1, ...]
-    @param ensure_odd: enforce only odd ROI sizes if true
-    @return roi_sizes: [n0, n1, n2, ...]
+    :param sizes: [s0, s1, ...], ROI sizes in real units
+    :param drs: [dr0, dr1, ...]
+    :param ensure_odd: enforce only odd ROI sizes if true
+    :return roi_sizes: [n0, n1, n2, ...]
     """
 
     roi_sizes = [int(np.ceil(s / dr)) for s, dr in zip(sizes, drs)]

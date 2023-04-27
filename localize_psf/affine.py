@@ -80,9 +80,9 @@ def rotation2xform(angle: float,
     """
     Get 2D transform corresponding to a rotation by a given angle about a given center
 
-    @param angle:
-    @param center:
-    @return:
+    :param angle:
+    :param center:
+    :return:
     """
 
     # think of this xform as
@@ -680,8 +680,8 @@ def get_rot_mat_angle_axis(rot_mat: np.ndarray) -> (np.ndarray, float):
     Note that get_rot_mat_angle_axis(get_rot_mat(axis, angle)) can return either axis, angle or -axis, -angle
     as these two rotation matrices are equivalent
 
-    @param rot_mat:
-    @return rot_axis, angle:
+    :param rot_mat:
+    :return rot_axis, angle:
     """
     if np.linalg.norm(rot_mat.dot(rot_mat.transpose()) - np.identity(rot_mat.shape[0])) > 1e-12:
         raise ValueError("rot_mat was not a valid rotation matrix")
@@ -728,10 +728,10 @@ def euler_mat(phi: float,
     in the space frame. i.e. phi, theta are the usual polar angles. psi represents a rotation of the object
     about its own axis.
 
-    @param phi:
-    @param theta:
-    @param psi:
-    @return euler_mat: U_z(phi) * U_y(theta) * U_z(psi)
+    :param phi:
+    :param theta:
+    :param psi:
+    :return euler_mat: U_z(phi) * U_y(theta) * U_z(psi)
     """
     euler_mat = np.array([[np.cos(phi) * np.cos(theta) * np.cos(psi) - np.sin(phi) * np.sin(psi),
                           -np.cos(phi) * np.cos(theta) * np.sin(psi) - np.sin(phi) * np.cos(psi),
@@ -750,10 +750,10 @@ def euler_mat_inv(phi: float,
     """
     r_body = U_z(-psi) * U_y(-theta) * U_z(-phi) * r_lab
 
-    @param phi:
-    @param theta:
-    @param psi:
-    @return dphi, dtheta, dsi:
+    :param phi:
+    :param theta:
+    :param psi:
+    :return dphi, dtheta, dsi:
     """
     return euler_mat(-psi, -theta, -phi)
 
@@ -764,10 +764,10 @@ def euler_mat_derivatives(phi: float,
     """
     Derivative of Euler matrix with respect to Euler angles
 
-    @param phi:
-    @param theta:
-    @param psi:
-    @return dphi, dtheta, dsi:
+    :param phi:
+    :param theta:
+    :param psi:
+    :return dphi, dtheta, dsi:
     """
     dphi = np.array([[-np.sin(phi) * np.cos(theta) * np.cos(psi) - np.cos(phi) * np.sin(psi),
                        np.sin(phi) * np.cos(theta) * np.sin(psi) - np.cos(phi) * np.cos(psi),
@@ -800,10 +800,10 @@ def euler_mat_inv_derivatives(phi: float,
     """
     Derivative of inverse Euler matrix with respect to Euler angles
 
-    @param phi:
-    @param theta:
-    @param psi:
-    @return dphi, dtheta, dpsi:
+    :param phi:
+    :param theta:
+    :param psi:
+    :return dphi, dtheta, dpsi:
     """
     d1, d2, d3 = euler_mat_derivatives(-psi, -theta, -phi)
     dphi = -d3

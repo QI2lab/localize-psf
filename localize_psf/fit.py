@@ -21,8 +21,9 @@ class coordinate_model():
                  ndims: int,
                  has_jacobian: bool = False):
         """
-        @param param_names:
-        @param has_jacobian:
+
+        :param param_names:
+        :param has_jacobian:
         """
 
         if not isinstance(param_names, list):
@@ -51,10 +52,11 @@ class coordinate_model():
                  parameters: np.ndarray) -> list[np.ndarray]:
         """
         Return the jacobian matrix of the model evaluated at the given coordinates and parameters
-        @param coordinates: (..., z, y, x) where all coordinate arrays must be broadcastable with each other
-        @param parameters:
-        @return jacobian: a list of ndarrays, where each entry in the list matches the size (after broadcasting)
-        of all of the coordinate arrays
+
+        :param coordinates: (..., z, y, x) where all coordinate arrays must be broadcastable with each other
+        :param parameters:
+        :return jacobian: a list of ndarrays, where each entry in the list matches the size (after broadcasting)
+          of all of the coordinate arrays
         """
         pass
 
@@ -65,10 +67,11 @@ class coordinate_model():
                       dp: float = 1e-7) -> (list[np.ndarray], list[np.ndarray]):
         """
         Test that the jacobian is implemented correctly by return both numerical and calculated values
-        @param coordinates:
-        @param parameters:
-        @param dp:
-        @return jac_numerical, jac_calc:
+
+        :param coordinates:
+        :param parameters:
+        :param dp:
+        :return jac_numerical, jac_calc:
         """
 
         # numerical test for jacobian
@@ -88,9 +91,10 @@ class coordinate_model():
                             coordinates: tuple[np.ndarray]):
         """
         Estimate model parameters from data
-        @param data:
-        @param coordinates: (..., z, y, x)
-        @return estimated_parameters:
+
+        :param data:
+        :param coordinates: (..., z, y, x)
+        :return estimated_parameters:
         """
         pass
 
@@ -98,8 +102,9 @@ class coordinate_model():
                         coordinates: tuple[np.ndarray]) -> (tuple[float], tuple[float]):
         """
         Estimate upper and lower bounds from the coordinates
-        @param coordinates: (..., z, y, x)
-        @return lbs, ubs:
+
+        :param coordinates: (..., z, y, x)
+        :return lbs, ubs:
         """
         lbs = (-np.inf,) * self.nparams
         ubs = (np.inf,) * self.nparams
@@ -114,8 +119,9 @@ class coordinate_model():
         a Gaussian model may include a standard deviation parameter. Since only the square of this quantity enters
         the model, a fit may return a negative value for standard deviation. In that case, this function
         would return the absolute value of the standard deviation
-        @param params:
-        @return normalized_params:
+
+        :param params:
+        :return normalized_params:
         """
         return parameters
 
@@ -137,21 +143,21 @@ class coordinate_model():
 
         :param data: data to be fit. nD array of arbitrary size
         :param coordinates: (..., zz, yy, xx) each of the coordinate arrays yy, xx, etc. must be broadcastable to the
-        same shape as data
+          same shape as data
         :param init_params: [p1, p2, ..., pn]. If any entries in the list is None, that parameter will be estimated
-        from the data. If None is passed instead of a list, try to guess all parameters from the data.
+          from the data. If None is passed instead of a list, try to guess all parameters from the data.
         :param fixed_params: list of boolean values, same size as init_params. If None, no parameters will be fixed.
         :param sd: uncertainty in parameters y. e.g. if experimental curves come from averages then should be the standard
-        deviation of the mean. If None, then will use a value of 1 for all points. As long as these values are all the same
-        they will not affect the optimization results, although they will affect the chi squared value reported.
+          deviation of the mean. If None, then will use a value of 1 for all points. As long as these values are all the same
+          they will not affect the optimization results, although they will affect the chi squared value reported.
         :param bounds: (lower bounds, upper bounds) where lower bounds = [lb0, lb1, ...,]
-         and similar for ubs. If any bound, lbn, is None, this bound will be estimated from the data. If bounds is None
-         then either all bounds will be guessed (if guess_bounds is True) or else -/+ infinity will be used for
+          and similar for ubs. If any bound, lbn, is None, this bound will be estimated from the data. If bounds is None
+          then either all bounds will be guessed (if guess_bounds is True) or else -/+ infinity will be used for
           all parameters (i.e. no bounds)
         :param use_jacobian: force fit to ignore jacobian even if model has it
         :param guess_bounds: allow bounds to be guessed from input data
         :param kwargs: additional key word arguments will be passed through to scipy.optimize.least_squares()
-        :return dict results:
+        :return results:
         """
 
         to_use = np.logical_not(np.isnan(data))
@@ -946,7 +952,8 @@ class ellipsoid3d(coordinate_model):
     def __init__(self, decay_length):
         """
         3D ellipsoid symmetric in xy
-        @param decay_length: to facilitate fitting, the value outside of the ellipsoid decays exponentially instead of
+
+        :param decay_length: to facilitate fitting, the value outside of the ellipsoid decays exponentially instead of
         instantly cutting off
         """
         self.decay_length = decay_length
@@ -1030,9 +1037,10 @@ class line_piecewisem(coordinate_model):
               parameters: np.ndarray) -> np.ndarray:
         """
         Two piecewise lines which connect at a point
-        @param x: x-positions to evaluate function
-        @param p: [slope 1, y-intercept 1, slope 2, changover point]
-        @return value:
+
+        :param x: x-positions to evaluate function
+        :param p: [slope 1, y-intercept 1, slope 2, changover point]
+        :return value:
         """
 
         x, = coordinates
@@ -1107,15 +1115,15 @@ def fit_model(img: np.ndarray,
     :param model_fn: function f(p)
     :param list[float] init_params: p = [p1, p2, ..., pn]
     :param list[boolean] fixed_params: list of boolean values, same size as init_params. If None,
-     no parameters will be fixed.
+      no parameters will be fixed.
     :param sd: uncertainty in parameters y. e.g. if experimental curves come from averages then should be the standard
-    deviation of the mean. If None, then will use a value of 1 for all points. As long as these values are all the same
-    they will not affect the optimization results, although they will affect chi squared.
+      deviation of the mean. If None, then will use a value of 1 for all points. As long as these values are all the same
+      they will not affect the optimization results, although they will affect chi squared.
     :param tuple[tuple[float]] bounds: (lbs, ubs). If None, -/+ infinity used for all parameters.
     :param model_jacobian: Jacobian of the model function as a list, [df/dp[0], df/dp[1], ...]. If None,
      no jacobian used.
     :param kwargs: additional key word arguments will be passed through to scipy.optimize.least_squares
-    :return dict results:
+    :return: results
     """
 
 
@@ -1160,19 +1168,18 @@ def fit_least_squares(model_fn,
     and calculating fit uncertainty.
 
     :param model_fn: function of model parameters p which returns an array, where the sum of squares of this array is
-    minimized. e.g. if we have a set of data points x_i and we make measurements y_i with uncertainties sigma_i,
-    and we have a model m(p, x_i)
-     then f(p) = [(m(p, x_i) - y_i) / sigma_i]
+      minimized. e.g. if we have a set of data points x_i and we make measurements y_i with uncertainties sigma_i,
+      and we have a model m(p, x_i)
+      then f(p) = [(m(p, x_i) - y_i) / sigma_i]
     :param init_params: p = [p1, p2, ..., pn]
     :param fixed_params: list of boolean values, same size as init_params. If None,
-     no parameters will be fixed.
+      no parameters will be fixed.
     :param  bounds: (lbs, ubs). If None, -/+ infinity used for all parameters.
     :param model_jacobian: Jacobian of the model function as a list, [df/dp[0], df/dp[1], ...]. If None,
-     no jacobian used.
+      no jacobian used.
     :param kwargs: additional key word arguments will be passed through to scipy.optimize.least_squares()
-
-    :return results: dictionary object. Uncertainty can be obtained from the square rootsof the diagonals of the
-     covariance matrix, but these will only be meaningful if variances were appropriately provided for the cost function
+    :return results: dictionary object. Uncertainty can be obtained from the square roots of the diagonals of the
+      covariance matrix, but these will only be meaningful if variances were appropriately provided for the cost function
     """
 
     # ###########################
@@ -1304,9 +1311,9 @@ def get_moments(img: np.ndarray,
     :param img: distribution from which moments are calculated
     :param order: order of moments to be calculated
     :param coords: list of coordinate arrays for each dimension e.g. (y, x), where y, x etc. are broadcastable to the
-    same size as img
+      same size as img
     :param dims: dimensions to be summed over. For example, given roi_size 3D array of size Nz x Ny x Nz,
-     calculate the 2D moments of each slice by setting dims = [1, 2]
+      calculate the 2D moments of each slice by setting dims = [1, 2]
     :return moments:
     """
 
@@ -1340,10 +1347,11 @@ def circle(x, y, p):
     """
     Function which attains one value within a circle and another value outside it. These regions are continuously
     stitched together by an exponential decay. This length should be non-zero for reliable fitting
-    @param x: x-coordinates to evaluate function at.
-    @param y:
-    @param p: [cx, cy, radius, in value, out value, decay_len]
-    @return value:
+
+    :param x: x-coordinates to evaluate function at.
+    :param y:
+    :param p: [cx, cy, radius, in value, out value, decay_len]
+    :return value:
     """
     dist = np.sqrt((x - p[0])**2 + (y - p[1])**2)
     in_circ = p[3] * np.exp((p[2] - dist) / p[5]) + p[4]
@@ -1356,9 +1364,10 @@ def circle(x, y, p):
 def line_piecewise(x, p):
     """
     Two piecewise lines which connect at a point
-    @param x: x-positions to evaluate function
-    @param p: [slope 1, y-intercept 1, slope 2, changover point]
-    @return value:
+
+    :param x: x-positions to evaluate function
+    :param p: [slope 1, y-intercept 1, slope 2, changover point]
+    :return value:
     """
     l1 = p[0] * x + p[1]
     # l1(p[3]) = l2(p[3])
@@ -1373,10 +1382,11 @@ def line_piecewise(x, p):
 def sinc_squared2d(x, y, p):
     """
     Product of sinc squareds
-    @param x: x-points to evaluate function
-    @param y: y-points to evaluate function
-    @param p: [amp, cx, cy, wx, wy, bg, theta]
-    @return value:
+
+    :param x: x-points to evaluate function
+    :param y: y-points to evaluate function
+    :param p: [amp, cx, cy, wx, wy, bg, theta]
+    :return value:
     """
 
     xrot = np.cos(p[6]) * (x - p[1]) - np.sin(p[6]) * (y - p[2])

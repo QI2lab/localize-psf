@@ -21,6 +21,7 @@ def adc2photons(img: array,
                 precision: float = 0.) -> array:
     """
     Convert ADC counts to photon number
+
     :param img:
     :param gain_map:
     :param background_map:
@@ -58,7 +59,7 @@ def simulated_img(ground_truth: array,
     :param psf: point-spread function. If not provided, do not blur
     :param photon_shot_noise: turn on/off photon shot-noise
     :param bin_size: bin pixels before applying Poisson/camera noise. This is to allow defining a pattern on a
-    finer pixel grid.
+      finer pixel grid.
     :param apodization: apodization used during PSF blurring
     :param saturation: set any values in final image larger than this value to this value
     :param image_is_integer: force image to be integer value
@@ -119,11 +120,11 @@ def bin(img: array,
     """
     Bin image by summing or averaging adjacent pixels
 
-    @param img: NumPy or CuPy array of size n0 x n1 x ... x n_{m-1}
-    @param bin_sizes: [bk, ..., b_{m-1}] amount to bin for the last m-k dimensions of img.
-    Must be shorter than img.ndim,
-    @param mode: "sum" or "mean"
-    @return img_binned: binned image
+    :param img: NumPy or CuPy array of size n0 x n1 x ... x n_{m-1}
+    :param bin_sizes: [bk, ..., b_{m-1}] amount to bin for the last m-k dimensions of img.
+      Must be shorter than img.ndim,
+    :param mode: "sum" or "mean"
+    :return img_binned: binned image
     """
 
     if isinstance(img, cp.ndarray) and _cupy_available:
@@ -167,10 +168,10 @@ def bin_adjoint(img_b: array,
 
     <w | B*v> = <Badj * w | v>
 
-    @param img_b: NumPy or Cupy array of size n0 x n1 x ... x n_{m-1}
-    @param bin_sizes: list [by, bx]
-    @param mode: "sum" or "mean"
-    @return: img
+    :param img_b: NumPy or Cupy array of size n0 x n1 x ... x n_{m-1}
+    :param bin_sizes: list [by, bx]
+    :param mode: "sum" or "mean"
+    :return: img
     """
 
     if isinstance(img_b, cp.ndarray) and _cupy_available:

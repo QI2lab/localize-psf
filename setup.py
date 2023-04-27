@@ -1,5 +1,6 @@
 from setuptools import setup, find_packages
 from os import path
+from localize_psf import __version__
 
 # copy readme to long description
 this_dir = path.abspath(path.dirname(__file__))
@@ -25,7 +26,7 @@ extras = {'gpu': ['cupy-cuda11x'],
 
 setup(
     name='localize_psf',
-    version='0.2.0',
+    version=__version__,
     description="A package for localizing diffraction limited spots in 3D microscopy data.",
     long_description=long_description,
     author='qi2lab, Peter T. Brown',
