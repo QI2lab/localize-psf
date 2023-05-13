@@ -62,6 +62,9 @@ def get_centered_roi(centers: Sequence,
     :param max_vals: list of maximum allowed index values for each dimension
     :return roi: [start_0, end_0, start_1, end_1, ..., start_n, end_n]
     """
+    import sys
+    print("get_centered_roi() is deprecated. Please use get_centered_rois() instead", file=sys.stderr)
+
     roi = []
     # for c, n in zip(centers, sizes):
     for ii in range(len(centers)):
@@ -93,6 +96,58 @@ def get_centered_roi(centers: Sequence,
         roi.append(int(end))
 
     return roi
+
+
+def get_centered_rois(centers: np.ndarray[int],
+                      sizes: np.ndarray[int],
+                      min_vals: np.ndarray[int],
+                      max_vals: np.ndarray[int]) -> np.ndarray:
+    """
+    Get end points of an roi centered about centers (as close as possible) with length sizes.
+    If the ROI size is odd, the ROI will be perfectly centered. Otherwise, the centering will
+    be approximation
+
+    roi = [start_0, end_0, start_1, end_1, ..., start_n, end_n]
+
+    Slicing an array as A[start_0:end_0, start_1:end_1, ...] gives the desired ROI.
+    Note that following python array indexing convention end_i are NOT contained in the ROI
+
+    :param centers: num_rois x ndims list of centers [[a0, a1, ..., an], [b0, b1, ..., bn], ...]
+    :param sizes: num_rois x ndims ROI size for each center and dimension
+    :param min_vals: num_rois x ndims
+    :param max_vals: num_rois x ndims
+    :return rois: num_rois x 2*ndims
+    """
+
+    centers = np.atleast_2d(centers)
+    sizes = np.atleast_2d(sizes)
+
+    nroi, ndim = centers.shape
+
+    if min_vals is None:
+        min_vals = np.full_like(centers, -np.inf)
+    if max_vals is None:
+        max_vals = np.full_like(centers, np.inf)
+
+    min_vals = np.atleast_2d(min_vals)
+    max_vals = np.atleast_2d(max_vals)
+
+    # check which
+    end_test = np.rint(centers + (sizes - 1) / 2) + 1
+    end_err = np.mod(end_test, 1)
+    start_test = np.rint(centers - (sizes - 1) / 2)
+    start_err = np.mod(start_test, 1)
+
+    mask = end_err > start_err
+    start = np.where(mask, start_test, end_test - sizes)
+    end = start + sizes
+
+    start = np.maximum(start, min_vals)
+    end = np.minimum(end, max_vals)
+
+    rois = np.stack((start, end), axis=-1).reshape((nroi, 2*ndim)).astype(int)
+
+    return rois
 
 
 def cut_roi(roi: Sequence[int],
