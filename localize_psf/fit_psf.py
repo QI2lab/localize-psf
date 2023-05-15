@@ -125,10 +125,11 @@ def otf2psf(otf: array,
             apodization: Optional[array] = None) -> (array, list[array]):
     """
     Compute the point-spread function from the optical transfer function
+
     :param otf: otf, as a 1D, 2D or 3D array. Assumes that f=0 is near the center of the array, and frequency are
-    arranged by the FFT convention
+      arranged by the FFT convention
     :param dfs: (dfz, dfy, dfx), (dfy, dfx), or (dfx). If only a single number is provided, will assume these are the
-    same
+      same
     :return psf, coords: where coords = (z, y, x)
     """
 
@@ -747,13 +748,12 @@ class gaussian_lorentzian_psf_model(pixelated_psf_model):
         # compute moments
         c1s = np.zeros(img.ndim)
         c2s = np.zeros(img.ndim)
+        isum = np.sum(img_temp[to_use])
         for ii in range(img.ndim):
-            c1s[ii] = np.sum(img_temp[to_use] * coords[ii][to_use]) / np.sum(img_temp[to_use])
-            c2s[ii] = np.sum(img_temp[to_use] * coords[ii][to_use] ** 2) / np.sum(img_temp[to_use])
+            c1s[ii] = np.sum((img_temp * coords[ii])[to_use]) / isum
+            c2s[ii] = np.sum((img_temp * coords[ii]**2)[to_use]) / isum
 
         sigmas = np.sqrt(c2s - c1s ** 2)
-        # sxy = np.mean(sigmas[:2])
-        # sz = sigmas[2]
         sz = sigmas[0]
         sxy = np.mean(sigmas[1:])
 
@@ -1203,12 +1203,12 @@ def average_exp_psfs(imgs: np.ndarray,
         roi = rois.get_centered_roi((zc_pix, yc_pix, xc_pix),
                                     roi_sizes,
                                     min_vals=[0, 0, 0],
-                                    max_vals=imgs.shape)
-        img_roi = rois.cut_roi(roi, imgs)
+                                    max_vals=imgs.shape)[0]
+        img_roi = rois.cut_roi(roi, imgs)[0]
 
-        zroi = rois.cut_roi(roi, z)
-        yroi = rois.cut_roi(roi, y)
-        xroi = rois.cut_roi(roi, x)
+        zroi = rois.cut_roi(roi, z)[0]
+        yroi = rois.cut_roi(roi, y)[0]
+        xroi = rois.cut_roi(roi, x)[0]
 
         cx_pix_roi = (roi[5] - roi[4]) // 2
         cy_pix_roi = (roi[3] - roi[2]) // 2

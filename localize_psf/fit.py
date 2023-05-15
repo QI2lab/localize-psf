@@ -90,7 +90,8 @@ class coordinate_model():
                             data: np.ndarray,
                             coordinates: tuple[np.ndarray]):
         """
-        Estimate model parameters from data
+        Estimate model parameters from data. This function should support coordinate arrays being broadcastable
+        with data (but not actually the same size)
 
         :param data:
         :param coordinates: (..., z, y, x)
@@ -760,9 +761,10 @@ class gauss3d(coordinate_model):
         # compute moments
         c1s = np.zeros(data.ndim)
         c2s = np.zeros(data.ndim)
+        isum = np.sum(img_temp[to_use])
         for ii in range(data.ndim):
-            c1s[ii] = np.sum(img_temp[to_use] * coordinates[ii][to_use]) / np.sum(img_temp[to_use])
-            c2s[ii] = np.sum(img_temp[to_use] * coordinates[ii][to_use] ** 2) / np.sum(img_temp[to_use])
+            c1s[ii] = np.sum((img_temp * coordinates[ii])[to_use]) / isum
+            c2s[ii] = np.sum((img_temp * coordinates[ii] ** 2)[to_use]) / isum
 
         sigmas = np.sqrt(c2s - c1s ** 2)
         sz = sigmas[0]
@@ -903,9 +905,10 @@ class gauss3d_asymmetric(coordinate_model):
         # compute moments
         c1s = np.zeros(img.ndim)
         c2s = np.zeros(img.ndim)
+        isum = np.sum(img_temp[to_use])
         for ii in range(img.ndim):
-            c1s[ii] = np.sum(img_temp[to_use] * coords[ii][to_use]) / np.sum(img_temp[to_use])
-            c2s[ii] = np.sum(img_temp[to_use] * coords[ii][to_use] ** 2) / np.sum(img_temp[to_use])
+            c1s[ii] = np.sum((img_temp * coords[ii])[to_use]) / isum
+            c2s[ii] = np.sum((img_temp * coords[ii]**2)[to_use]) / isum
 
         # sz, sy, sx
         sigmas = np.sqrt(c2s - c1s ** 2)

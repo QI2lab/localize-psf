@@ -10,6 +10,7 @@ with open(path.join(this_dir, "README.md")) as f:
 # always required packages
 required_pkgs = ['numpy',
                  'scipy',
+                 'numba',
                  'matplotlib',
                  'joblib', # todo: only used in affine.py ransac. maybe replace with dask to simplify requirements
                  'dask',

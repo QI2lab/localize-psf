@@ -15,6 +15,7 @@ import scipy.signal
 import scipy.ndimage
 import dask
 from dask.diagnostics import ProgressBar
+from numba import njit
 import matplotlib.pyplot as plt
 from matplotlib.colors import PowerNorm, LinearSegmentedColormap, Normalize
 import localize_psf.rois as roi_fns
@@ -74,6 +75,69 @@ def get_coords(sizes: Sequence[int],
     return coords
 
 
+def get_nearest_pixel(centers: np.ndarray[float],
+                      drs: np.ndarray[float]) -> np.ndarray[int]:
+    """
+    Get nearest pixel indices for centers given in real coordintes
+
+    :param centers:
+    :param drs:
+    :return:
+    """
+    drs = np.asarray(drs)
+
+    return np.rint(centers / drs).astype(int)
+
+@njit()
+def prepare_rois(image: np.ndarray[float, int],
+                 coords: tuple[np.ndarray, np.ndarray, np.ndarray],
+                 rois: np.ndarray[int],):
+    """
+
+    :param image:
+    :param coords:
+    :param rois:
+    :return:
+    """
+    z, y, x = coords
+
+    img_rois = []
+    x_rois = []
+    y_rois = []
+    z_rois = []
+
+    nrois = len(rois)
+    for rr in range(nrois):
+        roi = rois[rr]
+        img_rois.append(image[roi[0]:roi[1], roi[2]:roi[3], roi[4]:roi[5]])
+
+        nz = roi[1] - roi[0]
+        ny = roi[3] - roi[2]
+        nx = roi[5] - roi[4]
+
+        x_roi_temp = x[:, :, roi[4]:roi[5]]
+        y_roi_temp = y[roi[0]:roi[1], roi[2]:roi[3], :]
+        z_roi_temp = z[:, roi[2]:roi[3], :]
+
+        # numba compatible equivalent of np.array_broadcast()
+        x_roi = np.zeros((nz, ny, nx), dtype = float)
+        y_roi = np.zeros((nz, ny, nx), dtype=float)
+        z_roi = np.zeros((nz, ny, nx), dtype=float)
+        for ii in range(nz):
+            for jj in range(ny):
+                for kk in range(nx):
+                    x_roi[ii, jj, kk] = x_roi_temp[0, 0, kk]
+                    y_roi[ii, jj, kk] = y_roi_temp[0, jj, 0]
+                    z_roi[ii, jj, kk] = z_roi_temp[ii, 0, 0]
+
+        x_rois.append(x_roi)
+        y_rois.append(y_roi)
+        z_rois.append(z_roi)
+
+    coords_roi = (z_rois, y_rois, x_rois)
+
+    return img_rois, coords_roi
+
 def get_roi(center: Sequence[float],
             img: np.ndarray,
             coords: Sequence[np.ndarray],
@@ -88,11 +152,14 @@ def get_roi(center: Sequence[float],
     :param sizes: [i0, i1, ... in] integers
     :return roi, img_roi, coords_roi:
     """
+
+    # todo: deprecate in favor of vectorized finding ROIs and prepare_rois()
+
     ndims = img.ndim
     # get closest coordinates to desired center of roi
     ics = [np.argmin(np.abs(r.ravel() - c)) for r, c in zip(coords, center)]
 
-    roi = np.array(roi_fns.get_centered_roi(ics, sizes, min_vals=[0]*ndims, max_vals=img.shape))
+    roi = roi_fns.get_centered_rois(ics, sizes, min_vals=[0]*ndims, max_vals=img.shape)[0]
 
     # get coordinates as arrays which only have nonunit size along one direction
     coords_roi = [c[tuple([slice(None)] * ii + [slice(roi[2*ii], roi[2*ii + 1])] + [slice(None)] * (ndims - 1 - ii))]
@@ -100,7 +167,7 @@ def get_roi(center: Sequence[float],
     # broadcast to full arrays, essentially meshgrid
     coords_roi = np.broadcast_arrays(*coords_roi)
 
-    img_roi = roi_fns.cut_roi(roi, img)
+    img_roi = roi_fns.cut_roi(roi, img)[0]
 
     return roi, img_roi, coords_roi
 
@@ -305,8 +372,10 @@ def filter_nearby_peaks(centers: np.ndarray,
 
         # find ranges as fraction of min_dist
         min_dists = np.array([min_z_dist, min_xy_dist, min_xy_dist])
-        # todo: does this have a problem if min_dists = 0?
-        ranges = (clims[:, 1] - clims[:, 0]) / min_dists
+
+        with np.errstate(invalid="ignore"):
+            # todo: does this have a problem if min_dists = 0?
+            ranges = (clims[:, 1] - clims[:, 0]) / min_dists
 
         if len(centers_unique) > nmax and not np.all(ranges <= 2):
             if mode == "average":
@@ -888,10 +957,10 @@ def plot_fit_roi(fit_params: list[float],
     center_fit = np.array([fit_params[3], fit_params[2], fit_params[1]])
 
     # get ROI and coordinates
-    img_roi = roi_fns.cut_roi(roi, imgs)
-    x_roi = roi_fns.cut_roi(roi, x)
-    y_roi = roi_fns.cut_roi(roi, y)
-    z_roi = roi_fns.cut_roi(roi, z)
+    img_roi = roi_fns.cut_roi(roi, imgs)[0]
+    x_roi = roi_fns.cut_roi(roi, x)[0]
+    y_roi = roi_fns.cut_roi(roi, y)[0]
+    z_roi = roi_fns.cut_roi(roi, z)[0]
 
     if vmin is None:
         vmin = np.percentile(img_roi[np.logical_not(np.isnan(img_roi))], 1)
@@ -1593,8 +1662,6 @@ def localize_beads_generic(imgs: np.ndarray,
         imgs_filtered = imgs_filtered.get()
         centers_guess_inds = centers_guess_inds.get()
 
-    # todo: could autothreshold by trying to fit # of points versus threshold
-
     # real coordinates
     centers_guess = np.stack((z[centers_guess_inds[:, 0], 0, 0],
                               y[0, centers_guess_inds[:, 1], 0],
@@ -1645,6 +1712,14 @@ def localize_beads_generic(imgs: np.ndarray,
         rois, img_rois, coords = zip(*[get_roi(c, imgs_fit, (z, y, x), roi_size_pix) for c in centers_guess])
         zrois, yrois, xrois = zip(*coords)
         rois = np.asarray(rois)
+
+        # roi_centers = get_nearest_pixel(centers_guess, (dz, dy, dx))
+        # rois = roi_fns.get_centered_rois(roi_centers, roi_size_pix, [0, 0, 0], imgs_fit.shape)
+        # img_rois = roi_fns.cut_roi(rois, imgs_fit, use_numba=True)
+        # zrois = roi_fns.cut_roi(rois, z, use_numba=True)
+        # yrois = roi_fns.cut_roi(rois, y, use_numba=True)
+        # xrois = roi_fns.cut_roi(rois, x, use_numba=True)
+        # img_rois, zrois, yrois, xrois = prepare_rois(imgs_fit, (z, y, x), rois)
 
         # ###################################################
         # determine initial guess values for fits
