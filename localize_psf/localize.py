@@ -1647,20 +1647,16 @@ def localize_beads_generic(imgs: np.ndarray,
         else:
             imgs_fit = imgs
 
-        # in my limited testing did not see any speed up from parallelizing with dask.delayed
-        # rois, img_rois, coords = zip(*[get_roi(c, imgs_fit, (z, y, x), roi_size_pix) for c in centers_guess])
-        # zrois, yrois, xrois = zip(*coords)
-        # rois = np.asarray(rois)
-
         roi_centers = get_nearest_pixel(centers_guess, (dz, dy, dx))
         rois = roi_fns.get_centered_rois(roi_centers, roi_size_pix, [0, 0, 0], imgs_fit.shape)
-        img_rois, (zrois, yrois, xrois), roi_sizes = prepare_rois(imgs_fit, (z, y, x), rois)
+        img_rois, roi_coords, roi_sizes = prepare_rois(imgs_fit, (z, y, x), rois)
 
         # ###################################################
         # determine initial guess values for fits
         # ###################################################
-        init_params = np.stack([model.estimate_parameters(img_rois[ii], (zrois[ii], yrois[ii], xrois[ii]))
-                                for ii in range(len(img_rois))], axis=0)
+        # init_params = np.stack([model.estimate_parameters(img_rois[ii], (zrois[ii], yrois[ii], xrois[ii]))
+        #                         for ii in range(len(img_rois))], axis=0)
+        init_params = model.estimate_parameters(img_rois, roi_coords, num_preserved_dims=1)
 
         if np.any(np.isnan(init_params)):
             raise ValueError("one or more init_params was NaN")
@@ -1697,7 +1693,7 @@ def localize_beads_generic(imgs: np.ndarray,
             init_params[:, model_zposition_index] = z[0, 0, 0]
 
         fit_results = fit_rois(img_rois,
-                               (zrois, yrois, xrois),
+                               roi_coords,
                                roi_sizes,
                                init_params,
                                max_number_iterations=max_nfit_iterations,

@@ -88,7 +88,8 @@ class coordinate_model():
 
     def estimate_parameters(self,
                             data: np.ndarray,
-                            coordinates: tuple[np.ndarray]) -> np.ndarray:
+                            coordinates: tuple[np.ndarray],
+                            num_preserved_dims: int = 0) -> np.ndarray:
         """
         Estimate model parameters from data. This function should support coordinate arrays being broadcastable
         with data (but not actually the same size)
@@ -97,6 +98,9 @@ class coordinate_model():
 
         :param data: array of arbitrary shape
         :param coordinates: (..., z, y, x) where each coordinate should match the shape of data
+        :param num_preserved_dims: number of dimensions to preserve during parameter estimation. Setting this
+        to a non-zero value allows parameter estimation for multiple different data sets to happen
+        simultaneously
         :return estimated_parameters:
         """
         pass
@@ -371,8 +375,9 @@ class rotated_model(coordinate_model):
 
     def estimate_parameters(self,
                             data: np.ndarray,
-                            coordinates: tuple[np.ndarray]):
-        pguess_no_rot = self.base_model.estimate_parameters(data, coordinates)
+                            coordinates: tuple[np.ndarray],
+                            num_preserved_dims: int = 0):
+        pguess_no_rot = self.base_model.estimate_parameters(data, coordinates, num_preserved_dims)
         pguess = np.concatenate((pguess_no_rot, np.array([0., 0., 0.])))
         return pguess
 
@@ -445,9 +450,10 @@ class fixed_parameter_model(coordinate_model):
 
     def estimate_parameters(self,
                             data: np.ndarray,
-                            coordinates: tuple[np.ndarray]):
+                            coordinates: tuple[np.ndarray],
+                            num_preserved_dims: int = 0):
 
-        p = self.base_model.estimate_parameters(data, coordinates)
+        p = self.base_model.estimate_parameters(data, coordinates, num_preserved_dims)
         p_out = p[self.unfixed_mask]
 
         return p_out
@@ -508,7 +514,11 @@ class gauss1d(coordinate_model):
 
     def estimate_parameters(self,
                             data: np.ndarray,
-                            coordinates: tuple[np.ndarray]):
+                            coordinates: tuple[np.ndarray],
+                            num_preserved_dims: int = 0):
+
+        if num_preserved_dims != 0:
+            raise NotImplementedError()
 
         to_use = np.logical_not(np.isnan(data))
 
@@ -597,7 +607,11 @@ class gauss2d(coordinate_model):
 
     def estimate_parameters(self,
                             data: np.ndarray,
-                            coordinates: tuple[np.ndarray]):
+                            coordinates: tuple[np.ndarray],
+                            num_preserved_dims: int = 0):
+
+        if num_preserved_dims != 0:
+            raise NotImplementedError()
 
         to_use = np.logical_not(np.isnan(data))
 
@@ -702,7 +716,7 @@ class gauss3d(coordinate_model):
         3D gaussian symmetric in xy
         """
         self.minimum_sigmas = minimum_sigmas
-        super().__init__(["amp", "cx", "cy", "cz", "sxy", "sz", "bg"], 3, has_jacobian=True)
+        super().__init__(["amp", "cx", "cy", "cz", "sxy", "sz", "bg"], ndims=3, has_jacobian=True)
 
 
     def model(self,
@@ -751,44 +765,46 @@ class gauss3d(coordinate_model):
 
     def estimate_parameters(self,
                             data: np.ndarray,
-                            coordinates: tuple[np.ndarray]):
-
-        z, y, x = coordinates
-
-        # subtract smallest value so positive
-        img_temp = data - np.nanmin(data)
-        to_use = np.logical_and(np.logical_not(np.isnan(img_temp)), img_temp > 0)
+                            coordinates: tuple[np.ndarray],
+                            num_preserved_dims: int = 0):
 
         if self.ndim != len(coordinates):
-            raise ValueError("len(coords) != img.ndim")
+            raise ValueError("len(coords) != model dimensions")
+
+        z, y, x = coordinates
+        data_ndim = data.ndim
+
+
+        average_axes = tuple(range(num_preserved_dims, data_ndim))
+
+        # subtract smallest value so positive
+        img_temp = data - np.nanmin(data, axis=average_axes, keepdims=True)
+        img_temp[img_temp <= 0] = np.nan
 
         # compute moments
-        c1s = np.zeros(self.ndim)
-        c2s = np.zeros(self.ndim)
-        isum = np.sum(img_temp[to_use])
-        for ii in range(self.ndim):
-            c1s[ii] = np.sum((img_temp * coordinates[ii])[to_use]) / isum
-            c2s[ii] = np.sum((img_temp * coordinates[ii] ** 2)[to_use]) / isum
-
-        sigmas = np.sqrt(c2s - c1s ** 2)
-        sz = sigmas[0]
+        isum = np.nansum(img_temp, axis=average_axes)
+        m1x = np.nansum((img_temp * x), axis=average_axes) / isum
+        m2x = np.nansum((img_temp * x ** 2), axis=average_axes) / isum
+        sx = np.sqrt(m2x - m1x ** 2)
+        m1y = np.nansum((img_temp * y), axis=average_axes) / isum
+        m2y = np.nansum((img_temp * y ** 2), axis=average_axes) / isum
+        sy = np.sqrt(m2y - m1y ** 2)
+        m1z = np.nansum((img_temp * z), axis=average_axes) / isum
+        m2z = np.nansum((img_temp * z ** 2), axis=average_axes) / isum
+        sz = np.sqrt(m2z - m1z ** 2)
 
         # if e.g. all img_temp values are the same, sigmas can be zero and to machine precision can get NaN. avoid this
-        if np.isnan(sz):
-            sz = 0.5 * (z.max() - z.min())
+        # if np.isnan(sz):
+        #     sz = 0.5 * (np.max(z, axis=average_axes) - np.min(z, axis=average_axes))
 
-        sxy = np.mean(sigmas[1:])
-        if np.isnan(sxy):
-            sxy = np.mean([0.5 * (x.max() - x.min()),
-                           0.5 * (y.max() - y.min())])
+        # if np.isnan(sxy):
+        #     sxy = 0.5 * (0.5 * (np.max(x, axis=average_axes) - np.min(x, axis=average_axes)) +
+        #                  0.5 * (np.max(y, axis=average_axes) - np.min(y, axis=average_axes))
+        #                  )
 
-        guess_params = np.concatenate((np.array([np.nanmax(data) - np.nanmin(data)]),
-                                       np.flip(c1s),
-                                       np.array([sxy]),
-                                       np.array([sz]),
-                                       np.array([np.nanmean(data)])
-                                       ),
-                                      )
+        guess_params = np.stack((np.nanmax(data, axis=average_axes) - np.nanmin(data, axis=average_axes),
+                                 m1x, m1y, m1z, 0.5 * (sx + sy), sz,
+                                 np.nanmean(data, axis=average_axes)), axis=-1)
 
         return self.normalize_parameters(guess_params)
 
@@ -896,7 +912,12 @@ class gauss3d_asymmetric(coordinate_model):
 
     def estimate_parameters(self,
                             img: np.ndarray,
-                            coords: tuple[np.ndarray]):
+                            coords: tuple[np.ndarray],
+                            num_preserved_dims: int = 0):
+
+        if num_preserved_dims != 0:
+            raise NotImplementedError()
+
         z, y, x = coords
 
         # subtract smallest value so positive
@@ -1026,8 +1047,9 @@ class ellipsoid3d(coordinate_model):
 
     def estimate_parameters(self,
                             data: np.ndarray,
-                            coordinates: tuple[np.ndarray]):
-        return gauss3d_asymmetric().estimate_parameters(data, coordinates)
+                            coordinates: tuple[np.ndarray],
+                            num_preserved_dims: int = 0):
+        return gauss3d_asymmetric().estimate_parameters(data, coordinates, num_preserved_dims)
 
     def estimate_bounds(self,
                         coordinates: tuple[np.ndarray]) -> (tuple[float], tuple[float]):
@@ -1098,7 +1120,8 @@ class line_piecewisem(coordinate_model):
 
     def estimate_parameters(self,
                             data: np.ndarray,
-                            coordinates: tuple[np.ndarray]):
+                            coordinates: tuple[np.ndarray],
+                            num_preserved_dims: int = 0):
         pass
 
 

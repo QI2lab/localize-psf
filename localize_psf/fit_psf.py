@@ -535,8 +535,9 @@ class from_coordinate_model(pixelated_psf_model):
 
     def estimate_parameters(self,
                             data: np.ndarray,
-                            coordinates: tuple[np.ndarray]):
-        return self.coord_model.estimate_parameters(data, coordinates)
+                            coordinates: tuple[np.ndarray],
+                            num_preserved_dims: int = 0):
+        return self.coord_model.estimate_parameters(data, coordinates, num_preserved_dims)
 
 
     def estimate_bounds(self,
@@ -666,7 +667,15 @@ class gaussian2d_psf_model(pixelated_psf_model):
 
         return j2d
 
-    def estimate_parameters(self, img: np.ndarray, coords: tuple[np.ndarray]):
+    def estimate_parameters(self,
+                            img: np.ndarray,
+                            coords: tuple[np.ndarray],
+                            num_preserved_dims: int = 0):
+
+
+        if num_preserved_dims != 0:
+            raise NotImplementedError()
+
         y, x = coords
         bcast_shape = np.broadcast_shapes(y.shape, x.shape)
         z = np.zeros(bcast_shape)
@@ -735,7 +744,14 @@ class gaussian_lorentzian_psf_model(pixelated_psf_model):
 
         return jac
 
-    def estimate_parameters(self, img: np.ndarray, coords: tuple[np.ndarray]):
+    def estimate_parameters(self,
+                            img: np.ndarray,
+                            coords: tuple[np.ndarray],
+                            num_preserved_dims: int = 0):
+
+        if num_preserved_dims != 0:
+            raise NotImplementedError()
+
         z, y, x = coords
 
         # subtract smallest value so positive
@@ -874,7 +890,13 @@ class born_wolf_psf_model(pixelated_psf_model):
         return psfs
 
 
-    def estimate_parameters(self, img: np.ndarray, coords: tuple[np.ndarray]):
+    def estimate_parameters(self,
+                            img: np.ndarray,
+                            coords: tuple[np.ndarray],
+                            num_preserved_dims: int = 0):
+
+        if num_preserved_dims != 0:
+            raise NotImplementedError()
 
         gauss3d = gaussian3d_psf_model(dc=self.dc, sf=self.sf, angles=self.angles)
         p3d_gauss = gauss3d.estimate_parameters(img, coords)
@@ -1027,10 +1049,14 @@ class gridded_psf_model(pixelated_psf_model):
 
     def estimate_parameters(self,
                             img: np.ndarray,
-                            coords: tuple[np.ndarray]):
+                            coords: tuple[np.ndarray],
+                            num_preserved_dims: int = 0):
+
+        if num_preserved_dims != 0:
+            raise NotImplementedError()
 
         gauss3d = gaussian3d_psf_model(dc=self.dc, sf=self.sf, angles=self.angles)
-        p3d_gauss = gauss3d.estimate_parameters(img, coords)
+        p3d_gauss = gauss3d.estimate_parameters(img, coords, num_preserved_dims)
 
         na = sxy2na(self.wavelength, p3d_gauss[4])
 
