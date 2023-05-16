@@ -15,7 +15,7 @@ import scipy.signal
 import scipy.ndimage
 import dask
 from dask.diagnostics import ProgressBar
-from numba import njit
+from numba import njit, prange
 import matplotlib.pyplot as plt
 from matplotlib.colors import PowerNorm, LinearSegmentedColormap, Normalize
 import localize_psf.rois as roi_fns
@@ -44,7 +44,7 @@ array = Union[np.ndarray, cp.ndarray]
 
 def get_coords(sizes: Sequence[int],
                drs: Sequence[float],
-               broadcast: bool = False):
+               broadcast: bool = False) -> tuple[np.ndarray[float]]:
     """
     Regularly spaced coordinates which can be broadcast to full size.
 
@@ -65,78 +65,75 @@ def get_coords(sizes: Sequence[int],
     :return coords: (coords0, coords1, ..., coordsn)
     """
     ndims = len(drs)
-    coords = [np.expand_dims(np.arange(sz) * dr, axis=list(range(ii)) + list(range(ii + 1, ndims)))
+    coords = [np.expand_dims(np.arange(sz, dtype=float) * dr, axis=list(range(ii)) + list(range(ii + 1, ndims)))
               for ii, (sz, dr) in enumerate(zip(sizes, drs))]
 
     if broadcast:
         # this produces copies of the arrays instead of views
         coords = [np.array(c, copy=True) for c in np.broadcast_arrays(*coords)]
 
-    return coords
+    return tuple(coords)
 
 
 def get_nearest_pixel(centers: np.ndarray[float],
                       drs: np.ndarray[float]) -> np.ndarray[int]:
     """
-    Get nearest pixel indices for centers given in real coordintes
+    Get nearest pixel indices for centers given in real coordinates
 
     :param centers:
     :param drs:
-    :return:
+    :return indices:
     """
     drs = np.asarray(drs)
 
     return np.rint(centers / drs).astype(int)
 
-@njit()
-def prepare_rois(image: np.ndarray[float, int],
+@njit(parallel=True)
+def prepare_rois(image: np.ndarray,
                  coords: tuple[np.ndarray, np.ndarray, np.ndarray],
-                 rois: np.ndarray[int],):
+                 rois: np.ndarray[int]) -> (np.ndarray[float], tuple[np.ndarray[float], np.ndarray[float], np.ndarray[float]], np.ndarray[int]):
     """
+    Cut ROI out of image and coordinate arrays and insert into nroi x nmax_roi_size array which is nan padded
 
-    :param image:
+    :param image: image
     :param coords:
     :param rois:
-    :return:
+    :return img_rois, roi_coords, roi_sizes:
     """
-    z, y, x = coords
-
-    img_rois = []
-    x_rois = []
-    y_rois = []
-    z_rois = []
 
     nrois = len(rois)
-    for rr in range(nrois):
+    z, y, x = coords
+
+    # numba does not support prod with axis argument
+    sizes = (rois[..., 1] - rois[..., 0]) * (rois[..., 3] - rois[..., 2]) * (rois[..., 5] - rois[..., 4])
+    nmax_roi_size = np.max(sizes)
+
+    img_rois = np.ones((nrois, nmax_roi_size)) * np.nan
+    x_rois = np.ones((nrois, nmax_roi_size)) * np.nan
+    y_rois = np.ones((nrois, nmax_roi_size)) * np.nan
+    z_rois = np.ones((nrois, nmax_roi_size)) * np.nan
+
+    nrois = len(rois)
+    for rr in prange(nrois):
         roi = rois[rr]
-        img_rois.append(image[roi[0]:roi[1], roi[2]:roi[3], roi[4]:roi[5]])
 
         nz = roi[1] - roi[0]
         ny = roi[3] - roi[2]
         nx = roi[5] - roi[4]
+        n_size_roi = nz * ny * nx
 
-        x_roi_temp = x[:, :, roi[4]:roi[5]]
-        y_roi_temp = y[roi[0]:roi[1], roi[2]:roi[3], :]
-        z_roi_temp = z[:, roi[2]:roi[3], :]
+        img_rois[rr, :n_size_roi] = image[roi[0]:roi[1], roi[2]:roi[3], roi[4]:roi[5]].ravel()
 
         # numba compatible equivalent of np.array_broadcast()
-        x_roi = np.zeros((nz, ny, nx), dtype = float)
-        y_roi = np.zeros((nz, ny, nx), dtype=float)
-        z_roi = np.zeros((nz, ny, nx), dtype=float)
-        for ii in range(nz):
-            for jj in range(ny):
-                for kk in range(nx):
-                    x_roi[ii, jj, kk] = x_roi_temp[0, 0, kk]
-                    y_roi[ii, jj, kk] = y_roi_temp[0, jj, 0]
-                    z_roi[ii, jj, kk] = z_roi_temp[ii, 0, 0]
+        for ii in prange(nz):
+            for jj in prange(ny):
+                for kk in prange(nx):
+                    counter = kk + nx * jj + ny * nx * ii
+                    x_rois[rr, counter] = x[0, 0, roi[4] + kk]
+                    y_rois[rr, counter] = y[0, roi[2] + jj, 0]
+                    z_rois[rr, counter] = z[roi[0] + ii, 0, 0]
 
-        x_rois.append(x_roi)
-        y_rois.append(y_roi)
-        z_rois.append(z_roi)
-
-    coords_roi = (z_rois, y_rois, x_rois)
-
-    return img_rois, coords_roi
+    return img_rois, (z_rois, y_rois, x_rois), sizes
 
 def get_roi(center: Sequence[float],
             img: np.ndarray,
@@ -152,6 +149,8 @@ def get_roi(center: Sequence[float],
     :param sizes: [i0, i1, ... in] integers
     :return roi, img_roi, coords_roi:
     """
+
+    warnings.warn("get_roi() is deprecated and will be removed soon. Please use prepare_rois() instead")
 
     # todo: deprecate in favor of vectorized finding ROIs and prepare_rois()
 
@@ -174,7 +173,7 @@ def get_roi(center: Sequence[float],
 
 def get_filter_kernel(sigmas: Sequence[float],
                       drs: Sequence[float],
-                      sigma_cutoff: int = 2):
+                      sigma_cutoff: int = 2) -> np.ndarray:
     """
     Gaussian filter kernel for arbitrary dimensions. If drs or sigmas are zero along one dimension, then the kernel
     will have unit length and weight along this direction
@@ -652,55 +651,10 @@ def localize3d(img: np.ndarray,
     return xc, yc, zc
 
 
-def fit_roi(img_roi: np.ndarray,
-            coords: tuple[np.ndarray],
-            init_params: list[float],
-            fixed_params: Optional[list[bool]] = None,
-            bounds: Optional[tuple[list[float]]] = None,
-            guess_bounds: bool = False,
-            model: psf.pixelated_psf_model = psf.gaussian3d_psf_model(),
-            max_number_iterations: Optional[int] = None) -> dict:
-    """
-    Fit a single ROI to a 3D gaussian function.
-
-    :param img_roi: array of size nz x ny x nx which will be fit
-    :param coords: (z_roi, y_roi, x_roi). These coordinate arrays must be broadcastable to the same size as img_roi
-    :param init_params: array of length model.nparams, where the parameters are
-      [amplitude, center-x, center-y, center-z, sigma-xy, sigma_z, offset]
-    :param fixed_params: boolean array of length 7. For entries which are True, the fit function will force
-      that parameter to be identical to the value in init_params. For entries which are False, the fit function
-      will determine the optimal value
-    :param bounds: ((lower_bounds), (upper_bounds)) where lower_bounds and upper_bounds are each lists/tuples/arrays
-      of length nparams
-    :param guess_bounds:
-    :param model:
-    :param max_number_iterations:
-    :return results: dictionary object containing information about fitting
-    """
-    z_roi, y_roi, x_roi = coords
-
-    # todo: this causes problems with skewed CPU fitting
-    # if img_roi is 2D and z- dimension size is 0, treat as 3D
-    #if img_roi.ndim == 2 and z_roi.shape[0] == 1:
-    #    img_roi = np.expand_dims(img_roi, axis=0)
-
-    # img_roi must be 3D
-    #if img_roi.ndim != 3:
-    #    raise ValueError(f"img_roi must have 3 dimensions but had {img_roi.ndim:d}")
-
-    results = model.fit(img_roi,
-                        coords,
-                        init_params,
-                        fixed_params=fixed_params,
-                        bounds=bounds,
-                        guess_bounds=guess_bounds,
-                        max_nfev=max_number_iterations)
-
-    return results
-
-
-def fit_rois(img_rois: list[np.ndarray],
-             coords_rois: tuple[np.ndarray],
+# @profile
+def fit_rois(img_rois: np.ndarray,
+             coords_rois: tuple[np.ndarray, np.ndarray, np.ndarray],
+             roi_sizes: np.ndarray[int],
              init_params: np.ndarray,
              max_number_iterations: int = 100,
              tolerance: Optional[float] = None,
@@ -715,22 +669,29 @@ def fit_rois(img_rois: list[np.ndarray],
     Fit rois to different model functions. Can use either CPU parallelization with dask or GPU parallelization
     using gpufit.
 
-    :param img_rois: list of image rois
-    :param coords_rois: ((z0, y0, x0), (z1, y1, x1), ....)
-    :param init_params: initial parameters for fits, size nfits x nparams
+    For help cutting ROI's from an image and converting them to the correct format, use the helper function
+    prepare_rois()
+
+    :param img_rois: array of image rois of size nroi x nmax_roi_size. Each ROI should be flattened, padded
+     with NaN's, and inserted along the 0th dimension.
+    :param coords_rois: (z_rois, y_rois, ....) the coordinate arrays z_rois should have the same shape as img_rois
+    :param roi_sizes: array giving size of each ROI
+    :param init_params: initial parameters for fits, size nfits x model.nparams
     :param max_number_iterations: maximum number of iterations to be used for each fit
     :param tolerance: only for GPUFIT. Default is 1e-4.
     :param estimator: "LSE" or "MLE", only for GPUFIT
     :param model: "gaussian", "rotated-gaussian", "gaussian-lorentzian"
-    :param fixed_params: length nparams vector of parameters to fix. only supports fixing/unfixing
-      each parameter for all fits
-    :param guess_bounds:
-    :param use_gpu:
+    :param fixed_params: For entries which are True, the fit function will force that parameter to be identical
+      to the value in init_params. For entries which are False, the fit function will determine the optimal value.
+      only supports fixing/unfixing each parameter for all fits
+    :param guess_bounds: ((lower_bounds), (upper_bounds)) where lower_bounds and upper_bounds are each
+      lists/tuples/arrays of length nparams
+    :param use_gpu: whether to perform fitting on the GPU. If true, then GPUfit must be installed
     :param debug:
     :param verbose:
     :param model: model to use for PSF fitting. If doing this on the CPU, use implementations in fit_psf.py, otherwise
       model must have a corresponding version in GPU fit.
-    :return fit_results:
+    :return fit_results: dictionary of fit results
     """
 
     if guess_bounds and use_gpu:
@@ -739,34 +700,32 @@ def fit_rois(img_rois: list[np.ndarray],
 
     zrois, yrois, xrois = coords_rois
 
-    # PTB: todo: this should not need to be true, but need to resolve this story to fit skewed regions on the CPU
-    #for ii in range(len(img_rois)):
-    #    if img_rois[ii].ndim != 3:
-    #        raise ValueError(f"img_rois position {ii:d} was not 3-dimensional"
-
     if not use_gpu:
         tstart = time.perf_counter()
 
         if debug:
             results = []
             for ii in range(len(img_rois)):
-                results.append(fit_roi(img_rois[ii],
-                                       (zrois[ii], yrois[ii], xrois[ii]),
-                                       init_params=init_params[ii],
-                                       fixed_params=fixed_params,
-                                       guess_bounds=guess_bounds,
-                                       model=model))
+                results.append(model.fit(img_rois[ii],
+                                         (zrois[ii], yrois[ii], xrois[ii]),
+                                         init_params[ii],
+                                         fixed_params=fixed_params,
+                                         guess_bounds=guess_bounds,
+                                         max_nfev=max_number_iterations)
+                               )
+
         else:
             # forced to switch to dask form joblib because joblib use pickling to exchange info between process
-            # and functions (which are arguments to fit_gauss_roi) are not pickleable
+            # and functions (which are arguments to fit_gauss_roi) are not pickle-able
             delayed = []
             for ii in range(len(img_rois)):
-                delayed.append(dask.delayed(fit_roi)(img_rois[ii],
-                                                     (zrois[ii], yrois[ii], xrois[ii]),
-                                                     init_params=init_params[ii],
-                                                     fixed_params=fixed_params,
-                                                     guess_bounds=guess_bounds,
-                                                     model=model))
+                delayed.append(dask.delayed(model.fit)(img_rois[ii],
+                                                       (zrois[ii], yrois[ii], xrois[ii]),
+                                                       init_params=init_params[ii],
+                                                       fixed_params=fixed_params,
+                                                       guess_bounds=guess_bounds,
+                                                       max_nfev=max_number_iterations)
+                               )
 
             if verbose:
                 with ProgressBar():
@@ -784,8 +743,8 @@ def fit_rois(img_rois: list[np.ndarray],
     else:
         if model.sf != 1:
             raise NotImplementedError("sampling factors other than 1 are not implemented for GPU fitting")
-        # todo: if requires more memory than GPU has, split into chunks
 
+        # resolve GPUfit model
         models_mapping = ((psf.gaussian3d_psf_model, gf.ModelID.GAUSS_3D_ARB),
                           (psf.gaussian_lorentzian_psf_model, gf.ModelID.GAUSS_LOR_3D_ARB),
                           (psf.gaussian3d_asymmetric_rotated_pixelated, gf.ModelID.GAUSS_3D_ROT_ARB),
@@ -800,36 +759,12 @@ def fit_rois(img_rois: list[np.ndarray],
             raise NotImplementedError(f"model of type {type(model)} has not been implemented in gpufit."
                                       f"The models which have been implemented are {[a for a, b in models_mapping]}")
 
-        nparams = model.nparams
-
-        # ensure arrays are row vectors
-        xrois, yrois, zrois, img_rois = zip(*[(xr.ravel()[None, :],
-                                               yr.ravel()[None, :],
-                                               zr.ravel()[None, :],
-                                               ir.ravel()[None, :])
-                                               for xr, yr, zr, ir in zip(xrois, yrois, zrois, img_rois)])
-
-        # get ROI sizes
-        roi_sizes = np.array([ir.size for ir in img_rois])
-        nmax = roi_sizes.max()
-
-        # pad ROI's to make sure all ROI's same size
-        img_rois = [np.pad(ir, ((0, 0), (0, nmax - ir.size)), mode="constant") for ir in img_rois]
-
-        # build ROI data
-        data = np.concatenate(img_rois, axis=0)
-        data = data.astype(np.float32)
+        # build GPUfit data
+        data = img_rois.astype(np.float32)
         nfits, n_pts_per_fit = data.shape
 
-        # build user info, which stores information about the coordinates
-        coords = [np.concatenate(
-            (np.pad(xr.ravel(), (0, nmax - xr.size)),
-             np.pad(yr.ravel(), (0, nmax - yr.size)),
-             np.pad(zr.ravel(), (0, nmax - zr.size))
-             ))
-            for xr, yr, zr in zip(xrois, yrois, zrois)]
-        coords = np.concatenate(coords)
-
+        # build user data
+        coords = np.stack((xrois, yrois, zrois), axis=1).ravel()
         user_info = np.concatenate((coords.astype(np.float32),
                                     roi_sizes.astype(np.float32)))
 
@@ -844,11 +779,14 @@ def fit_rois(img_rois: list[np.ndarray],
         # initial parameters
         init_params = init_params.astype(np.float32)
 
+        nparams = model.nparams
+
         # check arguments
         if data.ndim != 2:
             raise ValueError(f"data.ndim should = 2 but was {data.ndim:d}")
         if init_params.ndim != 2 or init_params.shape != (nfits, nparams):
             raise ValueError(f"init_params should have shape ({nfits:d}, {nparams:d}), but had shape {init_params.shape}")
+        # todo: this now depends on the model
         # if user_info.ndim != 1 or user_info.size != (3 * nfits * n_pts_per_fit + nfits):
         #     raise ValueError(f"user_info should have size ({3 * nfits * n_pts_per_fit + nfits:d}), but had size {user_info.size:d}")
 
@@ -861,7 +799,7 @@ def fit_rois(img_rois: list[np.ndarray],
 
         # set which parameters to fit/fix
         if fixed_params is None:
-            fixed_params = np.zeros((nparams), dtype=bool)
+            fixed_params = np.zeros(nparams, dtype=bool)
 
         params_to_fit = np.logical_not(np.array(fixed_params)).astype(np.int32)
 
@@ -884,7 +822,7 @@ def fit_rois(img_rois: list[np.ndarray],
                           "gpu_not_ready": 4}
 
     # ensure e.g. Gaussian sigmas are > 0
-    fit_params = np.array([model.normalize_parameters(fp) for fp in fit_params])
+    fit_params = model.normalize_parameters(fit_params)
 
     # collect results
     fit_results = {"fit_params": fit_params,
@@ -1509,7 +1447,7 @@ def filter_localizations(fit_params: np.ndarray,
 
     return to_keep, conditions, condition_names, filter_settings
 
-
+# @profile
 def localize_beads_generic(imgs: np.ndarray,
                            drs: tuple[float],
                            threshold: float,
@@ -1614,11 +1552,12 @@ def localize_beads_generic(imgs: np.ndarray,
     roi_size_pix = roi_fns.get_roi_size(roi_size, [dz, dy, dx], ensure_odd=True)
 
     if dz_min_sep < dz and not data_is_2d:
-        raise ValueError(f"minimum separation along the z-direction was {dz_min_sep:.2f}, but this must be greater than the z-pixel size={dz:.2f}")
+        raise ValueError(f"minimum separation along the z-direction was {dz_min_sep:.2f},"
+                         f" but this must be greater than the z-pixel size={dz:.2f}")
 
     if dxy_min_sep < dx or dxy_min_sep < dy:
-        raise ValueError(
-            f"minimum separation along the xy-direction was {dxy_min_sep:.2f}, but this must be greater than the x- and y-pixel sizes=({dx:.2f}, {dy:.2f})")
+        raise ValueError(f"minimum separation along the xy-direction was {dxy_min_sep:.2f},"
+                         f" but this must be greater than the x- and y-pixel sizes=({dx:.2f}, {dy:.2f})")
 
     # ###################################
     # filter images
@@ -1709,17 +1648,13 @@ def localize_beads_generic(imgs: np.ndarray,
             imgs_fit = imgs
 
         # in my limited testing did not see any speed up from parallelizing with dask.delayed
-        rois, img_rois, coords = zip(*[get_roi(c, imgs_fit, (z, y, x), roi_size_pix) for c in centers_guess])
-        zrois, yrois, xrois = zip(*coords)
-        rois = np.asarray(rois)
+        # rois, img_rois, coords = zip(*[get_roi(c, imgs_fit, (z, y, x), roi_size_pix) for c in centers_guess])
+        # zrois, yrois, xrois = zip(*coords)
+        # rois = np.asarray(rois)
 
-        # roi_centers = get_nearest_pixel(centers_guess, (dz, dy, dx))
-        # rois = roi_fns.get_centered_rois(roi_centers, roi_size_pix, [0, 0, 0], imgs_fit.shape)
-        # img_rois = roi_fns.cut_roi(rois, imgs_fit, use_numba=True)
-        # zrois = roi_fns.cut_roi(rois, z, use_numba=True)
-        # yrois = roi_fns.cut_roi(rois, y, use_numba=True)
-        # xrois = roi_fns.cut_roi(rois, x, use_numba=True)
-        # img_rois, zrois, yrois, xrois = prepare_rois(imgs_fit, (z, y, x), rois)
+        roi_centers = get_nearest_pixel(centers_guess, (dz, dy, dx))
+        rois = roi_fns.get_centered_rois(roi_centers, roi_size_pix, [0, 0, 0], imgs_fit.shape)
+        img_rois, (zrois, yrois, xrois), roi_sizes = prepare_rois(imgs_fit, (z, y, x), rois)
 
         # ###################################################
         # determine initial guess values for fits
@@ -1763,6 +1698,7 @@ def localize_beads_generic(imgs: np.ndarray,
 
         fit_results = fit_rois(img_rois,
                                (zrois, yrois, xrois),
+                               roi_sizes,
                                init_params,
                                max_number_iterations=max_nfit_iterations,
                                estimator="LSE",
