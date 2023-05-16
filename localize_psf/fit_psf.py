@@ -482,7 +482,7 @@ class from_coordinate_model(pixelated_psf_model):
 
         param_names = model.parameter_names
         has_jacobian = model.has_jacobian
-        ndims = model.ndims
+        ndims = model.ndim
 
         if ndims != 3:
             raise ValueError(f"pixel oversampling only implemented for 3D models,"
@@ -742,14 +742,14 @@ class gaussian_lorentzian_psf_model(pixelated_psf_model):
         img_temp = img - np.nanmean(img)
         to_use = np.logical_and(np.logical_not(np.isnan(img_temp)), img_temp > 0)
 
-        if img.ndim != len(coords):
-            raise ValueError("len(coords) != img.ndim")
+        if self.ndim != len(coords):
+            raise ValueError("len(coords) != self.ndim")
 
         # compute moments
-        c1s = np.zeros(img.ndim)
-        c2s = np.zeros(img.ndim)
+        c1s = np.zeros(self.ndim)
+        c2s = np.zeros(self.ndim)
         isum = np.sum(img_temp[to_use])
-        for ii in range(img.ndim):
+        for ii in range(self.ndim):
             c1s[ii] = np.sum((img_temp * coords[ii])[to_use]) / isum
             c2s[ii] = np.sum((img_temp * coords[ii]**2)[to_use]) / isum
 

@@ -37,7 +37,7 @@ class coordinate_model():
 
         self.parameter_names = param_names
         self.nparams = len(param_names)
-        self.ndims = ndims
+        self.ndim = ndims
         self.has_jacobian = has_jacobian
 
 
@@ -88,13 +88,15 @@ class coordinate_model():
 
     def estimate_parameters(self,
                             data: np.ndarray,
-                            coordinates: tuple[np.ndarray]):
+                            coordinates: tuple[np.ndarray]) -> np.ndarray:
         """
         Estimate model parameters from data. This function should support coordinate arrays being broadcastable
         with data (but not actually the same size)
 
-        :param data:
-        :param coordinates: (..., z, y, x)
+        To process many data sets in parallel,
+
+        :param data: array of arbitrary shape
+        :param coordinates: (..., z, y, x) where each coordinate should match the shape of data
         :return estimated_parameters:
         """
         pass
@@ -120,6 +122,8 @@ class coordinate_model():
         a Gaussian model may include a standard deviation parameter. Since only the square of this quantity enters
         the model, a fit may return a negative value for standard deviation. In that case, this function
         would return the absolute value of the standard deviation
+
+        This method should accept an array of parameters of size nfits x nparams and normalize them all
 
         :param params:
         :return normalized_params:
@@ -240,12 +244,12 @@ class rotated_model(coordinate_model):
                  model: coordinate_model,
                  center_inds):
 
-        if model.ndims != 3:
+        if model.ndim != 3:
             raise ValueError(f"model.ndim = {model.ndim:d}, but only 3D models are supported")
 
         param_names = model.parameter_names + ["phi", "theta", "psi"]
         has_jacobian = model.has_jacobian
-        ndims = model.ndims
+        ndims = model.ndim
 
         if ndims != 3:
             raise ValueError(f"pixel oversampling only implemented for 3D models,"
@@ -416,7 +420,7 @@ class fixed_parameter_model(coordinate_model):
 
         super().__init__(param_names_not_fixed,
                          has_jacobian=model.has_jacobian,
-                         ndims=model.ndims)
+                         ndims=model.ndim)
 
     def model(self,
               coordinates: tuple[np.ndarray],
@@ -755,14 +759,14 @@ class gauss3d(coordinate_model):
         img_temp = data - np.nanmin(data)
         to_use = np.logical_and(np.logical_not(np.isnan(img_temp)), img_temp > 0)
 
-        if data.ndim != len(coordinates):
+        if self.ndim != len(coordinates):
             raise ValueError("len(coords) != img.ndim")
 
         # compute moments
-        c1s = np.zeros(data.ndim)
-        c2s = np.zeros(data.ndim)
+        c1s = np.zeros(self.ndim)
+        c2s = np.zeros(self.ndim)
         isum = np.sum(img_temp[to_use])
-        for ii in range(data.ndim):
+        for ii in range(self.ndim):
             c1s[ii] = np.sum((img_temp * coordinates[ii])[to_use]) / isum
             c2s[ii] = np.sum((img_temp * coordinates[ii] ** 2)[to_use]) / isum
 
@@ -899,7 +903,7 @@ class gauss3d_asymmetric(coordinate_model):
         img_temp = img
         to_use = np.logical_and(np.logical_not(np.isnan(img_temp)), img_temp > 0)
 
-        if img.ndim != len(coords):
+        if self.ndim != len(coords):
             raise ValueError("len(coords) != img.ndim")
 
         # compute moments
