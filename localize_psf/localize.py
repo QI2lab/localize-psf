@@ -342,8 +342,10 @@ def filter_nearby_peaks(centers: np.ndarray,
     :param min_z_dist:
     :param mode: "average", "keep-one", or "remove"
     :param weights: only used in "average" mode. If weights are provided, a weighted average between nearby
-     points is computed
-    :param nmax:
+      points is computed
+    :param nmax: maximum number of centers to be processed at once. If the number of centers exceeds this size,
+      then the problem will be split in half (recursively) and solved on the subregions. Then the overlap zone
+      between these two regions will be checked and the results will be combined
     :return centers_unique: array of unique center coordinates
     :return inds: index into the initial array to produce centers_unique. In mode is "keep-one" or "remove"
       then centers_unique = centers[inds]. If mode is "average", this will not be true as centers_unique will

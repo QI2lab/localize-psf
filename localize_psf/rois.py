@@ -144,7 +144,7 @@ def get_centered_rois(centers: Union[np.ndarray[int], np.ndarray[float]],
     if min_vals is None:
         if np.issubdtype(centers.dtype, float):
             min_vals = np.full_like(centers, -np.inf)
-        elif np.issubdtype(centers.dtype, int):
+        elif np.issubdtype(centers.dtype, np.integer):
             min_vals = np.full_like(centers, np.iinfo(centers.dtype).min)
         else:
             raise ValueError()
@@ -152,7 +152,7 @@ def get_centered_rois(centers: Union[np.ndarray[int], np.ndarray[float]],
     if max_vals is None:
         if np.issubdtype(centers.dtype, float):
             max_vals = np.full_like(centers, np.inf)
-        elif np.issubdtype(centers.dtype, int):
+        elif np.issubdtype(centers.dtype, np.integer):
             max_vals = np.full_like(centers, np.iinfo(centers.dtype).max)
         else:
             raise ValueError()
