@@ -747,19 +747,20 @@ def fit_rois(img_rois: np.ndarray,
             raise NotImplementedError("sampling factors other than 1 are not implemented for GPU fitting")
 
         # resolve GPUfit model
-        models_mapping = ((psf.gaussian3d_psf_model, gf.ModelID.GAUSS_3D_ARB),
-                          (psf.gaussian_lorentzian_psf_model, gf.ModelID.GAUSS_LOR_3D_ARB),
-                          (psf.gaussian3d_asymmetric_rotated_pixelated, gf.ModelID.GAUSS_3D_ROT_ARB),
-                          (psf.gaussian3d_asymmetric_pixelated, gf.ModelID.GAUSS_3D_ASYM_ARB)
-                          )
-        model_id = None
-        for mod, mod_gpu in models_mapping:
-            if isinstance(model, mod):
-                model_id = mod_gpu
+        models_mapping = {psf.gaussian3d_psf_model: gf.ModelID.GAUSS_3D_ARB}
+        try:
+            models_mapping[psf.gaussian_lorentzian_psf_model] = gf.ModelID.GAUSS_LOR_3D_ARB
+            models_mapping[psf.gaussian3d_asymmetric_rotated_pixelated] = gf.ModelID.GAUSS_3D_ROT_ARB
+            models_mapping[psf.gaussian3d_asymmetric_pixelated] = gf.ModelID.GAUSS_3D_ASYM_ARB
+        except AttributeError:
+            pass
 
-        if model_id is None:
-            raise NotImplementedError(f"model of type {type(model)} has not been implemented in gpufit."
-                                      f"The models which have been implemented are {[a for a, b in models_mapping]}")
+        if type(model) in models_mapping.keys():
+            model_id = models_mapping[type(model)]
+        else:
+            raise NotImplementedError(f"model of type {type(model)} has not been implemented in the "
+                                      f"installed version of gpufit."
+                                      f"The models which have been implemented are {[a for a in models_mapping.keys()]}")
 
         # build GPUfit data
         data = img_rois.astype(np.float32)
