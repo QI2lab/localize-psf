@@ -601,7 +601,7 @@ class gaussian3d_rotated_pixelated(from_coordinate_model):
                  ):
 
         gauss3d = fit.gauss3d(minimum_sigmas=minimum_sigmas)
-        gauss3d_rotated = fit.rotated_model(gauss3d, (3, 2, 1))
+        gauss3d_rotated = fit.rotated_model_3d(gauss3d, (3, 2, 1))
 
         super().__init__(gauss3d_rotated, dc=dc, sf=sf, angles=angles)
 
@@ -617,7 +617,7 @@ class gaussian3d_asymmetric_rotated_pixelated(from_coordinate_model):
                  angles: tuple[float] = (0., 0., 0.),
                  minimum_sigmas: tuple[float] = (0., 0., 0.)
                  ):
-        model_rotated = fit.rotated_model(fit.gauss3d_asymmetric(minimum_sigmas=minimum_sigmas), (3, 2, 1))
+        model_rotated = fit.rotated_model_3d(fit.gauss3d_asymmetric(minimum_sigmas=minimum_sigmas), (3, 2, 1))
 
         super().__init__(model_rotated, dc=dc, sf=sf, angles=angles)
 

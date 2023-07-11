@@ -1,5 +1,5 @@
 """
-Tools for fitting data using non-linear least squares. The recommend way to do this is to sub-class coordinate_model(),
+Tools for fitting data using non-linear least squares. The recommended way to do this is to sub-class coordinate_model(),
 which keeps track of the jacobian, parameter names, parameter estimation, etc. For one-off fitting use fit_model().
 Various commonly used fit functions are collected here, primarily 1D, 2D, and 3D gaussians allowing for
 arbitrary rotations.
@@ -14,7 +14,11 @@ from localize_psf import affine
 
 
 class coordinate_model():
-
+    """
+    Basic model for dealing with functions of coordinates. Coordinates are given as tuples (c0, c1, ..., cn)
+    e.g. for 3D models (z, y, x) where ci are broadcastable to the same shape. m-dimensional models
+    should accept n-dimensional data and ignore all but the last m-dimensions
+    """
 
     def __init__(self,
                  param_names: list[str],
@@ -210,6 +214,7 @@ class coordinate_model():
 
 
         # function to be optimized
+        # todo: handle complex functions
         def err_fn(p):
             return np.divide(self.model(coordinates, p)[to_use].ravel() - data[to_use].ravel(), sd[to_use].ravel())
 
@@ -230,7 +235,145 @@ class coordinate_model():
         return results
 
 
-class rotated_model(coordinate_model):
+class rotated_model_2d(coordinate_model):
+    """
+    Take any 2D model and parameterize its arbitrary rotation using angle theta
+
+    This is a helper function to avoid needing to write rotation code more than once
+    """
+
+    def __init__(self,
+                 model: coordinate_model,
+                 center_inds: tuple[int]):
+        """
+
+        :param model:
+        :param center_inds: (cy_index, cx_index)
+        """
+
+        param_names = model.parameter_names + ["phi"]
+        has_jacobian = model.has_jacobian
+        ndims = model.ndim
+
+        if model.ndim != 2:
+            raise ValueError(f"model.ndim = {model.ndim:d}, but only 2D models are supported")
+
+        super().__init__(param_names,
+                         has_jacobian=has_jacobian,
+                         ndims=ndims)
+
+        self.base_model = model
+        self.center_inds = center_inds
+
+        # copy any attributes that don't overlap
+        for k, v in model.__dict__.items():
+            if not hasattr(self, k):
+                setattr(self, k, v)
+
+    def model(self,
+              coordinates: tuple[np.ndarray],
+              parameters: np.ndarray) -> np.ndarray:
+        y, x = coordinates[-2:]
+
+        phi = parameters[-1]
+        rot_mat = affine.euler_mat_inv(phi, 0, 0)[:2, :2]
+
+        cx = parameters[self.center_inds[1]]
+        cy = parameters[self.center_inds[0]]
+
+        # rotated coordinates
+        xrot = (x - cx) * rot_mat[0, 0] + (y - cy) * rot_mat[0, 1]
+        yrot = (x - cx) * rot_mat[1, 0] + (y - cy) * rot_mat[1, 1]
+
+        # evaluate base model at rotated coordinates
+        params_base = np.array(parameters[:-1], copy=True)
+        params_base[self.center_inds[1]] = 0
+        params_base[self.center_inds[0]] = 0
+
+        return self.base_model.model((yrot, xrot), params_base)
+
+    def jacobian(self,
+                 coordinates: tuple[np.ndarray],
+                 parameters: np.ndarray) -> list[np.ndarray]:
+        y, x = coordinates[-2:]
+
+        phi = parameters[-1]
+        rot_mat = affine.euler_mat_inv(phi, 0, 0)[:2, :2]
+
+        cx = parameters[self.center_inds[1]]
+        cy = parameters[self.center_inds[0]]
+
+        # rotated coordinates
+        xrot = (x - cx) * rot_mat[0, 0] + (y - cy) * rot_mat[0, 1]
+        yrot = (x - cx) * rot_mat[1, 0] + (y - cy) * rot_mat[1, 1]
+
+        dxrot_dcx = -rot_mat[0, 0]
+        dxrot_dcy = -rot_mat[0, 1]
+
+        dyrot_dcx = -rot_mat[1, 0]
+        dyrot_dcy = -rot_mat[1, 1]
+
+        # evaluate base model at rotated coordinates
+        params_base = np.array(parameters[:-1], copy=True)
+        params_base[self.center_inds[1]] = 0.
+        params_base[self.center_inds[0]] = 0.
+        jac_base = self.base_model.jacobian((yrot, xrot), params_base)
+
+        # need to correct jacobian with
+        # (1) derivatives of rotated coordinates wrt centers
+        # (2) derivatives wrt Euler angles
+        j_cx = np.array(jac_base[self.center_inds[1]], copy=True)
+        j_cy = np.array(jac_base[self.center_inds[0]], copy=True)
+
+        # need negative sign, because thinking the j_cx and etc. terms as actually taking derivative wrt x, y, z coords
+        # since these enter in the same way as cx, cy, cz, but with opposite sign
+        jac_base[self.center_inds[1]] = -(j_cx * dxrot_dcx + j_cy * dyrot_dcx)
+        jac_base[self.center_inds[0]] = -(j_cx * dxrot_dcy + j_cy * dyrot_dcy)
+
+        # euler angle derivatives
+        dphi = affine.euler_mat_inv_derivatives(phi, 0, 0)[0][:2, :2]
+        dxrot_dphi = (x - cx) * dphi[0, 0] + (y - cy) * dphi[0, 1]
+        dyrot_dphi = (x - cx) * dphi[1, 0] + (y - cy) * dphi[1, 1]
+
+        # need negative sign, because thinking the j_cx and etc. terms as actually taking derivative wrt x, y, z coords
+        # since these enter in the same way as cx, cy, cz, but with opposite sign
+        jphi = -(j_cx * dxrot_dphi + j_cy * dyrot_dphi)
+        jac = jac_base + [jphi]
+
+        return jac
+
+    def estimate_parameters(self,
+                            data: np.ndarray,
+                            coordinates: tuple[np.ndarray],
+                            num_preserved_dims: int = 0):
+        pguess_no_rot = self.base_model.estimate_parameters(data, coordinates, num_preserved_dims)
+        pguess = np.concatenate((pguess_no_rot, np.array([0.])))
+        return pguess
+
+    def estimate_bounds(self,
+                        coordinates: tuple[np.ndarray]) -> (tuple[float], tuple[float]):
+        lbs_no_rot, ubs_no_rot = self.base_model.estimate_bounds(coordinates)
+        lbs_angles = (-np.inf,)
+        ubs_angles = (np.inf,)
+
+        lbs = lbs_no_rot + lbs_angles
+        ubs = ubs_no_rot + ubs_angles
+
+        return lbs, ubs
+
+    def normalize_parameters(self,
+                             parameters) -> np.ndarray:
+        normalized_params_no_rot = self.base_model.normalize_parameters(parameters[..., :-1])
+
+        if parameters.ndim > 1:
+            normalized_params = np.concatenate((normalized_params_no_rot, np.mod(parameters[..., -1:], 2*np.pi)), axis=1)
+        else:
+            normalized_params = np.concatenate((normalized_params_no_rot, np.mod(parameters[..., -1:], 2*np.pi)), axis=0)
+
+        return normalized_params
+
+
+class rotated_model_3d(coordinate_model):
     """
     Take any 3D model and parameterize its arbitrary rotation using by Euler angles.
 
@@ -246,10 +389,15 @@ class rotated_model(coordinate_model):
 
     def __init__(self,
                  model: coordinate_model,
-                 center_inds):
+                 center_inds: tuple[int]):
+        """
 
-        if model.ndim != 3:
-            raise ValueError(f"model.ndim = {model.ndim:d}, but only 3D models are supported")
+        :param model:
+        :param center_inds: center_inds: (cz_index, cy_index, cx_index)
+        """
+
+        # if model.ndim != 3:
+        #     raise ValueError(f"model.ndim = {model.ndim:d}, but only 3D models are supported")
 
         param_names = model.parameter_names + ["phi", "theta", "psi"]
         has_jacobian = model.has_jacobian
@@ -274,7 +422,7 @@ class rotated_model(coordinate_model):
     def model(self,
               coordinates: tuple[np.ndarray],
               parameters: np.ndarray) -> np.ndarray:
-        z, y, x = coordinates
+        z, y, x = coordinates[-3:]
 
         phi = parameters[-3]
         theta = parameters[-2]
@@ -301,7 +449,7 @@ class rotated_model(coordinate_model):
     def jacobian(self,
                  coordinates: tuple[np.ndarray],
                  parameters: np.ndarray) -> list[np.ndarray]:
-        z, y, x = coordinates
+        z, y, x = coordinates[-3:]
 
         phi = parameters[-3]
         theta = parameters[-2]
@@ -490,7 +638,7 @@ class gauss1d(coordinate_model):
     def model(self,
               coordinates: tuple[np.ndarray],
               parameters: np.ndarray):
-        x, = coordinates
+        x, = coordinates[-1:]
         g = parameters[0] * np.exp(-(x - parameters[1]) ** 2 / (2 * parameters[2] ** 2)) + parameters[3]
         return g
 
@@ -500,7 +648,7 @@ class gauss1d(coordinate_model):
 
         amp, c, sig, bg = parameters
 
-        x, = coordinates
+        x, = coordinates[-1:]
         # useful functions that show up in derivatives
         exps = np.exp(-(x - c) ** 2 / (2 * sig ** 2))
 
@@ -534,7 +682,7 @@ class gauss1d(coordinate_model):
 
     def estimate_bounds(self,
                         coordinates: tuple[np.ndarray]):
-        x, = coordinates
+        x, = coordinates[-1:]
         lbs = (-np.inf, x.min(), 0, -np.inf)
         ubs = (np.inf, x.max(), x.max() - x.min(), np.inf)
         return lbs, ubs
@@ -559,7 +707,7 @@ class gauss2d(coordinate_model):
     def model(self,
               coordinates: tuple[np.ndarray],
               parameters: np.ndarray):
-        y, x = coordinates
+        y, x = coordinates[-2:]
         xrot = np.cos(parameters[6]) * (x - parameters[1]) - np.sin(parameters[6]) * (y - parameters[2])
         yrot = np.cos(parameters[6]) * (y - parameters[2]) + np.sin(parameters[6]) * (x - parameters[1])
 
@@ -575,7 +723,7 @@ class gauss2d(coordinate_model):
                  coordinates: tuple[np.ndarray],
                  params: np.ndarray):
 
-        y, x = coordinates
+        y, x = coordinates[-2:]
         bcast_shape = (x + y).shape
 
         # useful functions that show up in derivatives
@@ -635,7 +783,7 @@ class gauss2d(coordinate_model):
     def estimate_bounds(self,
                         coordinates: tuple[np.ndarray]):
 
-        yy, xx = coordinates
+        yy, xx = coordinates[-2:]
         # replace any bounds which are none with default guesses
         lbs = (-np.inf, xx.min(), yy.min(), 0, 0, -np.inf, -np.inf)
         if self.use_sigma_ratio_parameterization:
@@ -654,6 +802,79 @@ class gauss2d(coordinate_model):
         param_norm[..., 6] = np.mod(param_norm[..., 6], 2*np.pi)
 
         return param_norm
+
+
+class ellipsoid2d(coordinate_model):
+    def __init__(self, decay_length):
+        """
+        2D ellipsoid
+
+        :param decay_length:
+        """
+        self.decay_length = decay_length
+        super().__init__(["amp", "cx", "cy", "ax", "ay", "bg"], 2, has_jacobian=True)
+
+    def model(self,
+              coordinates: tuple[np.ndarray],
+              parameters: np.ndarray) -> np.ndarray:
+        y, x = coordinates[-2:]
+        bcast_shape = (x + y).shape
+        amp, cx, cy, ax, ay, bg = parameters
+
+        surface_val = (x - cx) ** 2 / ax ** 2 + (y - cy) ** 2 / ay ** 2
+        inside = surface_val <= 1
+
+        val = np.zeros(bcast_shape)
+        val[inside] = amp
+        val[np.logical_not(inside)] = amp * np.exp(-surface_val[np.logical_not(inside)] / self.decay_length)
+        val += bg
+
+        return val
+
+    def jacobian(self,
+                 coordinates: tuple[np.ndarray],
+                 parameters: np.ndarray) -> list[np.ndarray]:
+        y, x = coordinates[-2:]
+        bcast_shape = (x + y).shape
+        amp, cx, cy, ax, ay, bg = parameters
+
+        # building blocks of jacobian
+        surface_val = (x - cx) ** 2 / ax ** 2 + (y - cy) ** 2 / ay ** 2
+        ds_dcx = - 2 * (x - cx) / ax ** 2
+        ds_dcy = - 2 * (y - cy) / ay ** 2
+        ds_dax = - 2 * (x - cx)**2 / ax ** 3
+        ds_day = - 2 * (y - cy)**2 / ay ** 3
+
+        exp_decay = np.exp(-surface_val / self.decay_length)
+        inside = surface_val <= 1
+        outside = np.logical_not(inside)
+
+        dexp_ds = np.zeros(bcast_shape)
+        dexp_ds[outside] = amp * -1 / self.decay_length * exp_decay[outside]
+
+        # jacobian components
+        df_damp = np.ones(bcast_shape)
+        df_damp[outside] = exp_decay[outside]
+
+        jac = [df_damp,
+               dexp_ds * ds_dcx,
+               dexp_ds * ds_dcy,
+               dexp_ds * ds_dax,
+               dexp_ds * ds_day,
+               np.ones(bcast_shape)]
+
+        return jac
+
+    def estimate_parameters(self,
+                            data: np.ndarray,
+                            coordinates: tuple[np.ndarray],
+                            num_preserved_dims: int = 0):
+        return gauss2d().estimate_parameters(data, coordinates, num_preserved_dims)[..., :-1]
+
+    def estimate_bounds(self,
+                        coordinates: tuple[np.ndarray]) -> (tuple[float], tuple[float]):
+        lbs, ubs = gauss2d().estimate_bounds(coordinates)
+        return lbs[:-1], ubs[:-1]
 
 
 class gauss2d_sum(coordinate_model):
@@ -723,7 +944,7 @@ class gauss3d(coordinate_model):
               coordinates: tuple[np.ndarray],
               params: np.ndarray) -> np.ndarray:
 
-        z, y, x, = coordinates
+        z, y, x, = coordinates[-3:]
         amp, cx, cy, cz, sxy, sz, bg = params
         sxy_min, sz_min = self.minimum_sigmas
 
@@ -740,7 +961,7 @@ class gauss3d(coordinate_model):
                  coordinates: tuple[np.ndarray],
                  params: np.ndarray) -> list[np.ndarray]:
 
-        z, y, x = coordinates
+        z, y, x = coordinates[-3:]
         amp, cx, cy, cz, sxy, sz, bg = params
         sxy_min, sz_min = self.minimum_sigmas
         bcast_shape = (x + y + z).shape
@@ -771,7 +992,7 @@ class gauss3d(coordinate_model):
         if self.ndim != len(coordinates):
             raise ValueError("len(coords) != model dimensions")
 
-        z, y, x = coordinates
+        z, y, x = coordinates[-3:]
         data_ndim = data.ndim
 
 
@@ -811,7 +1032,7 @@ class gauss3d(coordinate_model):
 
     def estimate_bounds(self,
                         coordinates: tuple[np.ndarray]):
-        z, y, x = coordinates
+        z, y, x = coordinates[-3:]
 
         lbs = (-np.inf, x.min(), y.min(), z.min(), 0, 0, -np.inf)
         ubs = (np.inf, x.max(), y.max(), z.max(), np.inf, np.inf, np.inf)
@@ -845,7 +1066,7 @@ class gauss3d_asymmetric(coordinate_model):
               coords: tuple[np.ndarray],
               params: np.ndarray):
 
-        z, y, x, = coords
+        z, y, x, = coords[-3:]
         sx_min, sy_min, sz_min = self.minimum_sigmas
 
         if self.use_sigma_ratio_parameterization:
@@ -865,7 +1086,7 @@ class gauss3d_asymmetric(coordinate_model):
                  coords: tuple[np.ndarray],
                  params: np.ndarray):
 
-        z, y, x, = coords
+        z, y, x, = coords[-3:]
         sx_min, sy_min, sz_min = self.minimum_sigmas
         bcast_shape = (x + y + z).shape
 
@@ -918,7 +1139,7 @@ class gauss3d_asymmetric(coordinate_model):
         if num_preserved_dims != 0:
             raise NotImplementedError()
 
-        z, y, x = coords
+        z, y, x = coords[-3:]
 
         # subtract smallest value so positive
         img_temp = img
@@ -960,7 +1181,7 @@ class gauss3d_asymmetric(coordinate_model):
 
     def estimate_bounds(self,
                         coordinates: tuple[np.ndarray]) -> (tuple[float], tuple[float]):
-        z, y, x = coordinates
+        z, y, x = coordinates[-3:]
 
         lbs = (-np.inf, x.min(), y.min(), z.min(), 0, 0, 0, -np.inf)
         ubs = (np.inf, x.max(), y.max(), z.max(), np.inf, np.inf, np.inf, np.inf)
@@ -979,7 +1200,7 @@ class gauss3d_asymmetric(coordinate_model):
 class ellipsoid3d(coordinate_model):
     def __init__(self, decay_length):
         """
-        3D ellipsoid symmetric in xy
+        3D ellipsoid
 
         :param decay_length: to facilitate fitting, the value outside of the ellipsoid decays exponentially instead of
         instantly cutting off
@@ -990,7 +1211,7 @@ class ellipsoid3d(coordinate_model):
     def model(self,
               coordinates: tuple[np.ndarray],
               parameters: np.ndarray) -> np.ndarray:
-        z, y, x = coordinates
+        z, y, x = coordinates[-3:]
         bcast_shape = (x + y + z).shape
         
         amp, cx, cy, cz, ax, ay, az, bg = parameters
@@ -1009,8 +1230,9 @@ class ellipsoid3d(coordinate_model):
                  coordinates: tuple[np.ndarray],
                  parameters: np.ndarray) -> list[np.ndarray]:
 
-        z, y, x = np.broadcast_arrays(*coordinates)
-        bcast_shape = x.shape
+        z, y, x = coordinates[-3:]
+        # z, y, x = np.broadcast_arrays(*coordinates[-3:])
+        bcast_shape = (x + y + z).shape
 
         amp, cx, cy, cz, ax, ay, az, bg = parameters
 
@@ -1021,7 +1243,7 @@ class ellipsoid3d(coordinate_model):
         ds_dcz = - 2 * (z - cz) / az ** 2
         ds_dax = - 2 * (x - cx)**2 / ax ** 3
         ds_day = - 2 * (y - cy)**2 / ay ** 3
-        ds_daz = -2 * (z - cz)**2 / az ** 2
+        ds_daz = -2 * (z - cz)**2 / az ** 3
 
         exp_decay = np.exp(-surface_val / self.decay_length)
         inside = surface_val <= 1
@@ -1031,7 +1253,7 @@ class ellipsoid3d(coordinate_model):
         dexp_ds[outside] = amp * -1 / self.decay_length * exp_decay[outside]
 
         # jacobian components
-        df_damp = np.zeros(bcast_shape)
+        df_damp = np.ones(bcast_shape)
         df_damp[outside] = exp_decay[outside]
 
         jac = [df_damp,
@@ -1072,7 +1294,7 @@ class line_piecewisem(coordinate_model):
         :return value:
         """
 
-        x, = coordinates
+        x = coordinates[-1:]
         p = parameters
 
         # first part of the line
@@ -1093,7 +1315,7 @@ class line_piecewisem(coordinate_model):
                  coordinates: tuple[np.ndarray],
                  parameters: np.ndarray) -> list[np.ndarray]:
 
-        x, = coordinates
+        x = coordinates[-1:]
         p = parameters
 
         on_line2 = (x >= p[3])

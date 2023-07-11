@@ -53,6 +53,20 @@ class Test_psf(unittest.TestCase):
                                        err_msg=f"jacobian test failed for parameter {model.parameter_names[ii]:s}")
 
 
+    def test_ellipsoid2d(self):
+        model = fit.ellipsoid2d(decay_length=0.1)
+        params = np.array([1.235235, 5.236236, 7.3236236236, 2.236236236, 1.236236, 0.3246346])
+        x = np.linspace(0, 10, 101)
+        xx, yy = np.meshgrid(x, x)
+        coords = (yy, xx)
+
+        jn, jcalc = model.test_jacobian(coords, params)
+
+        for ii in range(model.nparams):
+            np.testing.assert_allclose(jn[ii], jcalc[ii], atol=1e-8, rtol=1e-5,
+                                       err_msg=f"jacobian test failed for parameter {model.parameter_names[ii]:s}")
+
+
     def test_gauss3d(self):
         model = fit.gauss3d()
         params = np.array([1.235235, 5.236236, 7.3236236236, 2.236236236, 3.2362362, 0.3246346, 0.2236236])
@@ -126,7 +140,7 @@ class Test_psf(unittest.TestCase):
                                        err_msg=f"jacobian test failed for parameter {model.parameter_names[ii]:s}")
 
     def test_gauss3d_rotated(self):
-        model = fit.rotated_model(fit.gauss3d(), center_inds=(3, 2, 1))
+        model = fit.rotated_model_3d(fit.gauss3d(), center_inds=(3, 2, 1))
         params = np.array([1.235235, 5.236236, 7.3236236236, 2.236236236, 3.2362362, 0.3246346, 0.2236236, np.pi * 0.236236, np.pi * 0.1112, np.pi * 0.3])
         x = np.linspace(0, 10, 101)
         coords = np.meshgrid(x, x, x, indexing="ij")
@@ -138,9 +152,23 @@ class Test_psf(unittest.TestCase):
                                        err_msg=f"jacobian test failed for parameter {model.parameter_names[ii]:s}")
 
     def test_gauss3d_rotated_fixed_angles(self):
-        model_free = fit.rotated_model(fit.gauss3d(), center_inds=(3, 2, 1))
+        model_free = fit.rotated_model_3d(fit.gauss3d(), center_inds=(3, 2, 1))
         model = fit.fixed_parameter_model(model_free, fixed_inds=(8, 9), fixed_values=(0, 0))
         params = np.array([1.235235, 5.236236, 7.3236236236, 2.236236236, 3.2362362, 0.3246346, 0.2236236, np.pi * 0.236236])
+        x = np.linspace(0, 10, 101)
+        coords = np.meshgrid(x, x, x, indexing="ij")
+
+        jn, jcalc = model.test_jacobian(coords, params)
+
+        for ii in range(model.nparams):
+            np.testing.assert_allclose(jn[ii], jcalc[ii], atol=1e-8, rtol=1e-5,
+                                       err_msg=f"jacobian test failed for parameter {model.parameter_names[ii]:s}")
+
+
+    def test_ellipsoid3d(self):
+        model = fit.rotated_model_3d(fit.ellipsoid3d(decay_length=0.1), center_inds=(3, 2, 1))
+        params = np.array([1.235235, 5.236236, 7.3236236236, 2.236236236, 3.2362362, 0.3246346, 0.2236236, 0.411,
+                           np.pi * 0.236236, np.pi * 0.1112, np.pi * 0.3])
         x = np.linspace(0, 10, 101)
         coords = np.meshgrid(x, x, x, indexing="ij")
 
