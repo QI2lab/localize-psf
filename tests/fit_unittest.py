@@ -6,7 +6,7 @@ import unittest
 import numpy as np
 from localize_psf import fit
 
-class Test_psf(unittest.TestCase):
+class Test_fit(unittest.TestCase):
 
     def setUp(self):
         pass

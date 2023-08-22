@@ -23,7 +23,8 @@ class coordinate_model():
     def __init__(self,
                  param_names: list[str],
                  ndims: int,
-                 has_jacobian: bool = False):
+                 has_jacobian: bool = False,
+                 is_complex: bool = False):
         """
 
         :param param_names:
@@ -43,6 +44,7 @@ class coordinate_model():
         self.nparams = len(param_names)
         self.ndim = ndims
         self.has_jacobian = has_jacobian
+        self.is_complex = is_complex
 
 
     def model(self,
@@ -188,7 +190,11 @@ class coordinate_model():
 
         # if all sd's are nan or zero, set to 1
         if sd is None or np.all(np.isnan(sd)) or np.all(sd == 0):
-            sd = np.ones(data.shape)
+            if self.is_complex:
+                sd = np.ones(data.shape) * (1 + 1j)
+            else:
+                sd = np.ones(data.shape)
+
 
         # handle uncertainties that will cause fitting to fail
         if np.any(sd == 0) or np.any(np.isnan(sd)):
@@ -212,16 +218,21 @@ class coordinate_model():
                 ubs = tuple([b if b is not None else np.inf for ii, b in enumerate(bounds[1])])
             bounds = (lbs, ubs)
 
+        # ###########################
+        # handle complex arguments
+        # ###########################
+        if self.is_complex:
+            def split(v): return np.stack((v.real, v.imag))
+        else:
+            def split(v): return v
 
         # function to be optimized
-        # todo: handle complex functions
         def err_fn(p):
-            return np.divide(self.model(coordinates, p)[to_use].ravel() - data[to_use].ravel(), sd[to_use].ravel())
+            return np.divide(split(self.model(coordinates, p)[to_use]).ravel() - split(data[to_use]).ravel(), split(sd[to_use]).ravel())
 
         # if it was passed, use model jacobian
         if self.has_jacobian and use_jacobian:
-            def jac_fn(p):
-                return [v[to_use] / sd[to_use] for v in self.jacobian(coordinates, p)]
+            def jac_fn(p): return [split(v[to_use]).ravel() / split(sd[to_use]).ravel() for v in self.jacobian(coordinates, p)]
         else:
             jac_fn = None
 
@@ -254,13 +265,15 @@ class rotated_model_2d(coordinate_model):
         param_names = model.parameter_names + ["phi"]
         has_jacobian = model.has_jacobian
         ndims = model.ndim
+        is_complex = model.is_complex
 
         if model.ndim != 2:
             raise ValueError(f"model.ndim = {model.ndim:d}, but only 2D models are supported")
 
         super().__init__(param_names,
                          has_jacobian=has_jacobian,
-                         ndims=ndims)
+                         ndims=ndims,
+                         is_complex=is_complex)
 
         self.base_model = model
         self.center_inds = center_inds
@@ -402,6 +415,7 @@ class rotated_model_3d(coordinate_model):
         param_names = model.parameter_names + ["phi", "theta", "psi"]
         has_jacobian = model.has_jacobian
         ndims = model.ndim
+        is_complex = model.is_complex
 
         if ndims != 3:
             raise ValueError(f"pixel oversampling only implemented for 3D models,"
@@ -409,7 +423,8 @@ class rotated_model_3d(coordinate_model):
 
         super().__init__(param_names,
                          has_jacobian=has_jacobian,
-                         ndims=ndims)
+                         ndims=ndims,
+                         is_complex=is_complex)
 
         self.base_model = model
         self.center_inds = center_inds
@@ -573,7 +588,8 @@ class fixed_parameter_model(coordinate_model):
 
         super().__init__(param_names_not_fixed,
                          has_jacobian=model.has_jacobian,
-                         ndims=model.ndim)
+                         ndims=model.ndim,
+                         is_complex=model.is_complex)
 
     def model(self,
               coordinates: tuple[np.ndarray],
@@ -708,6 +724,7 @@ class gauss2d(coordinate_model):
               coordinates: tuple[np.ndarray],
               parameters: np.ndarray):
         y, x = coordinates[-2:]
+
         xrot = np.cos(parameters[6]) * (x - parameters[1]) - np.sin(parameters[6]) * (y - parameters[2])
         yrot = np.cos(parameters[6]) * (y - parameters[2]) + np.sin(parameters[6]) * (x - parameters[1])
 
@@ -802,6 +819,31 @@ class gauss2d(coordinate_model):
         param_norm[..., 6] = np.mod(param_norm[..., 6], 2*np.pi)
 
         return param_norm
+
+
+class complex_gauss2d(coordinate_model):
+
+    def __init__(self):
+        super().__init__(["Re(amp)", "Im(amp)", "Re(cx)", "Im(cx)",
+                          "Re(cy)", "Im(cy)",
+                          "Re(sx)", "Im(sx)",
+                          "Re(sy)", "Im(sy)",
+                          "Re(bg)", "Im(bg)"],
+                         2, has_jacobian=True)
+
+    def model(self,
+              coordinates: tuple[np.ndarray],
+              parameters: np.ndarray) -> np.ndarray:
+
+        y, x = coordinates[-2:]
+        a_re, a_im, cx_re, cx_im, cy_re, cy_im, sx_re, sx_im, sy_re, sy_im, bg_re, bg_im = parameters
+        amp = a_re + 1j * a_im
+        # cx =
+
+        val = amp * np.exp(-x ** 2 / (2 * parameters[3] ** 2) - y ** 2 / (2 * parameters[4] ** 2)) + parameters[5]
+
+        return val
+
 
 
 class ellipsoid2d(coordinate_model):
@@ -1354,6 +1396,7 @@ def fit_model(img: np.ndarray,
               sd: Optional[np.ndarray] = None,
               bounds: Optional[tuple[tuple[float]]] = None,
               model_jacobian: Optional[callable] = None,
+              function_is_complex: bool = False,
               **kwargs) -> dict:
     """
     Fit 2D model function to an image. Any Nan values in the image will be ignored. This function is a wrapper for
@@ -1383,7 +1426,10 @@ def fit_model(img: np.ndarray,
 
     class mtemp(coordinate_model):
         def __init__(self):
-            super().__init__(["p"] * len(init_params), 0, has_jacobian=has_jacobian)
+            super().__init__(["p"] * len(init_params),
+                             0,
+                             has_jacobian=has_jacobian,
+                             is_complex=function_is_complex)
 
         def model(self,
                   coordinates: tuple[np.ndarray],
@@ -1429,6 +1475,7 @@ def fit_least_squares(model_fn,
     :param  bounds: (lbs, ubs). If None, -/+ infinity used for all parameters.
     :param model_jacobian: Jacobian of the model function as a list, [df/dp[0], df/dp[1], ...]. If None,
       no jacobian used.
+    :param function_is_complex: if function values are complex, must set this flag to true to handle correctly
     :param kwargs: additional key word arguments will be passed through to scipy.optimize.least_squares()
     :return results: dictionary object. Uncertainty can be obtained from the square roots of the diagonals of the
       covariance matrix, but these will only be meaningful if variances were appropriately provided for the cost function
@@ -1450,8 +1497,8 @@ def fit_least_squares(model_fn,
     # ensure initial parameters within bounds, if not fixed
     for ii in range(len(init_params)):
         if (init_params[ii] < bounds[0][ii] or init_params[ii] > bounds[1][ii]) and not fixed_params[ii]:
-            raise ValueError("Initial parameter at index %d had value %0.2g, which was outside of bounds (%0.2g, %0.2g"
-                             % (ii, init_params[ii], bounds[0][ii], bounds[1][ii]))
+            raise ValueError(f"Initial parameter at index {ii:d} had value {init_params[ii]:0.2g},"
+                             f" which was outside of bounds ({bounds[0][ii]:0.2g}, {bounds[1][ii]:0.2g})")
 
     if np.any(np.isnan(init_params)):
         raise ValueError("init_params cannot include nans")
@@ -1477,7 +1524,11 @@ def fit_least_squares(model_fn,
     def err_fn_pfree(pfree): return model_fn(pfree2pfull(pfree))
 
     if model_jacobian is not None:
-        def jac_fn_free(pfree): return pfull2pfree(model_jacobian(pfree2pfull(pfree))).transpose()
+        def jac_fn_free(pfree):
+            pf = pfree2pfull(pfree)
+            jf = model_jacobian(pf)
+            return pfull2pfree(jf).transpose()
+
     init_params_free = pfull2pfree(init_params)
     bounds_free = (tuple(pfull2pfree(bounds[0])), tuple(pfull2pfree(bounds[1])))
 
