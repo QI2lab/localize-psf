@@ -1822,6 +1822,7 @@ def plot_bead_locations(imgs: np.ndarray,
                         coords: Optional[list] = None,
                         vlims_percentile: tuple[float] = (0.01, 99.99),
                         gamma: float = 1,
+                        axes = None,
                         **kwargs):
     """
     Plot center locations over 2D image or max projection of 3D image. Supports plotting multiple different sets
@@ -1889,15 +1890,30 @@ def plot_bead_locations(imgs: np.ndarray,
     extent_xy = [xx.min() - 0.5 * dx, xx.max() + 0.5 * dx,
                  yy.max() + 0.5 * dy, xx.min() - 0.5 * dy]
 
-    # create figure
-    figh = plt.figure(**kwargs)
-    figh.suptitle(title)
-    ax = figh.add_subplot(1, 1, 1)
+    # create figure if no axes were provided, otherwise use given axes
+    n_axes = 2 + nlists
+
+    if axes is None:
+        width_ratios = [1] + [0.05] * (n_axes - 1)
+        wspace = 0.05 / np.mean(width_ratios)
+
+        figh = plt.figure(**kwargs)
+        grid = figh.add_gridspec(nrows=1,
+                                 ncols=n_axes, width_ratios=width_ratios, wspace=wspace)
+        figh.suptitle(title)
+        axes = [figh.add_subplot(grid[0, ii]) for ii in range(n_axes)]
+    else:
+        if len(axes) != n_axes:
+            raise ValueError(f"len(axes) = {len(axes):d} but should be {n_axes:d}")
+
+        figh = axes[0].get_figure()
+        axes[0].set_title(title)
 
     # plot image
     vmin = np.percentile(img_max_proj, vlims_percentile[0])
     vmax = np.percentile(img_max_proj, vlims_percentile[1])
 
+    ax = axes[0]
     im = ax.imshow(img_max_proj,
                    norm=PowerNorm(gamma=gamma, vmin=vmin, vmax=vmax),
                    cmap=plt.cm.get_cmap("bone"),
@@ -1905,7 +1921,7 @@ def plot_bead_locations(imgs: np.ndarray,
     xlim = ax.get_xlim()
     ylim = ax.get_ylim()
 
-    cbar = plt.colorbar(im)
+    cbar = plt.colorbar(im, cax=axes[1])
     cbar.ax.set_ylabel(f"Image intensity (counts), gamma={gamma:.2f}")
 
     # plot centers
@@ -1917,12 +1933,20 @@ def plot_bead_locations(imgs: np.ndarray,
             vmin = color_limits[ii][0]
             vmax = color_limits[ii][1]
 
-        cmap_color = LinearSegmentedColormap.from_list("test", [[0.5, 0.5, 0.5], color_lists[ii]])
+        if not isinstance(color_lists[ii], str):
+            cmap_color = LinearSegmentedColormap.from_list("test", [[0.5, 0.5, 0.5], color_lists[ii]])
+        else:
+            cmap_color = plt.get_cmap(color_lists[ii])
         cs = cmap_color((weights[ii] - vmin) / (vmax - vmin))
 
-        ax.scatter(center_lists[ii][:, 2], center_lists[ii][:, 1], facecolor='none', edgecolor=cs, marker='o')
+        axes[0].scatter(center_lists[ii][:, 2],
+                   center_lists[ii][:, 1],
+                   facecolor='none',
+                   edgecolor=cs,
+                   marker='o')
 
-        cbar = plt.colorbar(plt.cm.ScalarMappable(norm=Normalize(vmin=vmin, vmax=vmax), cmap=cmap_color))
+        cbar = plt.colorbar(plt.cm.ScalarMappable(norm=Normalize(vmin=vmin, vmax=vmax), cmap=cmap_color),
+                            cax=axes[ii + 2])
         cbar.ax.set_ylabel(cbar_labels[ii])
 
     ax.set_xlim(xlim)
