@@ -1270,6 +1270,8 @@ def get_param_filter(coords: Sequence[np.ndarray],
     :return filter:
     """
 
+    warnings.warn("get_param_filter() is deprecated and will be removed soon. Please use get_param_filter_model() instead.")
+
     z, y, x = coords
 
     # in bounds
@@ -1455,8 +1457,8 @@ def localize_beads_generic(imgs: np.ndarray,
                            drs: tuple[float],
                            threshold: float,
                            roi_size: Sequence[float] = (4., 2., 2.),
-                           filter_sigma_small: Sequence[float] = (1., 0.1, 0.1),
-                           filter_sigma_large: Sequence[float] = (10., 5., 5.),
+                           filter_sigma_small: Optional[Sequence[float]] = None,
+                           filter_sigma_large: Optional[Sequence[float]] = None,
                            min_spot_sep: Sequence[float] = (0., 0.),
                            filter: Optional[filter] = None,
                            mask: Optional[np.ndarray] = None,
@@ -1786,6 +1788,8 @@ def localize_beads(imgs: np.ndarray,
     For a description of the parameters see localize_beads_generic() and get_param_filter()
     """
 
+    warnings.warn("localize_beads() is deprecated and will be removed soon. Please use localize_beads_generic() instead.")
+
     shape = imgs.shape
     if imgs.ndim == 2:
         shape = (1,) + shape
@@ -2024,6 +2028,8 @@ def autofit_psfs(imgs: np.ndarray,
       condition_names, filter_settings, fit_states, chi_sqrs, niters,  psfs_real, psf_coords, otfs_real,
       otf_coords, psf_percentiles, fit_params_real
     """
+
+    warnings.warn("autofit_psf() is deprecated")
 
     plt.switch_backend("agg")
     plt.ioff()

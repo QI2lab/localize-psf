@@ -1188,10 +1188,10 @@ def average_exp_psfs(imgs: np.ndarray,
     """
     Get experimental psf from imgs by averaging many localizations (after pixel shifting).
 
-    :param imgs:z-stack of images
+    :param imgs: z-stack of images
     :param coords: (z, y, x) of full image. Must be broadcastable to full image size
     :param centers: n x 3 array, (cz, cy, cx)
-    :param roi_sizes: [sz, sy, sx]
+    :param roi_sizes: [sz, sy, sx] in pixels
     :param backgrounds: values to subtracted from each ROI
     :return psf_mean, psf_coords, otf_mean, otf_coords:
     """
@@ -1225,8 +1225,8 @@ def average_exp_psfs(imgs: np.ndarray,
         zc_pix = np.argmin(np.abs(z - centers[ii, 0]))
 
         # cut roi from image
-        roi_unc = rois.get_centered_roi((zc_pix, yc_pix, xc_pix), roi_sizes)
-        roi = rois.get_centered_roi((zc_pix, yc_pix, xc_pix),
+        roi_unc = rois.get_centered_rois((zc_pix, yc_pix, xc_pix), roi_sizes)
+        roi = rois.get_centered_rois((zc_pix, yc_pix, xc_pix),
                                     roi_sizes,
                                     min_vals=[0, 0, 0],
                                     max_vals=imgs.shape)[0]
@@ -1245,8 +1245,10 @@ def average_exp_psfs(imgs: np.ndarray,
         zshift_pix = (zroi[cz_pix_roi, 0, 0] - centers[ii, 0]) / dz
 
         # get coordinates
-        img_roi_shifted = shift(np.array(img_roi, dtype=float), [zshift_pix, yshift_pix, xshift_pix],
-                                    mode="constant", cval=-1)
+        img_roi_shifted = shift(np.array(img_roi, dtype=float),
+                                [zshift_pix, yshift_pix, xshift_pix],
+                                mode="constant",
+                                cval=-1)
         img_roi_shifted[img_roi_shifted == -1] = np.nan
 
         # put into array in appropriate positions
