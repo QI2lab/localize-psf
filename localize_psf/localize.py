@@ -1257,9 +1257,10 @@ def get_param_filter(coords: Sequence[np.ndarray],
                      min_spot_sep: Sequence[float] = (0., 0.),
                      sigma_bounds: tuple[Sequence[float], Sequence[float]] = ((0., 0.), (np.inf, np.inf)),
                      amp_bounds: Sequence[float] = (0., np.inf),
-                     dist_boundary_min: Sequence[float] = (0., 0.)):
+                     dist_boundary_min: Sequence[float] = (0., 0.)) -> filter:
     """
-    Simple composite filter testing bounds of fit parameters
+    Simple composite filter testing bounds of fit parameters for fit_psf.gaussian3d_psf_model()
+    or other models with the same parameters
 
     :param coords: (z, y, x)
     :param fit_dist_max_err: (dmax_z, dmax_xy) maximum distance between fit points allowed.
@@ -1267,10 +1268,10 @@ def get_param_filter(coords: Sequence[np.ndarray],
     :param sigma_bounds: ((sz_min, sxy_min), (sz_max, sxy_max))
     :param amp_bounds: (amp_min, amp_max)
     :param dist_boundary_min: (dz_min, dxy_min)
-    :return filter:
+    :return filter: resulting filter
     """
 
-    warnings.warn("get_param_filter() is deprecated and will be removed soon. Please use get_param_filter_model() instead.")
+    # warnings.warn("get_param_filter() is deprecated and will be removed soon. Please use get_param_filter_model() instead.")
 
     z, y, x = coords
 
@@ -1312,17 +1313,20 @@ def get_param_filter_model(model: psf.pixelated_psf_model,
                            min_spot_sep: Sequence[float] = (0, 0),
                            param_bounds: Optional[tuple[Sequence[float], Sequence[float]]] = None,
                            center_param_inds: tuple[int] = (3, 2, 1),
-                           ):
+                           ) -> filter:
     """
     Simple composite filter testing bounds of fit parameters
 
     :param model: fit model
-    :param fit_dist_max_err:
-    :param min_spot_sep:
-    :param param_bounds:
-    :param center_param_inds:
-    :return:
+    :param fit_dist_max_err: (dmax_z, dmax_xy) maximum distance between fit points allowed.
+    :param min_spot_sep: (dz_min, dxy_min)
+    :param param_bounds: ([p0_min, p1_min, ...], [p0_max, p1_max, ... ])
+    :param center_param_inds: (iz, iy, ix) indices indicating which parameters represent the z, y, and x
+      center coordinates
+    :return filter: the resulting filter
     """
+
+    # todo: add filter in bounds
 
     filter = no_filter()
 
@@ -1371,6 +1375,9 @@ def filter_localizations(fit_params: np.ndarray,
     :param dist_boundary_min: (dz_min, dxy_min)
     :return: (to_keep, conditions, condition_names, filter_settings)
     """
+
+    warnings.warn("filter_localizations() is deprecated and will be removed soon. Please use a filter instance.")
+
     # todo: deprecate this and replace with the filter class objects as did in localize_beads_generic
 
     filter_settings = {"fit_dist_max_err": fit_dist_max_err,
