@@ -24,6 +24,19 @@ class Test_fit(unittest.TestCase):
             np.testing.assert_allclose(jn[ii], jcalc[ii], atol=1e-8, rtol=1e-5,
                                        err_msg=f"jacobian test failed for parameter {model.parameter_names[ii]:s}")
 
+    def test_gauss2d_symm(self):
+        model = fit.gauss2d_symm()
+        params = np.array([1.235235, 5.236236, 7.3236236236, 2.236236236, 0.3246346])
+        x = np.linspace(0, 10, 101)
+        xx, yy = np.meshgrid(x, x)
+        coords = (yy, xx)
+
+        jn, jcalc = model.test_jacobian(coords, params)
+
+        for ii in range(model.nparams):
+            np.testing.assert_allclose(jn[ii], jcalc[ii], atol=1e-8, rtol=1e-5,
+                                       err_msg=f"jacobian test failed for parameter {model.parameter_names[ii]:s}")
+
 
     def test_gauss2d(self):
         model = fit.gauss2d(use_sigma_ratio_parameterization=False)

@@ -710,6 +710,85 @@ class gauss1d(coordinate_model):
 
         return param_norm
 
+class gauss2d_symm(coordinate_model):
+    def __init__(self):
+        super().__init__(["amp", "cx", "cy", "sxy", "bg"], 2, has_jacobian=True)
+
+    def model(self,
+              coordinates: tuple[np.ndarray],
+              parameters: np.ndarray):
+
+        y, x = coordinates[-2:]
+
+        amp, cx, cy, sxy, bg = parameters
+        val = amp * np.exp(-((x - cx) ** 2 + (y - cy) ** 2) / (2 * sxy**2)) + bg
+
+        return val
+
+    def jacobian(self,
+                 coordinates: tuple[np.ndarray],
+                 params: np.ndarray):
+
+        y, x = coordinates[-2:]
+        bcast_shape = (x + y).shape
+
+        # useful functions that show up in derivatives
+        amp, cx, cy, sxy, bg = params
+
+        exps = self.model(coordinates, [1, cx, cy, sxy, 0])
+
+        jac = [exps,
+               amp * exps * (x - cx) / sxy ** 2,
+               amp * exps * (y - cy) / sxy ** 2,
+               amp * exps * ((x - cx) ** 2 + (y - cy)**2) / sxy ** 3,
+               np.ones(bcast_shape),
+               ]
+
+        return jac
+
+    def estimate_parameters(self,
+                            data: np.ndarray,
+                            coordinates: tuple[np.ndarray],
+                            num_preserved_dims: int = 0):
+
+        if num_preserved_dims != 0:
+            raise NotImplementedError()
+
+        to_use = np.logical_not(np.isnan(data))
+
+        bg = np.nanmean(data.ravel())
+        amp = np.max(data[to_use].ravel()) - bg
+
+        cy, cx = get_moments(data, order=1, coords=coordinates)
+        m2y, m2x = get_moments(data, order=2, coords=coordinates)
+        with np.errstate(invalid='ignore'):
+            sx = np.sqrt(m2x - cx ** 2)
+            sy = np.sqrt(m2y - cy ** 2)
+        sxy = np.sqrt(sx * sy)
+
+        ip_default = np.array([amp, cx, cy, sxy, bg])
+
+        return ip_default
+
+
+    def estimate_bounds(self,
+                        coordinates: tuple[np.ndarray]):
+
+        yy, xx = coordinates[-2:]
+        # replace any bounds which are none with default guesses
+        lbs = (-np.inf, xx.min(), yy.min(), 0, -np.inf)
+        ubs = (np.inf, xx.max(), yy.max(), np.inf, np.inf)
+
+        return lbs, ubs
+
+
+    def normalize_parameters(self,
+                             parameters):
+        param_norm = np.array(parameters, copy=True)
+        param_norm[..., 3] = np.abs(param_norm[..., 3])
+
+        return param_norm
+
 
 class gauss2d(coordinate_model):
     def __init__(self, use_sigma_ratio_parameterization=False):
