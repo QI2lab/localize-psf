@@ -130,16 +130,18 @@ def get_centered_rois(centers: Union[np.ndarray[int], np.ndarray[float]],
     Note that following python array indexing convention end_i are NOT contained in the ROI
 
     :param centers: num_rois x ndims list of centers [[a0, a1, ..., an], [b0, b1, ..., bn], ...]
-    :param sizes: num_rois x ndims ROI size for each center and dimension
-    :param min_vals: num_rois x ndims
-    :param max_vals: num_rois x ndims
+      Will also accept multiple initial dimensions
+    :param sizes: num_rois x ndims ROI size for each center and dimension. Broadcastable to same size as centers
+    :param min_vals: num_rois x ndims. Broadcastable to same size as centers
+    :param max_vals: num_rois x ndims. Broadcastable to same size as centers
     :return rois: num_rois x 2*ndims
     """
 
     centers = np.atleast_2d(centers)
     sizes = np.atleast_2d(sizes)
 
-    nroi, ndim = centers.shape
+    first_shape = centers.shape[0:-1]
+    ndim = centers.shape[-1]
 
     if min_vals is None:
         if np.issubdtype(centers.dtype, float):
@@ -173,7 +175,8 @@ def get_centered_rois(centers: Union[np.ndarray[int], np.ndarray[float]],
     start = np.maximum(start, min_vals)
     end = np.minimum(end, max_vals)
 
-    rois = np.stack((start, end), axis=-1).reshape((nroi, 2*ndim)).astype(int)
+    # rois = np.stack((start, end), axis=-1).reshape((nroi, 2*ndim)).astype(int)
+    rois = np.stack((start, end), axis=-1).astype(int).reshape(first_shape + (2 * ndim,))
 
     return rois
 
