@@ -15,9 +15,7 @@ from scipy.signal import fftconvolve, convolve
 from scipy import fft
 from localize_psf import affine, rois, fit
 
-# most of the functions don't require this module, and it does not easily pip install,
-# so don't require it. Probably should enforce some reasonable behavior on the functions
-# that require it...
+
 # https://pypi.org/project/psfmodels/
 _psfmodels_available = True
 try:
@@ -45,7 +43,7 @@ def blur_img_otf(ground_truth: array,
 
     :param ground_truth: NumPy or CuPy array. If CuPy array operations will be performed on the GPU
     :param otf: optical transfer function evalated at the FFT frequencies (with f=0 near the center of the array)
-    :param apodization:
+    :param apodization: Apodization function applied in Fourier space
     :return img_blurred:
     """
 
@@ -83,7 +81,8 @@ def blur_img_psf(ground_truth: array,
     :return blurred_img:
     """
 
-    if isinstance(ground_truth, cp.ndarray) and _cupy_available:
+    use_gpu = isinstance(ground_truth, cp.ndarray) and _cupy_available
+    if use_gpu:
         xp = cp
         conv = convolve_gpu
     else:
@@ -92,8 +91,8 @@ def blur_img_psf(ground_truth: array,
 
     psf = xp.asarray(psf)
 
-    # since GPU convolve only implemented for 1D arrays, need to ensure psf correct size
-    if xp == cp and _cupy_available:
+    # since GPU convolve only implemented for 1D arrays, need to ensure psf correct size so can use fftconvolve instead
+    if use_gpu:
         ns_after = [(n - m) // 2 for n, m in zip(ground_truth.shape, psf.shape)]
         ns_before = [na + 1 if na != 0 else 0 for na in ns_after]
         pad_sizes = [(nb, na) for nb, na in zip(ns_before, ns_after)]
@@ -104,13 +103,13 @@ def blur_img_psf(ground_truth: array,
                      constant_values=0)
 
         if psf.shape != ground_truth.shape:
-            raise ValueError()
+            raise ValueError("psf size and ground truth size not compatible")
 
     if psf.shape == ground_truth.shape:
         otf, _ = psf2otf(psf)
         img_blurred = blur_img_otf(ground_truth, otf, apodization=apodization)
     else:
-        # todo: problem, GPU version only implemented for 1D arrays
+        # todo: problem, GPU version only implemented for 1D arrays. So do not enter this codeblock if running on GPU
         ns = ground_truth.shape
         ms = psf.shape
         slices = tuple([slice(m//2, m//2 + n) for m, n in zip(ms, ns)])
@@ -194,16 +193,16 @@ def psf2otf(psf: array,
     return otf, coords
 
 
-def symm_fn_1d_to_2d(arr,
-                     fs,
+def symm_fn_1d_to_2d(arr: np.ndarray,
+                     fs: np.ndarray,
                      fmax: float,
                      npts: int):
     """
     Convert a 1D function which is symmetric wrt to the radial variable to a 2D matrix.
     Useful helper function when computing PSFs from 2D OTFs
 
-    :param arr:
-    :param fs:
+    :param arr: 1D function to be converted to 2D
+    :param fs: frequencies 1D function is known at
     :param fmax:
     :param npts:
     :return arr_out, fxs, fys:
@@ -229,40 +228,33 @@ def symm_fn_1d_to_2d(arr,
 
 
 def atf2otf(atf: np.ndarray,
-            dx: Optional[float] = None,
+            dxy: Optional[float] = None,
             wavelength: float = 0.5,
             ni: float = 1.5,
-            defocus_um: float = 0,
-            fx: Optional[np.ndarray] = None,
-            fy: Optional[np.ndarray] = None):
+            defocus_um: float = 0) -> array:
     """
     Get incoherent transfer function (OTF) from autocorrelation of coherent transfer function (ATF)
 
-    :param atf:
-    :param dx:
+    :param atf: coherent transfer function
+    :param dxy: pixel size
     :param wavelength:
-    :param ni:
+    :param ni: refractive index of immersion medium
     :param defocus_um:
-    :param fx:
-    :param fy:
-    :return otf, atf_defocus:
+    :return otf:
     """
     ny, nx = atf.shape
 
+    defocus_fn = 1
     if defocus_um != 0:
-        if fx is None:
-            fx = fft.fftshift(fft.fftfreq(nx, dx))
-        if fy is None:
-            fy = fft.fftshift(fft.fftfreq(ny, dx))
-
-        if dx is None or wavelength is None or ni is None:
+        if dxy is None or wavelength is None or ni is None:
             raise TypeError("if defocus != 0, dx, wavelength, ni must be provided")
 
+        fx = fft.fftshift(fft.fftfreq(nx, dxy))[None, :]
+        fy = fft.fftshift(fft.fftfreq(ny, dxy))[:, None]
+
         k = 2*np.pi / wavelength * ni
-        kperp = np.sqrt(np.array(k**2 - (2 * np.pi)**2 * (fx[None, :]**2 + fy[:, None]**2), dtype=np.complex))
+        kperp = np.sqrt(np.array(k**2 - (2 * np.pi)**2 * (fx**2 + fy**2), dtype=np.complex))
         defocus_fn = np.exp(1j * defocus_um * kperp)
-    else:
-        defocus_fn = 1
 
     atf_defocus = atf * defocus_fn
     # if even number of frequencies, we must translate otf_c by one so that f and -f match up
@@ -270,7 +262,7 @@ def atf2otf(atf: np.ndarray,
                                np.mod(nx + 1, 2), axis=1).conj()
 
     otf = fftconvolve(atf_defocus, otf_c_minus_conj, mode='same') / np.sum(np.abs(atf) ** 2)
-    return otf, atf_defocus
+    return otf
 
 
 # circular aperture functions
@@ -292,14 +284,13 @@ def circ_aperture_atf(fx: array,
         xp = cp
     else:
         xp = np
-    fy = xp.ndarray(fy)
+
+    fx = xp.asarray(fx)
+    fy = xp.asarray(fy)
+    ff = xp.sqrt(fx ** 2 + fy ** 2)
 
     fmax = 0.5 / (0.5 * wavelength / na)
-
-    # ff = np.sqrt(fx[None, :]**2 + fy[:, None]**2)
-    ff = xp.sqrt(fx**2 + fy**2)
-
-    atf = xp.ones(ff.shape)
+    atf = xp.ones(ff.shape, dtype=complex)
     atf[ff > fmax] = 0
 
     return atf
@@ -342,33 +333,6 @@ def circ_aperture_otf(fx: array,
 
 
 # helper functions for converting between NA and peak widths
-def na2fwhm(na: float,
-            wavelength: float):
-    """
-    Convert numerical aperture to full-width at half-maximum, assuming an Airy-function PSF
-    FWHM ~ 0.51 * wavelength / na
-
-    :param na: numerical aperture
-    :param wavelength:
-    :return fwhm: in same units as wavelength
-    """
-    fwhm = 1.6163399561827614 / np.pi * wavelength / na
-    return fwhm
-
-
-def fwhm2na(wavelength: float,
-            fwhm: float):
-    """
-    Convert full-width half-maximum PSF value to the equivalent numerical aperture. Inverse function of na2fwhm
-
-    :param wavelength:
-    :param fwhm:
-    :return na:
-    """
-    na = 1.6163399561827614 / np.pi * wavelength / fwhm
-    return na
-
-
 def na2sxy(na: float,
            wavelength: float):
     """
@@ -379,7 +343,8 @@ def na2sxy(na: float,
     :param wavelength:
     :return sigma:
     """
-    fwhm = na2fwhm(na, wavelength)
+    # fwhm = na2fwhm(na, wavelength)
+    fwhm = 1.6163399561827614 / np.pi * wavelength / na
     sigma = 1.49686886 / 1.6163399561827614 / 2 * fwhm
     # 2 * sqrt{2*log(2)} * sigma = 0.5 * wavelength / NA
     # sigma = na2fwhm(na, wavelength) / (2*np.sqrt(2 * np.log(2)))
@@ -396,39 +361,215 @@ def sxy2na(wavelength: float,
     :return fwhm:
     """
     fwhm = 2 * 1.6163399561827614 / 1.49686886 * sigma_xy
-    # fwhm = na2fwhm(na, wavelength)
     # fwhm = sigma * (2*np.sqrt(2 * np.log(2)))
-    return fwhm2na(wavelength, fwhm)
+    na = 1.6163399561827614 / np.pi * wavelength / fwhm
+    return na
 
 
-def na2sz(na: float,
-          wavelength: float,
-          ni: float):
+# pixel grid utility functions
+def oversample_pixel(coords: tuple[np.ndarray, np.ndarray, np.ndarray],
+                     ds: float,
+                     sf: int,
+                     euler_angles: tuple[float] = (0., 0., 0.)) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """
-    Convert numerical aperture to equivalent sigma-z value,
+    Generate coordinates to oversample a pixel on a 2D grid.
 
-    :param na: numerical aperture
-    :param wavelength:
-    :param ni: index of refraction
-    :return sz:
+    Suppose we have a set of pixels centered at points given by x, y, z. Generate sf**2 points in this pixel equally
+    spaced about the center. Allow the pixel to be orientated in an arbitrary direction with respect to the coordinate
+    system. The pixel rotation is described by the Euler angles (psi, theta, phi), where the pixel "body" frame
+    is a square with xy axis orientated along the legs of the square with z-normal to the square
+
+    Compare with oversample_voxel() which works on a 3D grid with a fixed orientation. oversample_pixel() works
+    on a 2D grid with an arbitrary orientation.
+
+    :param coords: (z, y, x) each coordinate array should be compatible with broadcasting with the others
+    :param ds: pixel size
+    :param sf: sample factor
+    :param euler_angles: [phi, theta, psi] where phi and theta are the polar angles describing the normal of the pixel,
+      and psi describes the rotation of the pixel about its normal
+    :return (zz_s, yy_s, xx_s):
+
     """
-    # todo: believe this is a gaussian approx. Find reference
-    return np.sqrt(6) / np.pi * ni * wavelength / na ** 2
+    z, y, x = coords
+
+    # generate new points in pixel, each of which is centered about an equal area of the pixel, so summing them is
+    # giving an approximation of the integral
+    if sf > 1:
+        pts = np.arange(1 / (2 * sf), 1, 1 / sf) - 0.5
+
+        if len(pts) != sf:
+            raise ValueError("Number of sub-points generated did not match oversampled factor")
+
+        xp, yp = np.meshgrid(ds * pts, ds * pts)
+        zp = np.zeros(xp.shape)
+
+        # rotate points to correct position using normal vector
+        # for now we will fix x, but lose generality
+        mat = affine.euler_mat(*euler_angles)
+        result = mat.dot(np.concatenate((xp.ravel()[None, :],
+                                         yp.ravel()[None, :],
+                                         zp.ravel()[None, :]), axis=0))
+        xs, ys, zs = result
+
+        # now must add these to each point x, y, z
+        xx_s = x[..., None] + xs[None, ...]
+        yy_s = y[..., None] + ys[None, ...]
+        zz_s = z[..., None] + zs[None, ...]
+    else:
+        xx_s = np.expand_dims(x, axis=-1)
+        yy_s = np.expand_dims(y, axis=-1)
+        zz_s = np.expand_dims(z, axis=-1)
+
+    return (zz_s, yy_s, xx_s)
 
 
-def sz2na(sigma_z: float,
-          wavelength: float,
-          ni: float):
+def oversample_voxel(coords: tuple[np.ndarray],
+                     drs: tuple[float],
+                     sf: int = 3,
+                     expand_along_extra_dim: bool = True
+                     ):
     """
-    Convert sigma-z value to equivalent numerical aperture
+    Get coordinates to oversample a voxel on a 3D grid
 
-    todo: believe this is a gaussian approx. Find reference
-    :param wavelength:
-    :param sigma_z:
-    :param ni: index of refraction
-    : return na:
+    Compare with oversample_pixel(), which performs oversampling on a 2D grid.
+
+    :param coords: tuple of coordinates (c0, c1, c2, ...), e.g. (z, y, x)
+    :param drs: tuple giving voxel size (d0, d1, d2, ...)
+    :param sf: sampling factor. Assumed to be same for all directions
+    :param expand_along_extra_dim: controls the format of the output arrays. If True cj_exp has one extra dimension
+      as compared with cj which contains the flattened oversampled coordinate values. If False then cj_exp is a factor
+      of sf bigger than cj along each dimension.
+    :return coords_oversampled: (c0_exp, c1_exp, c2_exp, ...)
     """
-    return np.sqrt(np.sqrt(6) / np.pi * ni * wavelength / sigma_z)
+    pts = np.arange(1 / (2 * sf), 1, 1 / sf) - 0.5
+
+    if len(pts) != sf:
+        raise ValueError("Number of sub-points generated did not match oversampled factor")
+
+    pts_dims = np.meshgrid(*[pts * dr for dr in drs], indexing="ij")
+
+    if expand_along_extra_dim:
+        coords_upsample = [np.expand_dims(c, axis=-1) + np.expand_dims(np.ravel(r), axis=0)
+                           for c, r in zip(coords, pts_dims)]
+    else:
+        kernel = np.ones_like(pts_dims[0])
+        kernel_big = np.ones_like(coords[0])
+        coords_upsample = [np.kron(c, kernel) + np.kron(kernel_big, r) for c, r in zip(coords, pts_dims)]
+
+    return coords_upsample
+
+
+def get_psf_coords(ns: list[int],
+                   drs: list[float],
+                   broadcast: bool = False) -> list[np.ndarray]:
+    """
+    Get centered coordinates for PSFmodels style PSF's from step size and number of coordinates
+
+    :param ns: (s0, s1, ...) number of pixels for each dimension
+    :param drs: (dx0, dx1, dx2, ...) voxel size along each dimension
+    :return coords: list of coordinates [c0, c1, c2, ...]
+    """
+    ndims = len(drs)
+    coords = [np.expand_dims(d * (np.arange(n) - (n // 2)),
+                             axis=tuple(range(ii)) + tuple(range(ii+1, ndims)))
+              for ii, (n, d) in enumerate(zip(ns, drs))]
+
+    if broadcast:
+        # copy so we return arrays instead of views
+        coords = [np.array(c, copy=True) for c in np.broadcast_arrays(*coords)]
+
+    return coords
+
+
+def average_exp_psfs(imgs: np.ndarray,
+                     coords: tuple[np.ndarray],
+                     centers: np.ndarray,
+                     roi_sizes: tuple[int],
+                     backgrounds: Optional[np.ndarray] = None) -> np.ndarray:
+    """
+    Get experimental psf from imgs by averaging many localizations (after pixel shifting).
+
+    :param imgs: z-stack of images
+    :param coords: (z, y, x) of full image. Must be broadcastable to full image size
+    :param centers: n x 3 array, (cz, cy, cx)
+    :param roi_sizes: [sz, sy, sx] in pixels
+    :param backgrounds: values to subtracted from each ROI
+    :return psf_mean: mean measured point-spread function. The coordinates that the psf is evaluated at can be
+      computed with get_psf_coords()
+    """
+
+    # get coordinates
+    z, y, x, = coords
+    dz = z[1, 0, 0] - z[0, 0, 0]
+    dy = y[0, 1, 0] - y[0, 0, 0]
+    dx = x[0, 0, 1] - x[0, 0, 0]
+
+    # set up array to hold psfs
+    nrois = len(centers)
+    if backgrounds is None:
+        backgrounds = np.zeros(nrois)
+
+    psf_shifted = np.zeros((nrois, roi_sizes[0], roi_sizes[1], roi_sizes[2])) * np.nan
+    # coordinates
+    z_psf, y_psf, x_psf = get_psf_coords(roi_sizes, [dz, dy, dx], broadcast=True)
+
+    zc_pix_psf = np.argmin(np.abs(z_psf[:, 0, 0]))
+    yc_pix_psf = np.argmin(np.abs(y_psf[0, :, 0]))
+    xc_pix_psf = np.argmin(np.abs(x_psf[0, 0, :]))
+
+    # loop over rois and shift psfs so they are centered
+    for ii in range(nrois):
+        # get closest pixels to center
+        xc_pix = np.argmin(np.abs(x - centers[ii, 2]))
+        yc_pix = np.argmin(np.abs(y - centers[ii, 1]))
+        zc_pix = np.argmin(np.abs(z - centers[ii, 0]))
+
+        # cut roi from image
+        roi = rois.get_centered_rois((zc_pix, yc_pix, xc_pix),
+                                    roi_sizes,
+                                    min_vals=[0, 0, 0],
+                                    max_vals=imgs.shape)[0]
+        img_roi = rois.cut_roi(roi, imgs)[0]
+
+        zroi = rois.cut_roi(roi, z)[0]
+        yroi = rois.cut_roi(roi, y)[0]
+        xroi = rois.cut_roi(roi, x)[0]
+
+        cx_pix_roi = (roi[5] - roi[4]) // 2
+        cy_pix_roi = (roi[3] - roi[2]) // 2
+        cz_pix_roi = (roi[1] - roi[0]) // 2
+
+        xshift_pix = (xroi[0, 0, cx_pix_roi] - centers[ii, 2]) / dx
+        yshift_pix = (yroi[0, cy_pix_roi, 0] - centers[ii, 1]) / dy
+        zshift_pix = (zroi[cz_pix_roi, 0, 0] - centers[ii, 0]) / dz
+
+        # get coordinates
+        img_roi_shifted = shift(np.array(img_roi, dtype=float),
+                                [zshift_pix, yshift_pix, xshift_pix],
+                                mode="constant",
+                                cval=-1)
+        img_roi_shifted[img_roi_shifted == -1] = np.nan
+
+        # put into array in appropriate positions
+        zstart = zc_pix_psf - cz_pix_roi
+        zend = zstart + (roi[1] - roi[0])
+        ystart = yc_pix_psf - cy_pix_roi
+        yend = ystart + (roi[3] - roi[2])
+        xstart = xc_pix_psf - cx_pix_roi
+        xend = xstart + (roi[5] - roi[4])
+
+        psf_shifted[ii, zstart:zend, ystart:yend, xstart:xend] = img_roi_shifted - backgrounds[ii]
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", category=RuntimeWarning)
+        with np.errstate(divide='ignore', invalid='ignore'):
+            psf_mean = np.nanmean(psf_shifted, axis=0)
+
+    # the above doesn't do a good enough job of normalizing PSF
+    max_val = np.nanmax(psf_mean[psf_mean.shape[0]//2])
+    psf_mean = psf_mean / max_val
+
+    return psf_mean
 
 
 # PSF models
@@ -445,7 +586,6 @@ class pixelated_psf_model(fit.coordinate_model):
         """
         PSF functions, accounting for image pixelation along an arbitrary direction.
         vectorized, i.e. can rely on obeying broadcasting rules for x,y,z
-        # todo: want any easy way to create pixelated model from a fit.coordinate_model
 
         :param param_names:
         :param dc: pixel size
@@ -505,12 +645,11 @@ class from_coordinate_model(pixelated_psf_model):
               coordinates: tuple[np.ndarray],
               parameters: np.ndarray) -> np.ndarray:
 
-        z, y, x, = coordinates
         # oversample points in pixel
-        xx_s, yy_s, zz_s = oversample_pixel(x, y, z, self.dc, sf=self.sf, euler_angles=self.angles)
+        coordinates_over = oversample_pixel(coordinates, self.dc, sf=self.sf, euler_angles=self.angles)
 
         # calculate psf at oversampled points
-        psf_s = self.coord_model.model((zz_s, yy_s, xx_s), parameters)
+        psf_s = self.coord_model.model(coordinates_over, parameters)
         # average over those points
         psf = np.mean(psf_s, axis=-1)
 
@@ -521,12 +660,10 @@ class from_coordinate_model(pixelated_psf_model):
                  coordinates: tuple[np.ndarray],
                  parameters: np.ndarray) -> list[np.ndarray]:
 
-        z, y, x = coordinates
-
         # oversample points in pixel
-        xx_s, yy_s, zz_s = oversample_pixel(x, y, z, self.dc, sf=self.sf, euler_angles=self.angles)
+        coordinates_over = oversample_pixel(coordinates, self.dc, sf=self.sf, euler_angles=self.angles)
 
-        jac_os = self.coord_model.jacobian((zz_s, yy_s, xx_s), parameters)
+        jac_os = self.coord_model.jacobian(coordinates_over, parameters)
 
         jac = [np.mean(j, axis=-1) for j in jac_os]
 
@@ -706,10 +843,9 @@ class gaussian_lorentzian_psf_model(pixelated_psf_model):
                          dc=dc, sf=sf, angles=angles, has_jacobian=True, ndims=3)
 
     def model(self, coords, p):
-        (z, y, x) = coords
-
         # oversample points in pixel
-        xx_s, yy_s, zz_s = oversample_pixel(x, y, z, self.dc, sf=self.sf, euler_angles=self.angles)
+        coordinates_over = oversample_pixel(coords, self.dc, sf=self.sf, euler_angles=self.angles)
+        zz_s, yy_s, xx_s = coordinates_over
 
         # calculate psf at oversampled points
         lor_factor = 1 + (zz_s - p[3]) ** 2 / p[5] ** 2
@@ -724,7 +860,8 @@ class gaussian_lorentzian_psf_model(pixelated_psf_model):
         z, y, x = coords
 
         # oversample points in pixel
-        xx_s, yy_s, zz_s = oversample_pixel(x, y, z, self.dc, sf=self.sf, euler_angles=self.angles)
+        coords_over = oversample_pixel(coords, self.dc, sf=self.sf, euler_angles=self.angles)
+        zz_s, yy_s, xx_s = coords_over
 
         lor = 1 + (zz_s - p[3]) ** 2 / p[5] ** 2
         r_sqr = (xx_s - p[1]) ** 2 + (yy_s - p[2]) ** 2
@@ -751,8 +888,6 @@ class gaussian_lorentzian_psf_model(pixelated_psf_model):
 
         if num_preserved_dims != 0:
             raise NotImplementedError()
-
-        z, y, x = coords
 
         # subtract smallest value so positive
         img_temp = img - np.nanmean(img)
@@ -810,8 +945,6 @@ class born_wolf_psf_model(pixelated_psf_model):
         :param angles:
         """
 
-        # TODO is it better to put wavelength and ni as arguments to model or as class members?
-        # advantage to being model parameters is could conceivable fit
         self.wavelength = wavelength
         self.ni = ni
 
@@ -930,6 +1063,8 @@ class gridded_psf_model(pixelated_psf_model):
     For 'gaussian', it wraps the gaussian3d_pixelated_psf() function. More details about the relationship between
     the Gaussian sigma and the numerical aperture can be found here: https://doi.org/10.1364/AO.46.001819
     """
+    available_models = ["gibson-lanni", "vectorial", "born-wolf", "gaussian"]
+
     def __init__(self,
                  wavelength: float,
                  ni: float,
@@ -950,9 +1085,9 @@ class gridded_psf_model(pixelated_psf_model):
         self.wavelength = wavelength
         self.ni = ni
 
-        allowed_models = ["gibson-lanni", "vectorial", "born-wolf", "gaussian"]
-        if model_name not in allowed_models:
-            raise ValueError(f"model={model_name:s} was not an allowed value. Allowed values are {allowed_models}")
+        if model_name not in self.available_models:
+            raise ValueError(f"model={model_name:s} was not an allowed value. "
+                             f"Allowed values are {self.available_models}")
 
         if not _psfmodels_available and (model_name == "vectorial" or model_name == "gibson-lanni"):
             raise NotImplementedError(f"model={model_name:s} selected but psfmodels is not installed")
@@ -1042,8 +1177,7 @@ class gridded_psf_model(pixelated_psf_model):
             val = p[0] / psf_norm * (gauss_model.model(coords, p_gauss) - p[5]) + p[5]
         else:
             raise ValueError(f"model_name was '{self.model_name:s}',"
-                             f" but must be 'vectorial', 'gibson-lanni', 'born-wolf', or 'gaussian'")
-
+                             f" but must be one of {self.available_models}")
 
         return val
 
@@ -1067,213 +1201,3 @@ class gridded_psf_model(pixelated_psf_model):
                                       )
 
         return params_guess
-
-
-# utility functions
-def oversample_pixel(x: np.ndarray,
-                     y: np.ndarray,
-                     z: np.ndarray,
-                     ds: float,
-                     sf: int,
-                     euler_angles: tuple[float] = (0., 0., 0.)):
-    """
-    Generate coordinates to oversample a pixel on a 2D grid.
-
-    Suppose we have a set of pixels centered at points given by x, y, z. Generate sf**2 points in this pixel equally
-    spaced about the center. Allow the pixel to be orientated in an arbitrary direction with respect to the coordinate
-    system. The pixel rotation is described by the Euler angles (psi, theta, phi), where the pixel "body" frame
-    is a square with xy axis orientated along the legs of the square with z-normal to the square
-
-    Compare with oversample_voxel() which works on a 3D grid with a fixed orientation. oversample_pixel() works
-    on a 2D grid with an arbitrary orientation.
-
-    :param x: x-coordinate with shape such that can be broadcast with y and z. e.g. z.shape = [nz, 1, 1];
-      y.shape = [1, ny, 1]; x.shape = [1, 1, nx]
-    :param y:
-    :param z:
-    :param ds: pixel size
-    :param sf: sample factor
-    :param euler_angles: [phi, theta, psi] where phi and theta are the polar angles describing the normal of the pixel,
-      and psi describes the rotation of the pixel about its normal
-    :return xx_s, yy_s, zz_s:
-
-    """
-    # generate new points in pixel, each of which is centered about an equal area of the pixel, so summing them is
-    # giving an approximation of the integral
-    if sf > 1:
-        # pts = np.arange(1 / (2*sf), 1 - 1 / (2*sf), 1 / sf) - 0.5 # todo: this version only correct is sf odd
-        pts = np.arange(1 / (2 * sf), 1, 1 / sf) - 0.5
-
-        if len(pts) != sf:
-            raise ValueError()
-
-        xp, yp = np.meshgrid(ds * pts, ds * pts)
-        zp = np.zeros(xp.shape)
-
-        # rotate points to correct position using normal vector
-        # for now we will fix x, but lose generality
-        mat = affine.euler_mat(*euler_angles)
-        result = mat.dot(np.concatenate((xp.ravel()[None, :],
-                                         yp.ravel()[None, :],
-                                         zp.ravel()[None, :]), axis=0))
-        xs, ys, zs = result
-
-        # now must add these to each point x, y, z
-        xx_s = x[..., None] + xs[None, ...]
-        yy_s = y[..., None] + ys[None, ...]
-        zz_s = z[..., None] + zs[None, ...]
-    else:
-        xx_s = np.expand_dims(x, axis=-1)
-        yy_s = np.expand_dims(y, axis=-1)
-        zz_s = np.expand_dims(z, axis=-1)
-
-    return xx_s, yy_s, zz_s
-
-
-def oversample_voxel(coords: tuple[np.ndarray],
-                     drs: tuple[float],
-                     sf: int = 3):
-    """
-    Get coordinates to oversample a voxel on a 3D grid
-
-    Compare with oversample_pixel(), which performs oversampling on a 2D grid.
-
-    :param coords: tuple of coordinates, e.g. (z, y, x)
-    :param drs: tuple giving voxel size (dz, dy, dx)
-    :param sf: sampling factor. Assumed to be same for all directions
-    :return coords_upsample: tuple of coordinates, e.g. (z_os, y_os, x_os). e.g. x_os has one more dimension than x
-      with  this extra dimension giving the oversampled coordinates
-    """
-    # pts = np.arange(1 / (2 * sf), 1 - 1 / (2 * sf), 1 / sf) - 0.5
-    pts = np.arange(1 / (2 * sf), 1, 1 / sf) - 0.5
-
-    if len(pts) != sf:
-        raise ValueError()
-
-    pts_dims = np.meshgrid(*[pts * dr for dr in drs], indexing="ij")
-
-    coords_upsample = [np.expand_dims(c, axis=-1) + np.expand_dims(np.ravel(r), axis=0)
-                       for c, r in zip(coords, pts_dims)]
-    # now must add these to each point x, y, z
-    return coords_upsample
-
-
-def get_psf_coords(ns: list[int],
-                   drs: list[float],
-                   broadcast: bool = False):
-    """
-    Get centered coordinates for PSFmodels style PSF's from step size and number of coordinates
-
-    :param ns: list of number of points
-    :param drs: list of step sizes
-    :return coords: list of coordinates [zs, ys, xs, ...]
-    """
-    ndims = len(drs)
-    coords = [np.expand_dims(d * (np.arange(n) - (n // 2)),
-                             axis=tuple(range(ii)) + tuple(range(ii+1, ndims)))
-              for ii, (n, d) in enumerate(zip(ns, drs))]
-
-    if broadcast:
-        # return arrays instead of views coords
-        coords = [np.array(c, copy=True) for c in np.broadcast_arrays(*coords)]
-
-    return coords
-
-
-def average_exp_psfs(imgs: np.ndarray,
-                     coords: tuple[np.ndarray],
-                     centers: np.ndarray,
-                     roi_sizes: tuple[int],
-                     backgrounds=None):
-    """
-    Get experimental psf from imgs by averaging many localizations (after pixel shifting).
-
-    :param imgs: z-stack of images
-    :param coords: (z, y, x) of full image. Must be broadcastable to full image size
-    :param centers: n x 3 array, (cz, cy, cx)
-    :param roi_sizes: [sz, sy, sx] in pixels
-    :param backgrounds: values to subtracted from each ROI
-    :return psf_mean, psf_coords, otf_mean, otf_coords:
-    """
-
-    # if np.any(np.mod(np.array(roi_sizes), 2) == 0):
-    #     raise ValueError("roi_sizes must be odd")
-
-    z, y, x, = coords
-    dz = z[1, 0, 0] - z[0, 0, 0]
-    dy = y[0, 1, 0] - y[0, 0, 0]
-    dx = x[0, 0, 1] - x[0, 0, 0]
-
-    # set up array to hold psfs
-    nrois = len(centers)
-    if backgrounds is None:
-        backgrounds = np.zeros(nrois)
-
-    psf_shifted = np.zeros((nrois, roi_sizes[0], roi_sizes[1], roi_sizes[2])) * np.nan
-    # coordinates
-    z_psf, y_psf, x_psf = get_psf_coords(roi_sizes, [dz, dy, dx], broadcast=True)
-
-    zc_pix_psf = np.argmin(np.abs(z_psf[:, 0, 0]))
-    yc_pix_psf = np.argmin(np.abs(y_psf[0, :, 0]))
-    xc_pix_psf = np.argmin(np.abs(x_psf[0, 0, :]))
-
-    # loop over rois and shift psfs so they are centered
-    for ii in range(nrois):
-        # get closest pixels to center
-        xc_pix = np.argmin(np.abs(x - centers[ii, 2]))
-        yc_pix = np.argmin(np.abs(y - centers[ii, 1]))
-        zc_pix = np.argmin(np.abs(z - centers[ii, 0]))
-
-        # cut roi from image
-        roi_unc = rois.get_centered_rois((zc_pix, yc_pix, xc_pix), roi_sizes)
-        roi = rois.get_centered_rois((zc_pix, yc_pix, xc_pix),
-                                    roi_sizes,
-                                    min_vals=[0, 0, 0],
-                                    max_vals=imgs.shape)[0]
-        img_roi = rois.cut_roi(roi, imgs)[0]
-
-        zroi = rois.cut_roi(roi, z)[0]
-        yroi = rois.cut_roi(roi, y)[0]
-        xroi = rois.cut_roi(roi, x)[0]
-
-        cx_pix_roi = (roi[5] - roi[4]) // 2
-        cy_pix_roi = (roi[3] - roi[2]) // 2
-        cz_pix_roi = (roi[1] - roi[0]) // 2
-
-        xshift_pix = (xroi[0, 0, cx_pix_roi] - centers[ii, 2]) / dx
-        yshift_pix = (yroi[0, cy_pix_roi, 0] - centers[ii, 1]) / dy
-        zshift_pix = (zroi[cz_pix_roi, 0, 0] - centers[ii, 0]) / dz
-
-        # get coordinates
-        img_roi_shifted = shift(np.array(img_roi, dtype=float),
-                                [zshift_pix, yshift_pix, xshift_pix],
-                                mode="constant",
-                                cval=-1)
-        img_roi_shifted[img_roi_shifted == -1] = np.nan
-
-        # put into array in appropriate positions
-        zstart = zc_pix_psf - cz_pix_roi
-        zend = zstart + (roi[1] - roi[0])
-        ystart = yc_pix_psf - cy_pix_roi
-        yend = ystart + (roi[3] - roi[2])
-        xstart = xc_pix_psf - cx_pix_roi
-        xend = xstart + (roi[5] - roi[4])
-
-        psf_shifted[ii, zstart:zend, ystart:yend, xstart:xend] = img_roi_shifted - backgrounds[ii]
-
-
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore", category=RuntimeWarning)
-
-        with np.errstate(divide='ignore', invalid='ignore'):
-            psf_mean = np.nanmean(psf_shifted, axis=0)
-
-    # the above doesn't do a good enough job of normalizing PSF
-    max_val = np.nanmax(psf_mean[psf_mean.shape[0]//2])
-    psf_mean = psf_mean / max_val
-
-    # get otf
-    otf_mean, ks = psf2otf(psf_mean, drs=(dz, dy, dx))
-    kz, ky, kx = np.meshgrid(*ks, indexing="ij")
-
-    return psf_mean, (z_psf, y_psf, x_psf), otf_mean, (kz, ky, kx)

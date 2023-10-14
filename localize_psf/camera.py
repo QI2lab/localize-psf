@@ -33,7 +33,7 @@ def adc2photons(img: array,
     photons = (img.astype(float) - background_map) / gain_map
 
     # set anything less than value to zero
-    photons[photons <= precision] = 0
+    photons[photons < precision] = 0.
 
     return photons
 
@@ -171,7 +171,7 @@ def bin_adjoint(img_b: array,
     :param img_b: NumPy or Cupy array of size n0 x n1 x ... x n_{m-1}
     :param bin_sizes: list [by, bx]
     :param mode: "sum" or "mean"
-    :return: img
+    :return img:
     """
 
     if isinstance(img_b, cp.ndarray) and _cupy_available:
