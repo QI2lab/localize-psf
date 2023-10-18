@@ -1357,7 +1357,9 @@ def filter_localizations(fit_params: np.ndarray,
                          min_spot_sep: Sequence[float],
                          sigma_bounds: tuple[Sequence[float], Sequence[float]],
                          amp_min: float = 0,
-                         dist_boundary_min: Sequence[float] = (0, 0)):
+                         dist_boundary_min: Sequence[float] = (0, 0),
+                         sigma_ratios_bounds: Sequence[float] = (1.0, 4.0),
+                         return_values : bool = False):
     """
     Given a list of fit parameters, return boolean arrays indicating which fits pass/fail given a variety
     of tests for reasonability
@@ -1384,7 +1386,8 @@ def filter_localizations(fit_params: np.ndarray,
                        "min_spot_sep": min_spot_sep,
                        "sigma_bounds": sigma_bounds,
                        "amp_min": amp_min,
-                       "dist_boundary_min": dist_boundary_min}
+                       "dist_boundary_min": dist_boundary_min,
+                       "sigma_ratios_bounds": sigma_ratios_bounds}
 
     z, y, x = coords
     centers_guess = init_params[:, (3, 2, 1)]
@@ -1394,6 +1397,7 @@ def filter_localizations(fit_params: np.ndarray,
     # only keep points if size and position were reasonable
     # ###################################################
     dz_min, dxy_min = dist_boundary_min
+    sr_min, sr_max = sigma_ratios_bounds
 
     in_bounds = np.logical_and.reduce((fit_params[:, 1] >= x.min() + dxy_min,
                                        fit_params[:, 1] <= x.max() - dxy_min,
@@ -1408,6 +1412,9 @@ def filter_localizations(fit_params: np.ndarray,
                                        (centers_guess[:, 1] - fit_params[:, 2])**2) <= xy_fit_err_max
     center_close_to_guess_z = np.abs(centers_guess[:, 0] - fit_params[:, 3]) <= z_err_fit_max
 
+    # sigma ratios
+    sigma_ratios = fit_params[:, 5] / fit_params[:, 4]
+
     # maximum/minimum sigmas AND combine all conditions
     (sz_min, sxy_min), (sz_max, sxy_max) = sigma_bounds
     conditions = np.stack((in_bounds,
@@ -1417,7 +1424,9 @@ def filter_localizations(fit_params: np.ndarray,
                            fit_params[:, 4] >= sxy_min,
                            fit_params[:, 5] <= sz_max,
                            fit_params[:, 5] >= sz_min,
-                           fit_params[:, 0] >= amp_min), axis=1)
+                           fit_params[:, 0] >= amp_min,
+                           sigma_ratios <= sr_max, 
+                           sigma_ratios >= sr_min), axis=1)
 
     condition_names = ["in_bounds",
                        "center_close_to_guess_xy",
@@ -1426,7 +1435,9 @@ def filter_localizations(fit_params: np.ndarray,
                        "xy_size_big_enough",
                        "z_size_small_enough",
                        "z_size_big_enough",
-                       "amp_ok"]
+                       "amp_ok",
+                       "sigma_ratio_small_enough", 
+                       "sigma_ratio_big_enough"]
 
     to_keep_temp = np.logical_and.reduce(conditions, axis=1)
 
@@ -1457,6 +1468,18 @@ def filter_localizations(fit_params: np.ndarray,
     condition_names += ["unique"]
     to_keep = np.logical_and(to_keep_temp, unique)
 
+    if return_values:
+        dist_to_guess_xy = np.sqrt((centers_guess[:, 2] - fit_params[:, 1])**2 +
+                                    (centers_guess[:, 1] - fit_params[:, 2])**2)
+        dist_to_guess_z = np.abs(centers_guess[:, 0] - fit_params[:, 3])
+        
+        filter_values = np.stack((fit_params[:, 0], fit_params[:, 4], 
+                                  fit_params[:, 5], sigma_ratios, dist_to_guess_xy, 
+                                  dist_to_guess_z), axis=1)
+        filter_names = ['amplitude', 'sigma xy', 'sigma z', 'sigmas ratio',
+                        'dist to guess xy', 'dist to guess z']
+        return to_keep, conditions, condition_names, filter_settings, filter_values, filter_names
+    
     return to_keep, conditions, condition_names, filter_settings
 
 # @profile
