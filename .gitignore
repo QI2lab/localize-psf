@@ -1,3 +1,4 @@
 __pycache__
 *.egg-info
 docs/_*
+examples/data/*
