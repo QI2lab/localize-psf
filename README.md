@@ -69,3 +69,10 @@ shot noise and readout noise, etc.
 
 ## [rois.py](localize_psf/rois.py)
 Tools for dealing with regions of interest (ROI's)
+
+# Docs
+Documentation is generated from funtion docstrings and built with Sphinx. e.g. navigate to `docs` and run
+```
+make html
+```
+Then open `docs/_build/html/index.html` in your browser
