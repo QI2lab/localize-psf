@@ -22,6 +22,14 @@ If GPU support is desired,[CuPy](https://cupy.dev/) and our
 modified version of [GPUfit](https://github.com/QI2lab/Gpufit) must be installed. For installation
 instructions see the links above.
 
+# Examples
+Scripts illustrating example usage of localize-psf are available in [examples](examples).
+Associated data necessary to run some of these examples can be downloaded from [Zenodo](https://doi.org/10.5281/zenodo.10022862).
+These scripts assume this data has been placed in a directory called `examples/data`
+
+
+# Contents
+
 ## [localize.py](localize.py)
 Tools for localizing diffraction limited spots from image data. This is primarily intended as
 support for FISH spot finding and PSF fitting. This code is also the basis of
