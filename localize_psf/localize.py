@@ -88,6 +88,7 @@ def get_nearest_pixel(centers: np.ndarray[float],
 
     return np.rint(centers / drs).astype(int)
 
+
 @njit(parallel=True)
 def prepare_rois(image: np.ndarray,
                  coords: tuple[np.ndarray, np.ndarray, np.ndarray],
@@ -134,6 +135,7 @@ def prepare_rois(image: np.ndarray,
                     z_rois[rr, counter] = z[roi[0] + ii, 0, 0]
 
     return img_rois, (z_rois, y_rois, x_rois), sizes
+
 
 def get_roi(center: Sequence[float],
             img: np.ndarray,
@@ -227,7 +229,6 @@ def filter_convolve(imgs: array,
 
     :param imgs: images to be convolved
     :param kernel: kernel to be convolved. Does not need to be the same shape as image.
-    :param bool use_gpu: if True, do convolution on GPU. If false, do on CPU.
     :return imgs_filtered:
     """
     # todo: check and make sure kernel and imgs are compatible. e.g. that kernel is smaller than image in all dims
@@ -1482,6 +1483,7 @@ def filter_localizations(fit_params: np.ndarray,
     
     return to_keep, conditions, condition_names, filter_settings
 
+
 # @profile
 def localize_beads_generic(imgs: np.ndarray,
                            drs: tuple[float],
@@ -1504,7 +1506,7 @@ def localize_beads_generic(imgs: np.ndarray,
                            return_filtered_images: bool = False,
                            model_zsize_index: int = 5,
                            model_zposition_index: int = 3,
-                           **kwargs):
+                           **kwargs) -> tuple[tuple, dict, np.ndarray]:
     """
     Given an image consisting of diffraction limited features and background, identify the diffraction limited features
     using the following procedure:
@@ -1689,8 +1691,6 @@ def localize_beads_generic(imgs: np.ndarray,
         # ###################################################
         # determine initial guess values for fits
         # ###################################################
-        # init_params = np.stack([model.estimate_parameters(img_rois[ii], (zrois[ii], yrois[ii], xrois[ii]))
-        #                         for ii in range(len(img_rois))], axis=0)
         init_params = model.estimate_parameters(img_rois, roi_coords, num_preserved_dims=1)
 
         if np.any(np.isnan(init_params)):
@@ -1712,7 +1712,6 @@ def localize_beads_generic(imgs: np.ndarray,
         # if 2D, don't want to fit cz or sz
         if data_is_2d:
             if model.parameter_names[model_zsize_index] != "sz":
-                # todo: should probably remove this check...
                 raise ValueError(f"Data was 2D, but model {str(model):s} is not supported because"
                                  f" parameter {model_zsize_index:d} is not 'sz'.")
             # fix sigma-z
@@ -1720,7 +1719,6 @@ def localize_beads_generic(imgs: np.ndarray,
             init_params[:, model_zsize_index] = 1.
 
             if model.parameter_names[model_zposition_index] != "cz":
-                # todo: should probably remove this check
                 raise ValueError(f"Data was 2D, but model {str(model):s} is not supported because"
                                  f" parameter {model_zposition_index:d} is not 'cz'.")
             # fix cz
@@ -1876,6 +1874,7 @@ def plot_bead_locations(imgs: np.ndarray,
     :param coords:
     :param vlims_percentile: (percentile_min, percentile_max) used to set color scale of image
     :param gamma: gamma to use when displaying image
+    :param axes: if axes are provided, plot figure on these instead of creating a new figure
     :return figure_handle:
     """
 
@@ -1974,10 +1973,10 @@ def plot_bead_locations(imgs: np.ndarray,
         cs = cmap_color((weights[ii] - vmin) / (vmax - vmin))
 
         axes[0].scatter(center_lists[ii][:, 2],
-                   center_lists[ii][:, 1],
-                   facecolor='none',
-                   edgecolor=cs,
-                   marker='o')
+                        center_lists[ii][:, 1],
+                        facecolor='none',
+                        edgecolor=cs,
+                        marker='o')
 
         cbar = plt.colorbar(plt.cm.ScalarMappable(norm=Normalize(vmin=vmin, vmax=vmax), cmap=cmap_color),
                             cax=axes[ii + 2])
