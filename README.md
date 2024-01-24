@@ -71,7 +71,7 @@ shot noise and readout noise, etc.
 Tools for dealing with regions of interest (ROI's)
 
 # Docs
-Documentation is generated from funtion docstrings and built with Sphinx. e.g. navigate to `docs` and run
+Documentation is generated from function docstrings and built with Sphinx. e.g. navigate to `docs` and run
 ```
 make html
 ```
