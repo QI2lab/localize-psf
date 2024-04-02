@@ -933,9 +933,11 @@ def plot_fit_roi(fit_params: list[float],
     figh_interp = plt.figure(figsize=figsize)
     st_str = f"Fit, max projections, interpolated, ROI = {roi}"
 
-    st_str += f"\n{'fit': <10}" + ", ".join([f"{model.parameter_names[ii]:s}={fit_params[ii]:3.4f}" for ii in range(len(fit_params))])
+    st_str += f"\n{'fit': <10}" + ", ".join([f"{model.parameter_names[ii]:s}="
+                                             f"{fit_params[ii]:3.4f}" for ii in range(len(fit_params))])
     if init_params is not None:
-        st_str += f"\n{'guess': <10}" + ", ".join([f"{model.parameter_names[ii]:s}={init_params[ii]:3.4f}" for ii in range(len(fit_params))])
+        st_str += f"\n{'guess': <10}" + ", ".join([f"{model.parameter_names[ii]:s}="
+                                                   f"{init_params[ii]:3.4f}" for ii in range(len(fit_params))])
 
     if string is not None:
         st_str += "\n" + string
@@ -990,7 +992,7 @@ def plot_fit_roi(fit_params: list[float],
 
         ax.imshow(np.nanmax(img_roi, axis=2).transpose(),
                   extent=extent_zy,
-                  cmap="bone",
+                  cmap=cmap,
                   norm=PowerNorm(vmin=vmin, vmax=vmax, gamma=gamma))
 
     ax.plot(center_fit[0], center_fit[1], 'm+')
