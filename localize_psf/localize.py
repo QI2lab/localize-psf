@@ -52,7 +52,7 @@ def get_coords(sizes: Sequence[int],
     coords0.size = (nz, 1, 1)
     coords1.size = (1, ny, 1)
     coords2.size = (1, 1, nx)
-    this arrays are broadcastable to size (nz, ny, nx). If the broadcast arrays are desired, they can be obtained by:
+    these arrays are broadcastable to size (nz, ny, nx). If the broadcast arrays are desired, they can be obtained by:
     >>> coords_bcast = np.broadcast_arrays(coords0, coords1, coords2)
     >>> coords0_bc, coords1_bc, coords2_bc = [np.array(c, copy=True) for c in coords_bcast]
     note that the second line is necessary because np.broadcast_arrays() produces arrays with references to the
@@ -182,7 +182,7 @@ def get_filter_kernel(sigmas: Sequence[float],
 
     :param sigmas: (sigma_0, sigma_1, ..., sigma_n)
     :param drs: (dr_1, dr_2, ..., dr_n) pixel sizes along each dimension
-    :param sigma_cutoff: single number or list [s0, s1, ..., sn] giving after how many sigmas we cutoff the kernel
+    :param sigma_cutoff: single number or list [s0, s1, ..., sn] giving after how many sigmas we cut off the kernel
     :return kernel:
     """
 
@@ -513,7 +513,7 @@ def localize2d(img: np.ndarray,
             #     val[np.isinf(mk)] = (np.tile(xk[None, :], [yk.size, 1])[np.isinf(mk)] - xc)**2
             #     return np.sum(val)
 
-            # line passing through through (xk, yk) with slope mk is y = yk + mk*(x - xk)
+            # line passing through (xk, yk) with slope mk is y = yk + mk*(x - xk)
             # minimimum distance of points (xc, yc) is dk**2 = [(yk - yc) - mk*(xk -xc)]**2 / (mk**2 + 1)
             # must handle the case mk -> infinity separately. In this case dk**2 -> (xk - xc)**2
             # minimize chi^2 = \sum_k dk**2 * wk
@@ -1096,7 +1096,7 @@ class filter:
 
     def filter(self, fit_params, *args, **kwargs):
         """
-        Filter function requis parameters and can optionally accept other arguments, e.g. if want
+        Filter function requis parameters and can optionally accept other arguments, e.g. to
         to compare fit_params with initial parameters or etc. Filter functions are free to ignore all
         parameters besides fit_params, but must accept arbitrary number of arguments.
 
@@ -1362,7 +1362,7 @@ def filter_localizations(fit_params: np.ndarray,
                          amp_min: float = 0,
                          dist_boundary_min: Sequence[float] = (0, 0),
                          sigma_ratios_bounds: Sequence[float] = (1.0, 4.0),
-                         return_values : bool = False):
+                         return_values: bool = False):
     """
     Given a list of fit parameters, return boolean arrays indicating which fits pass/fail given a variety
     of tests for reasonability
@@ -1378,7 +1378,9 @@ def filter_localizations(fit_params: np.ndarray,
       these ranges
     :param amp_min: exclude fits with smaller amplitude
     :param dist_boundary_min: (dz_min, dxy_min)
-    :return: (to_keep, conditions, condition_names, filter_settings)
+    :param sigma_ratios_bounds: (ratio_min, ratio_max()
+    :param return_values: additionally return filter_values and filter_names
+    :return: to_keep, conditions, condition_names, filter_settings
     """
 
     warnings.warn("filter_localizations() is deprecated and will be removed soon. Please use a filter instance.")
@@ -1471,6 +1473,7 @@ def filter_localizations(fit_params: np.ndarray,
     condition_names += ["unique"]
     to_keep = np.logical_and(to_keep_temp, unique)
 
+    # todo: don't do this, but rather return nones for some of these if not all are desired
     if return_values:
         dist_to_guess_xy = np.sqrt((centers_guess[:, 2] - fit_params[:, 1])**2 +
                                     (centers_guess[:, 1] - fit_params[:, 2])**2)
@@ -1520,8 +1523,10 @@ def localize_beads_generic(imgs: np.ndarray,
     the various parameters used in this function are set in terms of real units, i.e. um, and not pixels. To use
     pixel units, set dxy=dz=1
 
+    Any additional keyword arguments will be passed through to passed through to fit_rois()
+
     :param imgs: an image of size ny x nx or an image stack of size nz x ny x nx
-    :param drs: (dz, dy, dx))
+    :param drs: (dz, dy, dx)
     :param threshold: threshold used for identifying spots. This is applied after filtering of image
     :param roi_size: (sz, sy, sx) in um
     :param filter_sigma_small: (sz, sy, sx) small sigmas to be used in difference-of-Gaussian filter. Roughly speaking,
@@ -1547,7 +1552,8 @@ def localize_beads_generic(imgs: np.ndarray,
       bound guesses from model.estimate_bounds().
     :param debug:
     :param return_filtered_images:
-    :param **kwargs: passed through to fit_rois() function
+    :param model_zsize_index: index of model parameter giving z-size information
+    :param model_zposition_index: index of model parameter giving z-position information
     :return coords, fit_results, imgs_filtered: coords = (z, y, x)
     """
 
@@ -2018,15 +2024,17 @@ def autofit_psfs(imgs: np.ndarray,
                  verbose: bool = False,
                  gamma: float = 0.5,
                  save_dir: Optional[str] = None,
-                 figsize=(18, 10),
+                 figsize: tuple[float] = (18, 10),
                  **kwargs) -> dict:
     """
     Given a 2D or 3D image, identify and localize diffraction limited spots. Aggregate the results to create
     an experimental point-spread function and fit the average PSF to a model function.
 
+    Additional keywords will be passed through to plt.figure()
+
     :param imgs: nz x nx x ny image
-    :param psf_roi_size: s(sz, sy, sx) size in um of  ROI to determine PSFs on. This is not necessarily the same as the size of the
-      ROI's used during localization
+    :param psf_roi_size: s(sz, sy, sx) size in um of  ROI to determine PSFs on. This is not necessarily the
+      same as the size of the ROI's used during localization
     :param dxy: pixel size in um
     :param dz: z-plane spacing in um
     :param summary_model: This model is used to fit the averaged PSF's
@@ -2051,10 +2059,10 @@ def autofit_psfs(imgs: np.ndarray,
     :param plot_filtered_image: plot ROI's against filtered image also
     :param use_gpu_filter:
     :param use_gpu_fit:
+    :param verbose:
     :param gamma: gamma to use when plotting
     :param save_dir: directory to save diagnostic plots. If None, these will not be saved
     :param figsize: (sx, sy)
-    :param **kwargs: passed through to plt.figure()
     :return: dictionary object with entries coords, fit_params, init_params, rois, to_keep, conditions,
       condition_names, filter_settings, fit_states, chi_sqrs, niters,  psfs_real, psf_coords, otfs_real,
       otf_coords, psf_percentiles, fit_params_real
@@ -2202,7 +2210,10 @@ def autofit_psfs(imgs: np.ndarray,
                                 fit_params[:, 1][to_use]), axis=1)
 
             # find average experimental psf/otf
-            psfs_real[ii], psf_coords, otfs_real[ii], otf_coords = psf.average_exp_psfs(imgs, (z, y, x), centers, psf_roi_size_pix,
+            psfs_real[ii], psf_coords, otfs_real[ii], otf_coords = psf.average_exp_psfs(imgs,
+                                                                                 (z, y, x),
+                                                                                        centers,
+                                                                                        psf_roi_size_pix,
                                                                                         backgrounds=fit_params[:, 5][to_use])
 
             # fit average experimental psf
