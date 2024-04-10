@@ -1,19 +1,20 @@
 """
 Tools for working with or simulating camera data
 """
-import numpy as np
-from localize_psf import fit_psf
 from typing import Optional, Union
 from collections.abc import Sequence
+import numpy as np
+from localize_psf.fit_psf import blur_img_psf
 
-_cupy_available = True
 try:
     import cupy as cp
 except ImportError:
-    cp = np
-    _cupy_available = False
+    cp = None
 
-array = Union[np.ndarray, cp.ndarray]
+if cp:
+    array = Union[np.ndarray, cp.ndarray]
+else:
+    array = np.ndarray
 
 
 def adc2photons(img: array,
@@ -67,7 +68,7 @@ def simulated_img(ground_truth: array,
     :return img, snr:
     """
 
-    if isinstance(ground_truth, cp.ndarray) and _cupy_available:
+    if cp and isinstance(ground_truth, cp.ndarray):
         xp = cp
     else:
         xp = np
@@ -76,7 +77,7 @@ def simulated_img(ground_truth: array,
 
     # optional blur image with PSF
     if psf is not None:
-        img_blurred = fit_psf.blur_img_psf(ground_truth, psf, apodization=apodization).real
+        img_blurred = blur_img_psf(ground_truth, psf, apodization=apodization).real
     else:
         img_blurred = ground_truth
 
@@ -128,7 +129,7 @@ def bin(img: array,
     :return img_binned: binned image
     """
 
-    if isinstance(img, cp.ndarray) and _cupy_available:
+    if cp and isinstance(img, cp.ndarray):
         xp = cp
     else:
         xp = np
@@ -175,7 +176,7 @@ def bin_adjoint(img_b: array,
     :return img:
     """
 
-    if isinstance(img_b, cp.ndarray) and _cupy_available:
+    if cp and isinstance(img_b, cp.ndarray):
         xp = cp
     else:
         xp = np

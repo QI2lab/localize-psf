@@ -9,18 +9,18 @@ from typing import Union, Optional
 from collections.abc import Sequence
 from pathlib import Path
 import time
-import warnings
+from warnings import warn, catch_warnings, filterwarnings
 import zarr
 import numpy as np
-import scipy.signal
-import scipy.ndimage
+from scipy.signal import fftconvolve
+from scipy.ndimage import maximum_filter
 import dask
 from dask.diagnostics import ProgressBar
 from numba import njit, prange
 import matplotlib.pyplot as plt
 from matplotlib.colors import PowerNorm, LinearSegmentedColormap, Normalize
 import localize_psf.rois as roi_fns
-from localize_psf import fit
+from localize_psf.fit import fit_model
 import localize_psf.fit_psf as psf
 
 # for filtering on GPU
@@ -153,7 +153,7 @@ def get_roi(center: Sequence[float],
     :return roi, img_roi, coords_roi:
     """
 
-    warnings.warn("get_roi() is deprecated and will be removed soon. Please use prepare_rois() instead")
+    warn("get_roi() is deprecated and will be removed soon. Please use prepare_rois() instead")
 
     # todo: deprecate in favor of vectorized finding ROIs and prepare_rois()
 
@@ -244,7 +244,7 @@ def filter_convolve(imgs: array,
         cp.fft._cache.PlanCache(memsize=0)
     else:
         xp = np
-        convolve = scipy.signal.fftconvolve
+        convolve = fftconvolve
 
     kernel = xp.asarray(kernel)
     imgs = xp.asarray(imgs)
@@ -308,7 +308,7 @@ def find_peak_candidates(imgs: array,
         max_filter = cupyx.scipy.ndimage.maximum_filter
     else:
         xp = np
-        max_filter = scipy.ndimage.maximum_filter
+        max_filter = maximum_filter
 
     if mask is None:
         mask = xp.ones(imgs.shape, dtype=bool)
@@ -699,7 +699,7 @@ def fit_rois(img_rois: np.ndarray,
     """
 
     if guess_bounds and use_gpu:
-        warnings.warn("use_gpu selected for fitting, but unsupported option guess_bounds selected."
+        warn("use_gpu selected for fitting, but unsupported option guess_bounds selected."
                       "guess_bounds will be ignored")
 
     zrois, yrois, xrois = coords_rois
@@ -988,8 +988,8 @@ def plot_fit_roi(fit_params: list[float],
     # YZ, data
     # ################################
     ax = figh_interp.add_subplot(grid[0, 0])
-    with warnings.catch_warnings():
-        warnings.filterwarnings('ignore', r'All-NaN (slice|axis) encountered')
+    with catch_warnings():
+        filterwarnings('ignore', r'All-NaN (slice|axis) encountered')
 
         ax.imshow(np.nanmax(img_roi, axis=2).transpose(),
                   extent=extent_zy,
@@ -1384,7 +1384,7 @@ def filter_localizations(fit_params: np.ndarray,
     :return: to_keep, conditions, condition_names, filter_settings
     """
 
-    warnings.warn("filter_localizations() is deprecated and will be removed soon. Please use a filter instance.")
+    warn("filter_localizations() is deprecated and will be removed soon. Please use a filter instance.")
 
     # todo: deprecate this and replace with the filter class objects as did in localize_beads_generic
 
@@ -1825,7 +1825,7 @@ def localize_beads(imgs: np.ndarray,
     For a description of the parameters see localize_beads_generic() and get_param_filter()
     """
 
-    warnings.warn("localize_beads() is deprecated and will be removed soon. Please use localize_beads_generic() instead.")
+    warn("localize_beads() is deprecated and will be removed soon. Please use localize_beads_generic() instead.")
 
     shape = imgs.shape
     if imgs.ndim == 2:
@@ -2069,7 +2069,7 @@ def autofit_psfs(imgs: np.ndarray,
       otf_coords, psf_percentiles, fit_params_real
     """
 
-    warnings.warn("autofit_psf() is deprecated")
+    warn("autofit_psf() is deprecated")
 
     plt.switch_backend("agg")
     plt.ioff()
@@ -2125,7 +2125,7 @@ def autofit_psfs(imgs: np.ndarray,
 
     no_psfs_found = not np.any(to_keep)
     if no_psfs_found:
-        warnings.warn("no spots were localized")
+        warn("no spots were localized")
 
     # ###################################
     # plot individual localizations
@@ -2221,7 +2221,7 @@ def autofit_psfs(imgs: np.ndarray,
             def fn(p): return summary_model.model(psf_coords, p)
             init_params = summary_model.estimate_parameters(psfs_real[ii], psf_coords)
 
-            results = fit.fit_model(psfs_real[ii], fn, init_params, jac='3-point', x_scale='jac')
+            results = fit_model(psfs_real[ii], fn, init_params, jac='3-point', x_scale='jac')
             fit_params_real[ii] = results["fit_params"]
 
             if plot_results:

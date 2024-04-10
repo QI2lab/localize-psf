@@ -4,7 +4,7 @@ Tools for dealing with regions of interest (ROI's)
 from typing import Optional, Union
 from collections.abc import Sequence
 import numpy as np
-import warnings
+from warnings import warn
 from numba import njit
 
 
@@ -81,7 +81,7 @@ def get_centered_roi(centers: Union[Sequence[float], Sequence[int]],
     :return roi: [start_0, end_0, start_1, end_1, ..., start_n, end_n]
     """
 
-    warnings.warn("get_centered_roi() is deprecated and will be removed soon. Please use get_centered_rois() instead.")
+    warn("get_centered_roi() is deprecated and will be removed soon. Please use get_centered_rois() instead.")
 
     roi = []
     # for c, n in zip(centers, sizes):
