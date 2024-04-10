@@ -8,13 +8,22 @@ The affine transformation (in homogeneous coordinates) is represented by a matri
 Given a function defined on object space, g(xo, yo), we can define a corresponding function on image space
 gi(xi, yi) = g(T^{-1} [[xi], [yi], [1]])
 """
-from typing import Optional, Sequence
+from typing import Optional, Sequence, Union
 import joblib
 import numpy as np
 from numpy import fft
 from scipy.interpolate import RectBivariateSpline
 from localize_psf import fit
 
+try:
+    import cupy as cp
+except ImportError:
+    cp = None
+
+if cp:
+    array = Union[np.ndarray, cp.ndarray]
+else:
+    array = np.ndarray
 
 def xform2params(affine_mat: np.ndarray) -> np.ndarray:
     """
@@ -97,60 +106,68 @@ def rotation2xform(angle: float,
 
 
 # transform functions/matrices under action of affine transformation
-def xform_mat(mat_obj: np.ndarray,
-              xform: np.ndarray,
-              img_coords: tuple[np.ndarray],
-              mode: str = 'nearest') -> np.ndarray:
+def xform_mat(mat_obj: array,
+              xform: array,
+              img_coords: tuple[array],
+              mode: str = 'nearest') -> array:
     """
     Given a matrix defined on object space coordinates, M[yo, xo], calculate corresponding matrix at image
     space coordinates. This is given by (roughly speaking)
     M'[yi, xi] = M[ T^{-1} * [xi, yi] ]
-
     Object coordinates are assumed to be [0, ..., nx-1] and [0, ..., ny-1]
-    # todo: want object coordinates to be on a grid, but don't want to force a specific one like this ...
 
     :param mat_obj: matrix in object space
     :param xform: affine transformation which takes object space coordinates as input, [yi, xi] = T * [xo, yo]
     :param img_coords: (c1, c0) list of coordinate arrays where the image-space matrix is to be evaluated. All
-    coordinate arrays must be the same shape. i.e., xi.shape = yi.shape.
+      coordinate arrays must be the same shape. i.e., xi.shape = yi.shape.
     :param str mode: 'nearest' or 'interp'. 'interp' will produce better results if e.g. looking at phase content after
-    affine transformation.
-
+      affine transformation.
     :return mat_img: matrix in image space, M'[yi, xi]
     """
+    if cp and isinstance(mat_obj, cp.ndarray):
+        xp = cp
+        if mode == "interp":
+            raise NotImplementedError("mode 'interp' is not implemented for CuPy arrays")
+    else:
+        xp = np
+
     if mat_obj.ndim != 2:
         raise ValueError("img_obj must be a 2D array")
 
     # image space coordinates
     output_shape = img_coords[0].shape
-    coords_img = np.stack([ic.ravel() for ic in img_coords], axis=1)
+    coords_img = xp.stack([xp.asarray(ic).ravel() for ic in img_coords], axis=1)
 
     # get corresponding object space coordinates
-    xform_inv = np.linalg.inv(xform)
+    xform_inv = xp.linalg.inv(xp.asarray(xform))
 
-    coords_obj_from_img = xform_points(coords_img, xform_inv).transpose()
-    coords_obj_from_img = [np.reshape(c, output_shape) for c in coords_obj_from_img]
+    coords_obj_from_img = [xp.reshape(c, output_shape)
+                           for c in xform_points(coords_img, xform_inv).transpose()]
 
     # only use points with coords in image
-    coords_obj_bounds = [np.arange(mat_obj.shape[1]), np.arange(mat_obj.shape[0])]
+    coords_obj_bounds = [xp.arange(mat_obj.shape[1]),
+                         xp.arange(mat_obj.shape[0])]
 
-    to_use = np.logical_and.reduce([np.logical_and(oc >= np.min(ocm),
-                                                   oc <= np.max(ocm))
-                                    for oc, ocm in zip(coords_obj_from_img, coords_obj_bounds)])
+    # since CuPy logical_and() does not support reduce
+    to_use = xp.ones(coords_obj_from_img[0].shape, dtype=bool)
+    for ii in range(mat_obj.ndim):
+        to_use[coords_obj_from_img[ii] < coords_obj_bounds[ii].min()] = False
+        to_use[coords_obj_from_img[ii] > coords_obj_bounds[ii].max()] = False
 
     # get matrix in image space
     if mode == 'nearest':
         # find closest point in image to each output point
-        inds = [tuple(np.array(np.round(oc[to_use]), dtype=int)) for oc in coords_obj_from_img]
+        inds = [tuple(xp.array(xp.round(oc[to_use]), dtype=int))
+                for oc in coords_obj_from_img]
         inds.reverse()
 
         # evaluate matrix
-        mat_img = np.zeros(output_shape) * np.nan
+        mat_img = xp.zeros(output_shape) * xp.nan
         mat_img[to_use] = mat_obj[tuple(inds)]
 
     elif mode == 'interp':
         mat_img = RectBivariateSpline(*coords_obj_bounds, mat_obj.transpose()).ev(*coords_obj_from_img)
-        mat_img[np.logical_not(to_use)] = np.nan
+        mat_img[xp.logical_not(to_use)] = np.nan
     else:
         raise ValueError("'mode' must be 'nearest' or 'interp' but was '%s'" % mode)
 
@@ -187,8 +204,8 @@ def xform_fn(fn: callable,
     return fn_out
 
 
-def xform_points(coords: np.ndarray,
-                 xform: np.ndarray) -> np.ndarray:
+def xform_points(coords: array,
+                 xform: array) -> array:
     """
     Transform coordinates of arbitrary dimension under the action of an affine transformation
 
@@ -196,15 +213,18 @@ def xform_points(coords: np.ndarray,
     :param xform: affine transform matrix of shape (ndim + 1) x (ndim + 1)
     :return coords_out: n0 x n1 x ... nm x ndim
     """
-    # coords_in = np.concatenate((coords.transpose(), np.ones((1, coords.shape[0]))), axis=0)
-    # clip off extra dimension and return
-    # coords_out = xform.dot(coords_in)[:-1].transpose()
+    if cp and isinstance(coords, cp.ndarray):
+        xp = cp
+    else:
+        xp = np
 
     ndims = coords.shape[-1]
-    coords_in = np.stack([coords[..., ii].ravel() for ii in range(ndims)] + [np.ones((coords[..., 0].size))], axis=0)
+    coords_in = xp.stack([coords[..., ii].ravel() for ii in range(ndims)] +
+                         [xp.ones((coords[..., 0].size))],
+                         axis=0)
 
     # trim off homogeneous coordinate row and reshape
-    coords_out = xform.dot(coords_in)[:-1].transpose().reshape(coords.shape)
+    coords_out = xp.asarray(xform).dot(coords_in)[:-1].transpose().reshape(coords.shape)
 
     return coords_out
 
@@ -395,9 +415,6 @@ def xform_sinusoid_params_roi(fx: float,
 
     if input_origin == "fft":
         phase_o = phase_fft2edge([fx, fy], phase, object_size, dx=1)
-        # xft = tools.get_fft_pos(object_size[1])
-        # yft = tools.get_fft_pos(object_size[0])
-        # phase_o = xform_phase_translation(fx, fy, phase, [xft[0], yft[0]])
     elif input_origin == "edge":
         phase_o = phase
     else:
