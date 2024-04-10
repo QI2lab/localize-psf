@@ -8,7 +8,8 @@ The affine transformation (in homogeneous coordinates) is represented by a matri
 Given a function defined on object space, g(xo, yo), we can define a corresponding function on image space
 gi(xi, yi) = g(T^{-1} [[xi], [yi], [1]])
 """
-from typing import Optional, Sequence, Union
+from typing import Optional, Union
+from collections.abc import Sequence
 import joblib
 import numpy as np
 from numpy import fft

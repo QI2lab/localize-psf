@@ -1,7 +1,8 @@
 """
 Tools for dealing with regions of interest (ROI's)
 """
-from typing import Optional, Sequence, Union
+from typing import Optional, Union
+from collections.abc import Sequence
 import numpy as np
 import warnings
 from numba import njit

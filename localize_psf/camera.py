@@ -3,7 +3,8 @@ Tools for working with or simulating camera data
 """
 import numpy as np
 from localize_psf import fit_psf
-from typing import Optional, Union, Sequence
+from typing import Optional, Union
+from collections.abc import Sequence
 
 _cupy_available = True
 try:

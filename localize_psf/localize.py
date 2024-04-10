@@ -5,7 +5,8 @@ The fitting code can be run on a CPU using multiprocessing with joblib, or on a 
 to GPUfit which can be found at https://github.com/QI2lab/Gpufit. To use the GPU code, you must download and
 compile this repository and install the python bindings.
 """
-from typing import Union, Optional, Sequence
+from typing import Union, Optional
+from collections.abc import Sequence
 from pathlib import Path
 import time
 import warnings

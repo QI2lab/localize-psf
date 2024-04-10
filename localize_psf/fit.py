@@ -7,7 +7,8 @@ arbitrary rotations.
 All functions rely on fit_least_squares() which is a wrapper for scipy.optimize.least_squares()
 which additionally handles fixing parameters and calculating standard uncertainties.
 """
-from typing import Optional, Sequence
+from typing import Optional
+from collections.abc import Sequence
 import numpy as np
 from scipy.optimize import least_squares
 from localize_psf import affine
