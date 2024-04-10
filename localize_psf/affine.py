@@ -417,8 +417,6 @@ def xform_sinusoid_params_roi(fx: float,
         x_rp = fft.fftshift(fft.fftfreq(nx, 1 / nx))
         ny = yend - ystart
         y_rp = fft.fftshift(fft.fftfreq(ny, 1/ny))
-        # x_rp = tools.get_fft_pos(xend - xstart, dt=1, centered=True, mode="symmetric")
-        # y_rp = tools.get_fft_pos(yend - ystart, dt=1, centered=True, mode="symmetric")
 
         # origin of rp-coordinate system, written in the i-coordinate system
         cx = xstart - x_rp[0]
