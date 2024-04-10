@@ -10,11 +10,11 @@ gi(xi, yi) = g(T^{-1} [[xi], [yi], [1]])
 """
 from typing import Optional, Union
 from collections.abc import Sequence
-import joblib
+from joblib import Parallel, delayed
 import numpy as np
-from numpy import fft
+from numpy.fft import fftfreq, fftshift
 from scipy.interpolate import RectBivariateSpline
-from localize_psf import fit
+from localize_psf.fit import fit_least_squares
 
 try:
     import cupy as cp
@@ -286,9 +286,9 @@ def phase_edge2fft(frq: Sequence[float],
     :return phase_fft:
     """
     nx = img_shape[1]
-    xft = fft.fftshift(fft.fftfreq(nx, 1 / (dx*nx)))
+    xft = fftshift(fftfreq(nx, 1 / (dx*nx)))
     ny = img_shape[0]
-    yft = fft.fftshift(fft.fftfreq(ny, 1 / (dx*ny)))
+    yft = fftshift(fftfreq(ny, 1 / (dx*ny)))
 
     # xft = tools.get_fft_pos(img_shape[1], dt=dx, centered=True, mode="symmetric")
     # yft = tools.get_fft_pos(img_shape[0], dt=dx, centered=True, mode="symmetric")
@@ -312,9 +312,9 @@ def phase_fft2edge(frq: Sequence[float],
     """
 
     nx = img_shape[1]
-    xft = fft.fftshift(fft.fftfreq(nx, 1 / (dx*nx)))
+    xft = fftshift(fftfreq(nx, 1 / (dx*nx)))
     ny = img_shape[0]
-    yft = fft.fftshift(fft.fftfreq(ny, 1 / (dx*ny)))
+    yft = fftshift(fftfreq(ny, 1 / (dx*ny)))
 
     phase_edge = xform_phase_translation(frq[0], frq[1], phase, [xft[0], yft[0]])
 
@@ -432,9 +432,9 @@ def xform_sinusoid_params_roi(fx: float,
         ystart, yend, xstart, xend = img_roi
 
         nx = xend - xstart
-        x_rp = fft.fftshift(fft.fftfreq(nx, 1 / nx))
+        x_rp = fftshift(fftfreq(nx, 1 / nx))
         ny = yend - ystart
-        y_rp = fft.fftshift(fft.fftfreq(ny, 1/ny))
+        y_rp = fftshift(fftfreq(ny, 1/ny))
 
         # origin of rp-coordinate system, written in the i-coordinate system
         cx = xstart - x_rp[0]
@@ -541,14 +541,14 @@ def fit_xform_points_ransac(from_pts: np.ndarray,
 
     if njobs > 1:
         niters_each = int(np.ceil(niterations / njobs))
-        results = joblib.Parallel(n_jobs=-1, verbose=0, timeout=None)(
-                  joblib.delayed(fit_xform_points_ransac)(from_pts,
-                                                          to_pts,
-                                                          dist_err_max=dist_err_max,
-                                                          niterations=niters_each,
-                                                          njobs=1,
-                                                          n_inliers_stop=n_inliers_stop,
-                                                          translate_only=translate_only)
+        results = Parallel(n_jobs=-1, verbose=0, timeout=None)(
+                  delayed(fit_xform_points_ransac)(from_pts,
+                                                   to_pts,
+                                                   dist_err_max=dist_err_max,
+                                                   niterations=niters_each,
+                                                   njobs=1,
+                                                   n_inliers_stop=n_inliers_stop,
+                                                   translate_only=translate_only)
                   for ii in range(njobs))
 
         xforms, inliers, errs, vars = zip(*results)
@@ -652,178 +652,7 @@ def fit_xform_img(mat_obj: np.ndarray,
         diff[np.isnan(diff)] = 0
         return diff
 
-    results = fit.fit_least_squares(err_fn, init_params, fixed_params=fixed_params, bounds=bounds)
+    results = fit_least_squares(err_fn, init_params, fixed_params=fixed_params, bounds=bounds)
     xform = p2xform(results["fit_params"])
 
     return results, xform
-
-
-# ######################
-# rotation matrices
-# ######################
-def get_rot_mat(rot_axis: Sequence[float],
-                gamma: float) -> np.ndarray:
-    """
-    Get matrix which rotates points about the specified axis by the given angle. Think of this rotation matrix
-    as acting on unit vectors, and hence its inverse R^{-1} transforms regular vectors. Therefore, we define
-    this matrix such that it rotates unit vectors in a lefthanded sense about the given axis for positive gamma.
-    e.g. when rotating about the z-axis this becomes
-    [[cos(gamma), -sin(gamma), 0],
-     [sin(gamma), cos(gamma), 0],
-     [0, 0, 1]]
-    since vectors are acted on by the inverse matrix, they rotated in a righthanded sense about the given axis.
-
-    :param rot_axis: unit vector specifying axis to rotate about, [nx, ny, nz]
-    :param float gamma: rotation angle in radians to transform point. A positive angle corresponds right-handed rotation
-    about the given axis
-    :return mat: 3x3 rotation matrix
-    """
-    if np.abs(np.linalg.norm(rot_axis) - 1) > 1e-12:
-        raise ValueError("rot_axis must be a unit vector")
-
-    nx, ny, nz = rot_axis
-    mat = np.array([[nx**2 * (1 - np.cos(gamma)) + np.cos(gamma), nx * ny * (1 - np.cos(gamma)) - nz * np.sin(gamma), nx * nz * (1 - np.cos(gamma)) + ny * np.sin(gamma)],
-                    [nx * ny * (1 - np.cos(gamma)) + nz * np.sin(gamma), ny**2 * (1 - np.cos(gamma)) + np.cos(gamma), ny * nz * (1 - np.cos(gamma)) - nx * np.sin(gamma)],
-                    [nx * nz * (1 - np.cos(gamma)) - ny * np.sin(gamma), ny * nz * (1 - np.cos(gamma)) + nx * np.sin(gamma), nz**2 * (1 - np.cos(gamma)) + np.cos(gamma)]])
-    return mat
-
-
-def get_rot_mat_angle_axis(rot_mat: np.ndarray) -> (np.ndarray, float):
-    """
-    Given a rotation matrix, determine the axis it rotates about and the angle it rotates through. This is
-    the inverse function for get_rot_mat()
-
-    Note that get_rot_mat_angle_axis(get_rot_mat(axis, angle)) can return either axis, angle or -axis, -angle
-    as these two rotation matrices are equivalent
-
-    :param rot_mat:
-    :return rot_axis, angle:
-    """
-    if np.linalg.norm(rot_mat.dot(rot_mat.transpose()) - np.identity(rot_mat.shape[0])) > 1e-12:
-        raise ValueError("rot_mat was not a valid rotation matrix")
-
-    eig_vals, eig_vects = np.linalg.eig(rot_mat)
-
-    # rotation matrix must have one eigenvalue that is 1 to numerical precision
-    ind = np.argmin(np.abs(eig_vals - 1))
-
-    # construct basis with e3 = rotation axis
-    e3 = eig_vects[:, ind].real
-
-    if np.linalg.norm(np.cross(np.array([0, 1, 0]), e3)) != 0:
-        e1 = np.cross(np.array([0, 1, 0]), e3)
-    else:
-        e1 = np.cross(np.array([1, 0, 0]), e3)
-    e1 = e1 / np.linalg.norm(e1)
-
-    e2 = np.cross(e3, e1)
-
-    # basis change matrix to look like rotation about z-axis
-    mat_basis_change = np.vstack((e1, e2, e3)).transpose()
-
-    # transformed rotation matrix
-    r_bc = np.linalg.inv(mat_basis_change).dot(rot_mat.dot(mat_basis_change))
-    angle = np.arcsin(r_bc[1, 0]).real
-    # angle = np.arcsin(r_bc[0, 1]).real
-
-    return e3, angle
-
-
-def euler_mat(phi: float,
-              theta: float,
-              psi: float) -> np.ndarray:
-    """
-    Define our Euler angles connecting the body frame to the space/lab frame by
-    r_lab = U_z(phi) * U_y(theta) * U_z(psi) * r_body
-    The coordinates are column vectors r = [[x], [y], [z]], so
-    U_z(phi) = [[cos(phi), -sin(phi), 0], [sin(phi), cos(phi), 0], [0, 0, 1]]
-    U_y(theta) = [[cos(theta), 0, sin(theta)], [0, 1, 0], [-sin(theta), 0, cos(theta)]]
-
-    Consider the z-axis in the body frame. This axis is then orientated at
-    [cos(phi)*sin(theta), sin(phi)*sin(theta), cos(theta)]
-    in the space frame. i.e. phi, theta are the usual polar angles. psi represents a rotation of the object
-    about its own axis.
-
-    :param phi:
-    :param theta:
-    :param psi:
-    :return euler_mat: U_z(phi) * U_y(theta) * U_z(psi)
-    """
-    euler_mat = np.array([[np.cos(phi) * np.cos(theta) * np.cos(psi) - np.sin(phi) * np.sin(psi),
-                          -np.cos(phi) * np.cos(theta) * np.sin(psi) - np.sin(phi) * np.cos(psi),
-                           np.cos(phi) * np.sin(theta)],
-                          [np.sin(phi) * np.cos(theta) * np.cos(psi) + np.cos(phi) * np.sin(psi),
-                          -np.sin(phi) * np.cos(theta) * np.sin(psi) + np.cos(phi) * np.cos(psi),
-                           np.sin(phi) * np.sin(theta)],
-                          [-np.sin(theta) * np.cos(psi), np.sin(theta) * np.sin(psi), np.cos(theta)]])
-
-    return euler_mat
-
-
-def euler_mat_inv(phi: float,
-                  theta: float,
-                  psi: float) -> np.ndarray:
-    """
-    r_body = U_z(-psi) * U_y(-theta) * U_z(-phi) * r_lab
-
-    :param phi:
-    :param theta:
-    :param psi:
-    :return dphi, dtheta, dsi:
-    """
-    return euler_mat(-psi, -theta, -phi)
-
-
-def euler_mat_derivatives(phi: float,
-                          theta: float,
-                          psi: float) -> (np.ndarray, np.ndarray, np.ndarray):
-    """
-    Derivative of Euler matrix with respect to Euler angles
-
-    :param phi:
-    :param theta:
-    :param psi:
-    :return dphi, dtheta, dsi:
-    """
-    dphi = np.array([[-np.sin(phi) * np.cos(theta) * np.cos(psi) - np.cos(phi) * np.sin(psi),
-                       np.sin(phi) * np.cos(theta) * np.sin(psi) - np.cos(phi) * np.cos(psi),
-                      -np.sin(phi) * np.sin(theta)],
-                     [ np.cos(phi) * np.cos(theta) * np.cos(psi) - np.sin(phi) * np.sin(psi),
-                      -np.cos(phi) * np.cos(theta) * np.sin(psi) - np.sin(phi) * np.cos(psi),
-                       np.cos(phi) * np.sin(theta)],
-                     [0, 0, 0]])
-    dtheta = np.array([[-np.cos(phi) * np.sin(theta) * np.cos(psi),
-                         np.cos(phi) * np.sin(theta) * np.sin(psi),
-                         np.cos(phi) * np.cos(theta)],
-                       [-np.sin(phi) * np.sin(theta) * np.cos(psi),
-                         np.sin(phi) * np.sin(theta) * np.sin(psi),
-                         np.sin(phi) * np.cos(theta)],
-                       [-np.cos(theta) * np.cos(psi), np.cos(theta) * np.sin(psi), -np.sin(theta)]])
-    dpsi = np.array([[-np.cos(phi) * np.cos(theta) * np.sin(psi) - np.sin(phi) * np.cos(psi),
-                      -np.cos(phi) * np.cos(theta) * np.cos(psi) + np.sin(phi) * np.sin(psi),
-                      0],
-                     [-np.sin(phi) * np.cos(theta) * np.sin(psi) + np.cos(phi) * np.cos(psi),
-                      -np.sin(phi) * np.cos(theta) * np.cos(psi) - np.cos(phi) * np.sin(psi),
-                      0],
-                     [np.sin(theta) * np.sin(psi), np.sin(theta) * np.cos(psi), 0]])
-
-    return dphi, dtheta, dpsi
-
-
-def euler_mat_inv_derivatives(phi: float,
-                              theta: float,
-                              psi: float) -> (np.ndarray, np.ndarray, np.ndarray):
-    """
-    Derivative of inverse Euler matrix with respect to Euler angles
-
-    :param phi:
-    :param theta:
-    :param psi:
-    :return dphi, dtheta, dpsi:
-    """
-    d1, d2, d3 = euler_mat_derivatives(-psi, -theta, -phi)
-    dphi = -d3
-    dtheta = -d2
-    dpsi = -d1
-
-    return dphi, dtheta, dpsi

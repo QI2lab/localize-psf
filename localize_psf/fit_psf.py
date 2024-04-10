@@ -5,7 +5,7 @@ Functions for estimating PSF's from images of fluorescent beads (z-stacks or sin
 experimental PSF's from the average of many beads and fitting 2D and 3D PSF models to beads.
 """
 from typing import Union, Optional
-import warnings
+from warnings import warn, catch_warnings, simplefilter
 import numpy as np
 from scipy.ndimage import shift
 from scipy.special import j0, j1
@@ -13,7 +13,12 @@ from scipy.integrate import quad
 from scipy.interpolate import interp1d
 from scipy.signal import fftconvolve, convolve
 from scipy import fft
-from localize_psf import affine, rois, fit
+from localize_psf.rotation import euler_mat
+from localize_psf.rois import get_centered_rois, cut_roi
+from localize_psf.fit import (coordinate_model,
+                              rotated_model_3d,
+                              gauss3d,
+                              gauss3d_asymmetric)
 
 
 # https://pypi.org/project/psfmodels/
@@ -405,7 +410,7 @@ def oversample_pixel(coords: tuple[np.ndarray, np.ndarray, np.ndarray],
 
         # rotate points to correct position using normal vector
         # for now we will fix x, but lose generality
-        mat = affine.euler_mat(*euler_angles)
+        mat = euler_mat(*euler_angles)
         result = mat.dot(np.concatenate((xp.ravel()[None, :],
                                          yp.ravel()[None, :],
                                          zp.ravel()[None, :]), axis=0))
@@ -525,15 +530,15 @@ def average_exp_psfs(imgs: np.ndarray,
         zc_pix = np.argmin(np.abs(z - centers[ii, 0]))
 
         # cut roi from image
-        roi = rois.get_centered_rois((zc_pix, yc_pix, xc_pix),
+        roi = get_centered_rois((zc_pix, yc_pix, xc_pix),
                                     roi_sizes,
                                     min_vals=[0, 0, 0],
                                     max_vals=imgs.shape)[0]
-        img_roi = rois.cut_roi(roi, imgs)[0]
+        img_roi = cut_roi(roi, imgs)[0]
 
-        zroi = rois.cut_roi(roi, z)[0]
-        yroi = rois.cut_roi(roi, y)[0]
-        xroi = rois.cut_roi(roi, x)[0]
+        zroi = cut_roi(roi, z)[0]
+        yroi = cut_roi(roi, y)[0]
+        xroi = cut_roi(roi, x)[0]
 
         cx_pix_roi = (roi[5] - roi[4]) // 2
         cy_pix_roi = (roi[3] - roi[2]) // 2
@@ -560,8 +565,8 @@ def average_exp_psfs(imgs: np.ndarray,
 
         psf_shifted[ii, zstart:zend, ystart:yend, xstart:xend] = img_roi_shifted - backgrounds[ii]
 
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore", category=RuntimeWarning)
+    with catch_warnings():
+        simplefilter("ignore", category=RuntimeWarning)
         with np.errstate(divide='ignore', invalid='ignore'):
             psf_mean = np.nanmean(psf_shifted, axis=0)
 
@@ -573,7 +578,7 @@ def average_exp_psfs(imgs: np.ndarray,
 
 
 # PSF models
-class pixelated_psf_model(fit.coordinate_model):
+class pixelated_psf_model(coordinate_model):
 
     def __init__(self,
                  param_names: list[str],
@@ -614,7 +619,7 @@ class from_coordinate_model(pixelated_psf_model):
     Helper class to convert any preexisting 3D coordinate model to a pixelated model
     """
     def __init__(self,
-                 model: fit.coordinate_model,
+                 model: coordinate_model,
                  dc: Optional[float] = None,
                  sf: int = 1,
                  angles: tuple[float] = (0., 0., 0.)
@@ -709,7 +714,7 @@ class gaussian3d_psf_model(from_coordinate_model):
                  minimum_sigmas: tuple[float] = (0., 0.)
                  ):
 
-        super().__init__(fit.gauss3d(minimum_sigmas=minimum_sigmas), dc=dc, sf=sf, angles=angles)
+        super().__init__(gauss3d(minimum_sigmas=minimum_sigmas), dc=dc, sf=sf, angles=angles)
 
 
 class gaussian3d_asymmetric_pixelated(from_coordinate_model):
@@ -723,7 +728,7 @@ class gaussian3d_asymmetric_pixelated(from_coordinate_model):
                  minimum_sigmas: tuple[float] = (0., 0., 0.)
                  ):
 
-        super().__init__(fit.gauss3d_asymmetric(minimum_sigmas=minimum_sigmas), dc=dc, sf=sf, angles=angles)
+        super().__init__(gauss3d_asymmetric(minimum_sigmas=minimum_sigmas), dc=dc, sf=sf, angles=angles)
 
 
 class gaussian3d_rotated_pixelated(from_coordinate_model):
@@ -737,8 +742,8 @@ class gaussian3d_rotated_pixelated(from_coordinate_model):
                  minimum_sigmas: tuple[float] = (0., 0.)
                  ):
 
-        gauss3d = fit.gauss3d(minimum_sigmas=minimum_sigmas)
-        gauss3d_rotated = fit.rotated_model_3d(gauss3d, (3, 2, 1))
+        g3d = gauss3d(minimum_sigmas=minimum_sigmas)
+        gauss3d_rotated = rotated_model_3d(g3d, (3, 2, 1))
 
         super().__init__(gauss3d_rotated, dc=dc, sf=sf, angles=angles)
 
@@ -754,7 +759,7 @@ class gaussian3d_asymmetric_rotated_pixelated(from_coordinate_model):
                  angles: tuple[float] = (0., 0., 0.),
                  minimum_sigmas: tuple[float] = (0., 0., 0.)
                  ):
-        model_rotated = fit.rotated_model_3d(fit.gauss3d_asymmetric(minimum_sigmas=minimum_sigmas), (3, 2, 1))
+        model_rotated = rotated_model_3d(gauss3d_asymmetric(minimum_sigmas=minimum_sigmas), (3, 2, 1))
 
         super().__init__(model_rotated, dc=dc, sf=sf, angles=angles)
 

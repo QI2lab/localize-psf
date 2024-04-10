@@ -3,10 +3,10 @@ Tests for affine.py
 """
 import unittest
 import numpy as np
-from scipy import fft
-import scipy.signal
-import scipy.optimize
-from localize_psf import affine
+from scipy.fft import fftshift, ifftshift, fftfreq, fft2
+from scipy.signal.windows import hann
+from scipy.optimize import minimize
+from localize_psf import affine, rotation
 
 def get_phase_realspace(img, frq, dxy, phase_guess=0):
     """
@@ -39,7 +39,7 @@ def get_phase_realspace(img, frq, dxy, phase_guess=0):
     def jac_fn(phi): return np.asarray([np.sum(fn_deriv(phi) * img),])
 
     # using jacobian makes faster and more robust
-    result = scipy.optimize.minimize(min_fn, phase_guess, jac=jac_fn)
+    result = minimize(min_fn, phase_guess, jac=jac_fn)
     phi_fit = np.mod(result.x, 2 * np.pi)
 
     return phi_fit
@@ -75,7 +75,7 @@ class Test_affine(unittest.TestCase):
         out_coords = np.meshgrid(range(2048), range(2048))
         img = affine.xform_fn(fn, xform)(*out_coords)
 
-        phase_fit = float(get_phase_realspace(img, fimg, 1))
+        phase_fit = get_phase_realspace(img, fimg, 1)[0]
 
         # todo: could also test frequencies if wanted...
 
@@ -105,7 +105,7 @@ class Test_affine(unittest.TestCase):
         x_new, y_new = np.meshgrid(range(500), range(500))
         img_new = fn_xlated(x_new, y_new)
 
-        phase_xlated_test = float(get_phase_realspace(img_new, fobj, 1))
+        phase_xlated_test = get_phase_realspace(img_new, fobj, 1)[0]
 
         self.assertAlmostEqual(phase_xlated, phase_xlated_test, 3)
 
@@ -130,7 +130,7 @@ class Test_affine(unittest.TestCase):
 
         # determine ROI phase from fitting
         img_roi = img[roi[0]:roi[1], roi[2]:roi[3]]
-        phase_roi_test = float(get_phase_realspace(img_roi, fobj, 1))
+        phase_roi_test = get_phase_realspace(img_roi, fobj, 1)[0]
 
         self.assertAlmostEqual(phase_roi, phase_roi_test, 8)
 
@@ -166,23 +166,20 @@ class Test_affine(unittest.TestCase):
         out_coords = np.meshgrid(range(roi_img[2], roi_img[3]), range(roi_img[0], roi_img[1]))
         # img = affine.xform_fn(fn, xform, out_coords)
         img = affine.xform_fn(fn, xform)(*out_coords)
-        phase_fit_roi = float(get_phase_realspace(img, fimg, 1, phase_guess=phase_roi))
+        phase_fit_roi = get_phase_realspace(img, fimg, 1, phase_guess=phase_roi)[0]
 
         # phase FFT
         ny, nx = img.shape
-        window = np.expand_dims(scipy.signal.windows.hann(nx), axis=0) * \
-                 np.expand_dims(scipy.signal.windows.hann(ny), axis=1)
-        img_ft = fft.fftshift(fft.fft2(fft.ifftshift(img * window)))
-        fx = fft.fftshift(fft.fftfreq(nx, 1))
-        fy = fft.fftshift(fft.fftfreq(ny, 1))
+        window = np.expand_dims(hann(nx), axis=0) * \
+                 np.expand_dims(hann(ny), axis=1)
+        img_ft = fftshift(fft2(ifftshift(img * window)))
+        fx = fftshift(fftfreq(nx, 1))
+        fy = fftshift(fftfreq(ny, 1))
 
         xind = np.argmin(np.abs(fx - fimg[0]))
         yind = np.argmin(np.abs(fy - fimg[1]))
         peak = np.mean(img_ft[yind-1:yind+2, xind-1:xind+2])
         phase_fit_roi_ft = np.mod(np.angle(peak), 2 * np.pi)
-
-        # peak2 = tools.get_peak_value(img_ft, fx, fy, fimg, 2)
-        # phase_fit_roi_ft2 = np.mod(np.angle(peak), 2*np.pi)
 
         # accuracy is limited by frequency fitting routine...
         self.assertAlmostEqual(phase_roi, phase_fit_roi, 1)
@@ -194,7 +191,7 @@ class Test_affine(unittest.TestCase):
                           [6.4747574, 2.236262, -56.777],
                           [0, 0, 1]])
 
-        npts = 4
+        npts = 6
         from_pts = np.stack((np.random.uniform(-1000, 1000, size=npts),
                              np.random.uniform(-1000, 1000, size=npts)), axis=1)
 
@@ -222,13 +219,13 @@ class Test_affine(unittest.TestCase):
         np.testing.assert_allclose(np.zeros((4, 4)), xform - xform_fit, atol=1e-10)
 
     def test_euler(self):
-        em = affine.euler_mat(15 * np.pi / 180, 17.2346346 * np.pi / 180, 67 * np.pi/180)
+        em = rotation.euler_mat(15 * np.pi / 180, 17.2346346 * np.pi / 180, 67 * np.pi/180)
         np.testing.assert_allclose(np.identity(3), em.dot(em.transpose()), atol=1e-10)
 
     def test_euler_inv(self):
         params = [15 * np.pi / 180, 17.2346346 * np.pi / 180, 67 * np.pi / 180]
-        em = affine.euler_mat(*params)
-        em_inv = affine.euler_mat_inv(*params)
+        em = rotation.euler_mat(*params)
+        em_inv = rotation.euler_mat_inv(*params)
         np.testing.assert_allclose(np.identity(3), em.dot(em_inv), atol=1e-10)
 
     def test_euler_derivative(self):
@@ -237,13 +234,13 @@ class Test_affine(unittest.TestCase):
 
         dp = 1e-7
 
-        jac = affine.euler_mat_derivatives(*ps)
+        jac = rotation.euler_mat_derivatives(*ps)
         jac_est = [[]] * num_p
         for ii in range(num_p):
             ps_dp = np.array(ps, copy=True)
             ps_dp[ii] -= dp
 
-            jac_est[ii] = 1 / dp * (affine.euler_mat(*ps) - affine.euler_mat(*ps_dp))
+            jac_est[ii] = 1 / dp * (rotation.euler_mat(*ps) - rotation.euler_mat(*ps_dp))
             # print(np.max(np.abs(jac_est[ii] - jac[ii])))
             np.testing.assert_allclose(jac[ii], jac_est[ii], atol=1e-6)
 
@@ -253,13 +250,13 @@ class Test_affine(unittest.TestCase):
 
         dp = 1e-7
 
-        jac = affine.euler_mat_inv_derivatives(*ps)
+        jac = rotation.euler_mat_inv_derivatives(*ps)
         jac_est = [[]] * num_p
         for ii in range(num_p):
             ps_dp = np.array(ps, copy=True)
             ps_dp[ii] -= dp
 
-            jac_est[ii] = 1 / dp * (affine.euler_mat_inv(*ps) - affine.euler_mat_inv(*ps_dp))
+            jac_est[ii] = 1 / dp * (rotation.euler_mat_inv(*ps) - rotation.euler_mat_inv(*ps_dp))
             # print(np.max(np.abs(jac_est[ii] - jac[ii])))
             np.testing.assert_allclose(jac[ii], jac_est[ii], atol=1e-6)
 

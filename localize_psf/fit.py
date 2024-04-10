@@ -11,7 +11,7 @@ from typing import Optional
 from collections.abc import Sequence
 import numpy as np
 from scipy.optimize import least_squares
-from localize_psf import affine
+from localize_psf.rotation import euler_mat_inv, euler_mat_inv_derivatives
 
 
 class coordinate_model():
@@ -290,7 +290,7 @@ class rotated_model_2d(coordinate_model):
         y, x = coordinates[-2:]
 
         phi = parameters[-1]
-        rot_mat = affine.euler_mat_inv(phi, 0, 0)[:2, :2]
+        rot_mat = euler_mat_inv(phi, 0, 0)[:2, :2]
 
         cx = parameters[self.center_inds[1]]
         cy = parameters[self.center_inds[0]]
@@ -312,7 +312,7 @@ class rotated_model_2d(coordinate_model):
         y, x = coordinates[-2:]
 
         phi = parameters[-1]
-        rot_mat = affine.euler_mat_inv(phi, 0, 0)[:2, :2]
+        rot_mat = euler_mat_inv(phi, 0, 0)[:2, :2]
 
         cx = parameters[self.center_inds[1]]
         cy = parameters[self.center_inds[0]]
@@ -345,7 +345,7 @@ class rotated_model_2d(coordinate_model):
         jac_base[self.center_inds[0]] = -(j_cx * dxrot_dcy + j_cy * dyrot_dcy)
 
         # euler angle derivatives
-        dphi = affine.euler_mat_inv_derivatives(phi, 0, 0)[0][:2, :2]
+        dphi = euler_mat_inv_derivatives(phi, 0, 0)[0][:2, :2]
         dxrot_dphi = (x - cx) * dphi[0, 0] + (y - cy) * dphi[0, 1]
         dyrot_dphi = (x - cx) * dphi[1, 0] + (y - cy) * dphi[1, 1]
 
@@ -443,7 +443,7 @@ class rotated_model_3d(coordinate_model):
         phi = parameters[-3]
         theta = parameters[-2]
         psi = parameters[-1]
-        rot_mat = affine.euler_mat_inv(phi, theta, psi)
+        rot_mat = euler_mat_inv(phi, theta, psi)
 
         cx = parameters[self.center_inds[2]]
         cy = parameters[self.center_inds[1]]
@@ -470,7 +470,7 @@ class rotated_model_3d(coordinate_model):
         phi = parameters[-3]
         theta = parameters[-2]
         psi = parameters[-1]
-        rot_mat = affine.euler_mat_inv(phi, theta, psi)
+        rot_mat = euler_mat_inv(phi, theta, psi)
 
         cx = parameters[self.center_inds[2]]
         cy = parameters[self.center_inds[1]]
@@ -514,7 +514,7 @@ class rotated_model_3d(coordinate_model):
         jac_base[self.center_inds[0]] = -(j_cx * dxrot_dcz + j_cy * dyrot_dcz + j_cz * dzrot_dcz)
 
         # euler angle derivatives
-        dphi, dtheta, dpsi = affine.euler_mat_inv_derivatives(phi, theta, psi)
+        dphi, dtheta, dpsi = euler_mat_inv_derivatives(phi, theta, psi)
         dxrot_dphi = (x - cx) * dphi[0, 0] + (y - cy) * dphi[0, 1] + (z - cz) * dphi[0, 2]
         dyrot_dphi = (x - cx) * dphi[1, 0] + (y - cy) * dphi[1, 1] + (z - cz) * dphi[1, 2]
         dzrot_dphi = (x - cx) * dphi[2, 0] + (y - cy) * dphi[2, 1] + (z - cz) * dphi[2, 2]
