@@ -1,7 +1,7 @@
 import unittest
 import numpy as np
 from numpy.testing import assert_allclose
-from numpy import fft
+from numpy.fft import fftshift, fftfreq
 from localize_psf import fit_psf
 from localize_psf.camera import bin
 
@@ -24,8 +24,8 @@ class Test_psf(unittest.TestCase):
         dy = dx
         ny = nx
 
-        fxs = fft.fftshift(fft.fftfreq(nx, dx))
-        fys = fft.fftshift(fft.fftfreq(ny, dy))
+        fxs = fftshift(fftfreq(nx, dx))
+        fys = fftshift(fftfreq(ny, dy))
         dfx = fxs[1] - fxs[0]
         dfy = fys[1] - fys[0]
 
