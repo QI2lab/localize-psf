@@ -8,6 +8,7 @@ from scipy.signal.windows import hann
 from scipy.optimize import minimize
 from localize_psf import affine, rotation
 
+
 def get_phase_realspace(img, frq, dxy, phase_guess=0):
     """
     Determine phase of pattern with a given frequency. Matches +cos(2*pi* f.*r + phi), where the origin
@@ -55,13 +56,14 @@ class Test_affine(unittest.TestCase):
         test the xform_sinusoid_params() function by constructing sinusoid pattern and passing through an affine
         transformation. Compare the resulting frequency determined numerically with the resulting frequency determined
         from the initial frequency + affine parameters
+
         :return:
         """
 
         # define object space parameters
         fobj = np.array([0.08333333, 0.08333333])
         phase_obj = 5.497787143782089
-        fn = lambda x, y: 1 + np.cos(2 * np.pi * (fobj[0] * x + fobj[1] * y) + phase_obj)
+        def fn(x, y): return 1 + np.cos(2 * np.pi * (fobj[0] * x + fobj[1] * y) + phase_obj)
 
         # define affine transform
         xform = affine.params2xform([1.4296003114502853, 2.3693263411981396, 2671.39109,
@@ -83,13 +85,14 @@ class Test_affine(unittest.TestCase):
 
     def test_xform_phase_translation(self):
         """
-        Test function xform_phase_translation() function by defining sinusoid image and then translating. Compare numerically
-        determined phase with that given by xform_phase_translation().
+        Test function xform_phase_translation() function by defining sinusoid image and then translating.
+        Compare numerically determined phase with that given by xform_phase_translation().
+
         :return:
         """
         fobj = np.array([0.08333333, 0.08333333])
         phase_obj = 5.497787143782089
-        fn = lambda x, y: 1 + np.cos(2 * np.pi * (fobj[0] * x + fobj[1] * y) + phase_obj)
+        def fn(x, y): return 1 + np.cos(2 * np.pi * (fobj[0] * x + fobj[1] * y) + phase_obj)
 
         # center of "new" coordinates in "old" coordinates
         # xn = xo - cx
@@ -100,7 +103,7 @@ class Test_affine(unittest.TestCase):
 
         # fn of new coordinates
         # xo = xn + cx
-        fn_xlated = lambda xn, yn: fn(xn + cx, yn + cy)
+        def fn_xlated(xn, yn): return fn(xn + cx, yn + cy)
 
         x_new, y_new = np.meshgrid(range(500), range(500))
         img_new = fn_xlated(x_new, y_new)
@@ -111,13 +114,14 @@ class Test_affine(unittest.TestCase):
 
     def test_xform_phase_roi(self):
         """
-        Test function xform_phase_translation() function by defining sinusoid image and then cropping. Compare numerically
-        determined phase with that given by xform_phase_translation().
+        Test function xform_phase_translation() function by defining sinusoid image and then cropping.
+        Compare numerically determined phase with that given by xform_phase_translation().
+
         :return:
         """
         fobj = np.array([0.08333333, 0.08333333])
         phase_obj = 5.497787143782089
-        fn = lambda x, y: 1 + np.cos(2 * np.pi * (fobj[0] * x + fobj[1] * y) + phase_obj)
+        def fn(x, y): return 1 + np.cos(2 * np.pi * (fobj[0] * x + fobj[1] * y) + phase_obj)
         xo, yo = np.meshgrid(range(500), range(500))
         img = fn(xo, yo)
 
@@ -139,6 +143,7 @@ class Test_affine(unittest.TestCase):
         Test function xform_sinusoid_params_roi() by constructing sinusoid pattern and passing through an affine
         transformation. Compare the resulting frequency determined numerically with the resulting frequency determined
         from the initial frequency + affine parameters
+
         :return:
         """
         # define object space parameters
@@ -147,20 +152,32 @@ class Test_affine(unittest.TestCase):
 
         fobj = np.array([0.08333333, 0.08333333])
         phase_obj = 5.497787143782089
-        fn = lambda x, y: 1 + np.cos(2 * np.pi * (fobj[0] * x + fobj[1] * y) + phase_obj)
+        def fn(x, y): return 1 + np.cos(2 * np.pi * (fobj[0] * x + fobj[1] * y) + phase_obj)
 
         # define affine transform
         xform = affine.params2xform([1.4296003114502853, 2.3693263411981396, 2671.39109,
                                      1.4270495211450602, 2.3144621088632635, 790.402632])
 
         # sinusoid parameter transformation
-        fxi, fyi, phase_roi = affine.xform_sinusoid_params_roi(fobj[0], fobj[1], phase_obj, None, roi_img, xform,
-                                                               input_origin="edge", output_origin="edge")
+        fxi, fyi, phase_roi = affine.xform_sinusoid_params_roi(fobj[0],
+                                                               fobj[1],
+                                                               phase_obj,
+                                                               None,
+                                                               roi_img,
+                                                               xform,
+                                                               input_origin="edge",
+                                                               output_origin="edge")
         fimg = np.array([fxi, fyi])
 
         # FFT phase
-        _, _, phase_roi_ft = affine.xform_sinusoid_params_roi(fobj[0], fobj[1], phase_obj, None, roi_img, xform,
-                                                              input_origin="edge", output_origin="fft")
+        _, _, phase_roi_ft = affine.xform_sinusoid_params_roi(fobj[0],
+                                                              fobj[1],
+                                                              phase_obj,
+                                                              None,
+                                                              roi_img,
+                                                              xform,
+                                                              input_origin="edge",
+                                                              output_origin="fft")
 
         # compared with phase from fitting image directly
         out_coords = np.meshgrid(range(roi_img[2], roi_img[3]), range(roi_img[0], roi_img[1]))
@@ -170,8 +187,7 @@ class Test_affine(unittest.TestCase):
 
         # phase FFT
         ny, nx = img.shape
-        window = np.expand_dims(hann(nx), axis=0) * \
-                 np.expand_dims(hann(ny), axis=1)
+        window = np.expand_dims(hann(nx), axis=0) * np.expand_dims(hann(ny), axis=1)
         img_ft = fftshift(fft2(ifftshift(img * window)))
         fx = fftshift(fftfreq(nx, 1))
         fy = fftshift(fftfreq(ny, 1))
@@ -259,6 +275,7 @@ class Test_affine(unittest.TestCase):
             jac_est[ii] = 1 / dp * (rotation.euler_mat_inv(*ps) - rotation.euler_mat_inv(*ps_dp))
             # print(np.max(np.abs(jac_est[ii] - jac[ii])))
             np.testing.assert_allclose(jac[ii], jac_est[ii], atol=1e-6)
+
 
 if __name__ == "__main__":
     unittest.main()

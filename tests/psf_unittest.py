@@ -5,7 +5,8 @@ from numpy.fft import fftshift, fftfreq
 from localize_psf import fit_psf
 from localize_psf.camera import bin
 
-class Test_psf(unittest.TestCase):
+
+class TestPSF(unittest.TestCase):
 
     def setUp(self):
         pass
@@ -34,12 +35,11 @@ class Test_psf(unittest.TestCase):
         psf = psf / psf.max()
 
         xb, yb, zb = np.broadcast_arrays(np.expand_dims(xs, axis=(0, 1)),
-                                  np.expand_dims(ys, axis=(0, 2)),
-                                  np.expand_dims(np.array([0]), axis=(1, 2)))
+                                         np.expand_dims(ys, axis=(0, 2)),
+                                         np.expand_dims(np.array([0]), axis=(1, 2)))
         psf_true = fit_psf.born_wolf_psf(xb, yb, zb, [1, 0, 0, 0, na, 0], wavelength, 1)
 
         self.assertAlmostEqual(np.max(np.abs(psf - psf_true)), 0, 4)
-
 
     def test_oversample_voxel(self):
         dxy = 0.065
@@ -61,6 +61,7 @@ class Test_psf(unittest.TestCase):
             assert_allclose(dys, dys[0], atol=1e-12)
             assert_allclose(xxb, bin(xx, bin_sizes=(nbin, nbin), mode="mean"), atol=1e-12)
             assert_allclose(yyb, bin(yy, bin_sizes=(nbin, nbin), mode="mean"), atol=1e-12)
+
 
 if __name__ == "__main__":
     unittest.main()

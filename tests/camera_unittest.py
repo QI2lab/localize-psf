@@ -6,7 +6,8 @@ import unittest
 import numpy as np
 from localize_psf import camera
 
-class Test_psf(unittest.TestCase):
+
+class TestCam(unittest.TestCase):
 
     def setUp(self):
         pass
@@ -39,6 +40,7 @@ class Test_psf(unittest.TestCase):
         prod2_mean = np.sum(Badj_w_mean.conj() * v)
 
         self.assertAlmostEqual(prod1_mean, prod2_mean, 9)
+
 
 if __name__ == "__main__":
     unittest.main()

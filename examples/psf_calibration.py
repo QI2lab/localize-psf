@@ -5,16 +5,15 @@ Collect z-stacks of many isolated beads in single-field of view
 (2) plot bead focus positions in z and compute focus gradient across field of view and field curvature
 (3) extract average PSF
 """
-
-import matplotlib
-matplotlib.use("TkAgg")
 import matplotlib.pyplot as plt
 import datetime
 from pathlib import Path
 import numpy as np
 import zarr
 import tifffile
-from localize_psf import localize, fit_psf, fit
+from localize_psf.fit_psf import gaussian3d_psf_model, average_exp_psfs
+from localize_psf.fit import fit_model
+from localize_psf import localize
 
 # data path
 fname = Path(r"data") / "bead_data.zarr"
@@ -27,16 +26,16 @@ ni = 1.51
 
 # set filtering
 filter_sigma_small = None
-filter_sigma_large = (5., 3., 3.) # in um
-threshold = 2000 # only consider points above this value in max filter. Threshold is applied after filtering
-min_spot_sep = (1.0, 0.2) # in um. Regard spots closer than this as duplicates
+filter_sigma_large = (5., 3., 3.)  # in um
+threshold = 2000  # only consider points above this value in max filter. Threshold is applied after filtering
+min_spot_sep = (1.0, 0.2)  # in um. Regard spots closer than this as duplicates
 
 # set fit rejection thresholds
-amp_bounds = (1000., 10000.) # (min, max)
-sxy_bounds = (0.05, 0.5) # (min, max) um
-sz_bounds = (0.2, 0.5) # (min, max) um
-fit_distance_max_err = (2., 0.2) # (sz, sxy) um
-fit_roi_size = (1.75, 0.65, 0.65) # (sz, sy, sx) in um
+amp_bounds = (1000., 10000.)  # (min, max)
+sxy_bounds = (0.05, 0.5)  # (min, max) um
+sz_bounds = (0.2, 0.5)  # (min, max) um
+fit_distance_max_err = (2., 0.2)  # (sz, sxy) um
+fit_roi_size = (1.75, 0.65, 0.65)  # (sz, sy, sx) in um
 
 # ########################################
 # localization
@@ -62,7 +61,7 @@ coords_3d = localize.get_coords(img.shape, (dz, dxy, dxy))
 coords_2d = localize.get_coords(img.shape[1:], (dxy, dxy))
 
 # simple filter
-model = fit_psf.gaussian3d_psf_model()
+model = gaussian3d_psf_model()
 filter = localize.get_param_filter(coords_3d,
                                    fit_dist_max_err=fit_distance_max_err,
                                    min_spot_sep=min_spot_sep,
@@ -116,14 +115,16 @@ zf_fit = lsq_params[0] + lsq_params[1] * cx + lsq_params[2] * cy
 grad_mag = np.sqrt(lsq_params[1]**2 + lsq_params[2]**2)
 grad_angle = np.arctan2(lsq_params[2], lsq_params[1])
 
+
 # ###############################
 # fit field curvature after removing gradient
 # ###############################
 def curvature_model_fn(p):
     return p[2] * ((p[0] - cx)**2 + (p[1] - cy)**2)
-#
+
+
 init_params = np.array([np.mean(cx), np.mean(cy), 0])
-results = fit.fit_model(cz - zf_fit, curvature_model_fn, init_params)
+results = fit_model(cz - zf_fit, curvature_model_fn, init_params)
 fp_curve = results["fit_params"]
 
 # ###############################
@@ -195,11 +196,11 @@ figh_focus.savefig(save_dir / "focus_gradient_and_field_curvature.png")
 # average PSF
 # ###############################
 psf_roi_size = (11, 21, 21)
-psf = fit_psf.average_exp_psfs(img,
-                               coords_3d,
-                               centers,
-                               psf_roi_size,
-                               backgrounds=backgrounds)
+psf = average_exp_psfs(img,
+                       coords_3d,
+                       centers,
+                       psf_roi_size,
+                       backgrounds=backgrounds)
 
 tifffile.imwrite(save_dir / "psf.tif",
                  tifffile.transpose_axes(psf.astype(np.float32), "ZYX", asaxes="TZCYXS"),
