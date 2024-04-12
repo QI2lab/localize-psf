@@ -16,7 +16,7 @@ def roi2global(coords_roi: Union[Sequence[float], Sequence[int]],
     ROI(M)[c1, c2, ..., cn] = M[c1_full, c2_full, ..., cn_full]
     Inverse function of global2roi().
 
-    :param coords_roi: an ncenters x ndims array e.g.
+    :param coords_roi: ncenters x ndims array e.g.
       [[c1, c2, ..., cn], [...]]
     :param roi: a 2*ndims or ncenters x 2*ndims array e.g.
       [c1_start, c1_end, c2_start, c2_end, ..., cn_start, cn_end]
@@ -65,13 +65,10 @@ def get_centered_roi(centers: Union[Sequence[float], Sequence[int]],
                      min_vals: Optional[Sequence[int]] = None,
                      max_vals: Optional[Sequence[int]] = None):
     """
-    Get end points of an roi centered about centers (as close as possible) with length sizes.
+    Get end points of an ROI centered about centers (as close as possible) with length sizes.
     If the ROI size is odd, the ROI will be perfectly centered. Otherwise, the centering will
-    be approximation
-
-    roi = [start_0, end_0, start_1, end_1, ..., start_n, end_n]
-
-    Slicing an array as A[start_0:end_0, start_1:end_1, ...] gives the desired ROI.
+    be approximate. An ROI is NumPy array roi = [start_0, end_0, start_1, end_1, ..., start_n, end_n]
+    Which describes how to slice an array as A[start_0:end_0, start_1:end_1, ...].
     Note that following python array indexing convention end_i are NOT contained in the ROI
 
     :param centers: list of centers [c1, c2, ..., cn]
@@ -121,13 +118,10 @@ def get_centered_rois(centers: Union[np.ndarray[int], np.ndarray[float]],
                       min_vals: Optional[np.ndarray[int]] = None,
                       max_vals: Optional[np.ndarray[int]] = None) -> np.ndarray[int]:
     """
-    Get end points of an roi centered about centers (as close as possible) with length sizes.
+    Get end points of an ROI centered about centers (as close as possible) with length sizes.
     If the ROI size is odd, the ROI will be perfectly centered. Otherwise, the centering will
-    be approximation
-
-    roi = [start_0, end_0, start_1, end_1, ..., start_n, end_n]
-
-    Slicing an array as A[start_0:end_0, start_1:end_1, ...] gives the desired ROI.
+    be approximate. An ROI is NumPy array roi = [start_0, end_0, start_1, end_1, ..., start_n, end_n]
+    Which describes how to slice an array as A[start_0:end_0, start_1:end_1, ...].
     Note that following python array indexing convention end_i are NOT contained in the ROI
 
     :param centers: num_rois x ndims list of centers [[a0, a1, ..., an], [b0, b1, ..., bn], ...]
@@ -176,7 +170,6 @@ def get_centered_rois(centers: Union[np.ndarray[int], np.ndarray[float]],
     start = np.maximum(start, min_vals)
     end = np.minimum(end, max_vals)
 
-    # rois = np.stack((start, end), axis=-1).reshape((nroi, 2*ndim)).astype(int)
     rois = np.stack((start, end), axis=-1).astype(int).reshape(first_shape + (2 * ndim,))
 
     return rois
@@ -188,7 +181,6 @@ def cut_roi(rois: Sequence[int],
             use_numba: bool = False) -> list[np.ndarray]:
     """
     Return regions-of-interest from an array of arbitrary dimension.
-
     This function supports arrays that are broadcastable to the size of an appropriate array. i.e. if any
     dimension has length 1 then that dimensions will be left alone
 
@@ -238,7 +230,8 @@ def cut_roi(rois: Sequence[int],
             arrs = numba_fn_map[str(nroi_dim)](rois, arr)
         else:
             raise NotImplementedError(f"use_numba was True, but the requested ROI had {nroi_dim:d} dimensions."
-                                      f"numba acceleration is only supported for ROIs of {numba_fn_map.keys()} dimensions")
+                                      f"numba acceleration is only supported for ROIs of "
+                                      f"{numba_fn_map.keys()} dimensions")
     else:
         # note: cannot accelerate this with numba because don't know in advance how many dimensions we have
         arrs = []
@@ -249,7 +242,7 @@ def cut_roi(rois: Sequence[int],
             slices = [slice(0, arr.shape[ii]) for ii in range(arr.ndim)]
             # update whichever axes need updating
             for ii, ax in enumerate(axes):
-                # get slices, unless array has unit size over this dimension, and then we will assume is broadcasting ...
+                # get slices, unless array has unit size over this dimension, and then we will assume is broadcasting
                 if arr.shape[ax] == 1:
                     slices[int(ax)] = slice(0, 1)
                 else:

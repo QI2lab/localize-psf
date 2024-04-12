@@ -27,9 +27,15 @@ def get_rot_mat(rot_axis: Sequence[float],
         raise ValueError("rot_axis must be a unit vector")
 
     nx, ny, nz = rot_axis
-    mat = np.array([[nx**2 * (1 - np.cos(gamma)) + np.cos(gamma), nx * ny * (1 - np.cos(gamma)) - nz * np.sin(gamma), nx * nz * (1 - np.cos(gamma)) + ny * np.sin(gamma)],
-                    [nx * ny * (1 - np.cos(gamma)) + nz * np.sin(gamma), ny**2 * (1 - np.cos(gamma)) + np.cos(gamma), ny * nz * (1 - np.cos(gamma)) - nx * np.sin(gamma)],
-                    [nx * nz * (1 - np.cos(gamma)) - ny * np.sin(gamma), ny * nz * (1 - np.cos(gamma)) + nx * np.sin(gamma), nz**2 * (1 - np.cos(gamma)) + np.cos(gamma)]])
+    mat = np.array([[nx**2 * (1 - np.cos(gamma)) + np.cos(gamma),
+                     nx * ny * (1 - np.cos(gamma)) - nz * np.sin(gamma),
+                     nx * nz * (1 - np.cos(gamma)) + ny * np.sin(gamma)],
+                    [nx * ny * (1 - np.cos(gamma)) + nz * np.sin(gamma),
+                     ny**2 * (1 - np.cos(gamma)) + np.cos(gamma),
+                     ny * nz * (1 - np.cos(gamma)) - nx * np.sin(gamma)],
+                    [nx * nz * (1 - np.cos(gamma)) - ny * np.sin(gamma),
+                     ny * nz * (1 - np.cos(gamma)) + nx * np.sin(gamma),
+                     nz**2 * (1 - np.cos(gamma)) + np.cos(gamma)]])
     return mat
 
 

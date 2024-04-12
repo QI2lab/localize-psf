@@ -26,6 +26,7 @@ if cp:
 else:
     array = np.ndarray
 
+
 def xform2params(affine_mat: np.ndarray) -> np.ndarray:
     """
     Parametrize 2D affine transformation in terms of rotation angles, magnifications, and offsets.
@@ -157,7 +158,7 @@ def xform_mat(mat_obj: array,
 
     # get matrix in image space
     if mode == 'nearest':
-        # find closest point in image to each output point
+        # find the closest point in image to each output point
         inds = [tuple(xp.array(xp.round(oc[to_use]), dtype=int))
                 for oc in coords_obj_from_img]
         inds.reverse()
@@ -221,7 +222,7 @@ def xform_points(coords: array,
 
     ndims = coords.shape[-1]
     coords_in = xp.stack([coords[..., ii].ravel() for ii in range(ndims)] +
-                         [xp.ones((coords[..., 0].size))],
+                         [xp.ones(coords[..., 0].size)],
                          axis=0)
 
     # trim off homogeneous coordinate row and reshape
@@ -535,7 +536,6 @@ def fit_xform_points_ransac(from_pts: np.ndarray,
     :param njobs: passed through to joblib to set number of cores to use
     :param n_inliers_stop: stop iterating when find at least this many inliers
     :param translate_only: only fit the translation parameters in the affine transformation
-
     :result xform_best, inliers_best, err_best, vars_best:
     """
 
