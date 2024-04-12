@@ -5,6 +5,7 @@ Functions for estimating PSF's from images of fluorescent beads (z-stacks or sin
 experimental PSF's from the average of many beads and fitting 2D and 3D PSF models to beads.
 """
 from typing import Union, Optional
+from collections.abc import Sequence
 from warnings import warn, catch_warnings, simplefilter
 import numpy as np
 from scipy.ndimage import shift
@@ -83,6 +84,7 @@ def blur_img_psf(ground_truth: array,
     :param ground_truth:
     :param psf: point-spread function, must have same number of dimensions as ground_truth, but possibly
       different size. This array should be centered at coordinate (ny//2, nx//2).
+    :param apodization:
     :return blurred_img:
     """
 
@@ -125,15 +127,16 @@ def blur_img_psf(ground_truth: array,
 
 # tools for converting between different otf/psf representations
 def otf2psf(otf: array,
-            dfs: list[float] = 1,
+            dfs: Sequence[float] = 1,
             apodization: Optional[array] = None) -> (array, list[array]):
     """
     Compute the point-spread function from the optical transfer function
 
     :param otf: otf, as a 1D, 2D or 3D array. Assumes that f=0 is near the center of the array, and frequency are
-      arranged by the FFT convention
+     arranged by the FFT convention
     :param dfs: (dfz, dfy, dfx), (dfy, dfx), or (dfx). If only a single number is provided, will assume these are the
-      same
+     same
+    :param apodization:
     :return psf, coords: where coords = (z, y, x)
     """
 
@@ -163,7 +166,7 @@ def otf2psf(otf: array,
 
 
 def psf2otf(psf: array,
-            drs: list[float] = 1,
+            drs: Sequence[float] = 1,
             apodization: Optional[array] = None) -> (array, list[array]):
     """
     Compute the optical transfer function from the point-spread function
@@ -171,6 +174,7 @@ def psf2otf(psf: array,
     :param psf: psf, as a 1D, 2D or 3D array. Assumes that r=0 is near the center of the array, and positions
       are arranged by the FFT convention
     :param drs: (dz, dy, dx), (dy, dx), or (dx). If only a single number is provided, will assume these are the same
+    :param apodization:
     :return otf, coords: where coords = (fz, fy, fx)
     """
 
@@ -372,10 +376,10 @@ def sxy2na(wavelength: float,
 
 
 # pixel grid utility functions
-def oversample_pixel(coords: tuple[np.ndarray, np.ndarray, np.ndarray],
+def oversample_pixel(coords: Sequence[np.ndarray, np.ndarray, np.ndarray],
                      ds: float,
                      sf: int,
-                     euler_angles: tuple[float] = (0., 0., 0.)) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+                     euler_angles: Sequence[float] = (0., 0., 0.)) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """
     Generate coordinates to oversample a pixel on a 2D grid.
 
@@ -428,8 +432,8 @@ def oversample_pixel(coords: tuple[np.ndarray, np.ndarray, np.ndarray],
     return (zz_s, yy_s, xx_s)
 
 
-def oversample_voxel(coords: tuple[np.ndarray],
-                     drs: tuple[float],
+def oversample_voxel(coords: Sequence[np.ndarray],
+                     drs: Sequence[float],
                      sf: int = 3,
                      expand_along_extra_dim: bool = True
                      ):
@@ -464,14 +468,15 @@ def oversample_voxel(coords: tuple[np.ndarray],
     return coords_upsample
 
 
-def get_psf_coords(ns: list[int],
-                   drs: list[float],
+def get_psf_coords(ns: Sequence[int],
+                   drs: Sequence[float],
                    broadcast: bool = False) -> list[np.ndarray]:
     """
     Get centered coordinates for PSFmodels style PSF's from step size and number of coordinates
 
     :param ns: (s0, s1, ...) number of pixels for each dimension
     :param drs: (dx0, dx1, dx2, ...) voxel size along each dimension
+    :param broadcast:
     :return coords: list of coordinates [c0, c1, c2, ...]
     """
     ndims = len(drs)
@@ -487,9 +492,9 @@ def get_psf_coords(ns: list[int],
 
 
 def average_exp_psfs(imgs: np.ndarray,
-                     coords: tuple[np.ndarray],
+                     coords: Sequence[np.ndarray, np.ndarray, np.ndarray],
                      centers: np.ndarray,
-                     roi_sizes: tuple[int],
+                     roi_sizes: Sequence[int, int, int],
                      backgrounds: Optional[np.ndarray] = None) -> np.ndarray:
     """
     Get experimental psf from imgs by averaging many localizations (after pixel shifting).
@@ -524,16 +529,16 @@ def average_exp_psfs(imgs: np.ndarray,
 
     # loop over rois and shift psfs so they are centered
     for ii in range(nrois):
-        # get closest pixels to center
+        # get the closest pixels to center
         xc_pix = np.argmin(np.abs(x - centers[ii, 2]))
         yc_pix = np.argmin(np.abs(y - centers[ii, 1]))
         zc_pix = np.argmin(np.abs(z - centers[ii, 0]))
 
         # cut roi from image
         roi = get_centered_rois((zc_pix, yc_pix, xc_pix),
-                                    roi_sizes,
-                                    min_vals=[0, 0, 0],
-                                    max_vals=imgs.shape)[0]
+                                roi_sizes,
+                                min_vals=[0, 0, 0],
+                                max_vals=imgs.shape)[0]
         img_roi = cut_roi(roi, imgs)[0]
 
         zroi = cut_roi(roi, z)[0]
@@ -581,10 +586,10 @@ def average_exp_psfs(imgs: np.ndarray,
 class pixelated_psf_model(coordinate_model):
 
     def __init__(self,
-                 param_names: list[str],
+                 param_names: Sequence[str],
                  dc: Optional[float] = None,
                  sf: int = 1,
-                 angles: tuple[float] = (0., 0., 0.),
+                 angles: Sequence[float, float, float] = (0., 0., 0.),
                  has_jacobian: bool = False,
                  ndims: int = 3
                  ):
@@ -622,7 +627,7 @@ class from_coordinate_model(pixelated_psf_model):
                  model: coordinate_model,
                  dc: Optional[float] = None,
                  sf: int = 1,
-                 angles: tuple[float] = (0., 0., 0.)
+                 angles: Sequence[float, float, float] = (0., 0., 0.)
                  ):
 
         param_names = model.parameter_names
@@ -647,7 +652,7 @@ class from_coordinate_model(pixelated_psf_model):
                 setattr(self, k, v)
 
     def model(self,
-              coordinates: tuple[np.ndarray],
+              coordinates: Sequence[np.ndarray],
               parameters: np.ndarray) -> np.ndarray:
 
         # oversample points in pixel
@@ -660,9 +665,8 @@ class from_coordinate_model(pixelated_psf_model):
 
         return psf
 
-
     def jacobian(self,
-                 coordinates: tuple[np.ndarray],
+                 coordinates: Sequence[np.ndarray],
                  parameters: np.ndarray) -> list[np.ndarray]:
 
         # oversample points in pixel
@@ -674,21 +678,18 @@ class from_coordinate_model(pixelated_psf_model):
 
         return jac
 
-
     def estimate_parameters(self,
                             data: np.ndarray,
-                            coordinates: tuple[np.ndarray],
+                            coordinates: Sequence[np.ndarray],
                             num_preserved_dims: int = 0):
         return self.coord_model.estimate_parameters(data, coordinates, num_preserved_dims)
 
-
     def estimate_bounds(self,
-                        coordinates: tuple[np.ndarray]) -> (tuple[float], tuple[float]):
+                        coordinates: Sequence[np.ndarray]) -> (tuple[float], tuple[float]):
         return self.coord_model.estimate_bounds(coordinates)
 
-
     def normalize_parameters(self,
-                             parameters) -> np.ndarray:
+                             parameters: np.ndarray) -> np.ndarray:
         return self.coord_model.normalize_parameters(parameters)
 
 
@@ -710,8 +711,8 @@ class gaussian3d_psf_model(from_coordinate_model):
     def __init__(self,
                  dc: Optional[float] = None,
                  sf: int = 1,
-                 angles: tuple[float] = (0., 0., 0.),
-                 minimum_sigmas: tuple[float] = (0., 0.)
+                 angles: Sequence[float, float, float] = (0., 0., 0.),
+                 minimum_sigmas: Sequence[float, float] = (0., 0.)
                  ):
 
         super().__init__(gauss3d(minimum_sigmas=minimum_sigmas), dc=dc, sf=sf, angles=angles)
@@ -724,8 +725,8 @@ class gaussian3d_asymmetric_pixelated(from_coordinate_model):
     def __init__(self,
                  dc: Optional[float] = None,
                  sf: int = 1,
-                 angles: tuple[float] = (0., 0., 0.),
-                 minimum_sigmas: tuple[float] = (0., 0., 0.)
+                 angles: Sequence[float, float, float] = (0., 0., 0.),
+                 minimum_sigmas: Sequence[float, float, float] = (0., 0., 0.)
                  ):
 
         super().__init__(gauss3d_asymmetric(minimum_sigmas=minimum_sigmas), dc=dc, sf=sf, angles=angles)
@@ -738,8 +739,8 @@ class gaussian3d_rotated_pixelated(from_coordinate_model):
     def __init__(self,
                  dc: Optional[float] = None,
                  sf: int = 1,
-                 angles: tuple[float] = (0., 0., 0.),
-                 minimum_sigmas: tuple[float] = (0., 0.)
+                 angles: Sequence[float, float, float] = (0., 0., 0.),
+                 minimum_sigmas: Sequence[float, float] = (0., 0.)
                  ):
 
         g3d = gauss3d(minimum_sigmas=minimum_sigmas)
@@ -756,8 +757,8 @@ class gaussian3d_asymmetric_rotated_pixelated(from_coordinate_model):
     def __init__(self,
                  dc: Optional[float] = None,
                  sf: int = 1,
-                 angles: tuple[float] = (0., 0., 0.),
-                 minimum_sigmas: tuple[float] = (0., 0., 0.)
+                 angles: Sequence[float, float, float] = (0., 0., 0.),
+                 minimum_sigmas: Sequence[float, float, float] = (0., 0., 0.)
                  ):
         model_rotated = rotated_model_3d(gauss3d_asymmetric(minimum_sigmas=minimum_sigmas), (3, 2, 1))
 
@@ -775,13 +776,19 @@ class gaussian2d_psf_model(pixelated_psf_model):
     def __init__(self,
                  dc: Optional[float] = None,
                  sf: int = 1,
-                 angles: tuple[float] = (0., 0., 0.)):
+                 angles: Sequence[float, float, float] = (0., 0., 0.)):
         super().__init__(["A", "cx", "cy", "sxy", "bg"],
-                         dc=dc, sf=sf, angles=angles, has_jacobian=True, ndims=2)
+                         dc=dc,
+                         sf=sf,
+                         angles=angles,
+                         has_jacobian=True,
+                         ndims=2)
 
         self.gauss3d = gaussian3d_psf_model(dc=dc, sf=sf, angles=angles)
 
-    def model(self, coords: tuple[np.ndarray], params: np.ndarray):
+    def model(self,
+              coords: Sequence[np.ndarray, np.ndarray],
+              params: np.ndarray):
         """
 
         :param coords: [amplitude, cx, cy, sxy, bg]
@@ -796,7 +803,9 @@ class gaussian2d_psf_model(pixelated_psf_model):
 
         return self.gauss3d.model((z, y, x), p3d)
 
-    def jacobian(self, coords: tuple[np.ndarray], params: np.ndarray):
+    def jacobian(self,
+                 coords: Sequence[np.ndarray, np.ndarray],
+                 params: np.ndarray):
         y, x = coords
         bcast_shape = np.broadcast_shapes(y.shape, x.shape)
         z = np.zeros(bcast_shape)
@@ -811,9 +820,8 @@ class gaussian2d_psf_model(pixelated_psf_model):
 
     def estimate_parameters(self,
                             img: np.ndarray,
-                            coords: tuple[np.ndarray],
+                            coords: Sequence[np.ndarray, np.ndarray],
                             num_preserved_dims: int = 0):
-
 
         if num_preserved_dims != 0:
             raise NotImplementedError()
@@ -831,7 +839,7 @@ class gaussian2d_psf_model(pixelated_psf_model):
                              )
         return self.normalize_parameters(p2d)
 
-    def normalize_parameters(self, params):
+    def normalize_parameters(self, params: np.ndarray):
         norm_params = np.array(params, copy=True)
         norm_params[..., 3] = np.abs(norm_params[..., 3])
         return norm_params
@@ -843,11 +851,20 @@ class gaussian_lorentzian_psf_model(pixelated_psf_model):
     as we expect it should be. The Gaussian-Lorentzian form remedies this, but the functional form
     is no longer separable
     """
-    def __init__(self, dc=None, sf=1, angles=(0., 0., 0.)):
+    def __init__(self,
+                 dc: Optional[float] = None,
+                 sf: int = 1,
+                 angles: Sequence[float, float, float] = (0., 0., 0.)):
         super().__init__(["A", "cx", "cy", "cz", "sxy", "hwhm_z", "bg"],
-                         dc=dc, sf=sf, angles=angles, has_jacobian=True, ndims=3)
+                         dc=dc,
+                         sf=sf,
+                         angles=angles,
+                         has_jacobian=True,
+                         ndims=3)
 
-    def model(self, coords, p):
+    def model(self,
+              coords: Sequence[np.ndarray],
+              p: np.ndarray):
         # oversample points in pixel
         coordinates_over = oversample_pixel(coords, self.dc, sf=self.sf, euler_angles=self.angles)
         zz_s, yy_s, xx_s = coordinates_over
@@ -861,7 +878,9 @@ class gaussian_lorentzian_psf_model(pixelated_psf_model):
 
         return psf
 
-    def jacobian(self, coords, p):
+    def jacobian(self,
+                 coords: Sequence[np.ndarray],
+                 p: np.ndarray):
         z, y, x = coords
 
         # oversample points in pixel
@@ -888,7 +907,7 @@ class gaussian_lorentzian_psf_model(pixelated_psf_model):
 
     def estimate_parameters(self,
                             img: np.ndarray,
-                            coords: tuple[np.ndarray],
+                            coords: Sequence[np.ndarray],
                             num_preserved_dims: int = 0):
 
         if num_preserved_dims != 0:
@@ -923,7 +942,7 @@ class gaussian_lorentzian_psf_model(pixelated_psf_model):
 
         return self.normalize_parameters(guess_params)
 
-    def normalize_parameters(self, params):
+    def normalize_parameters(self, params: np.ndarray):
         norm_params = np.array(params, copy=True)
         norm_params[..., 4] = np.abs(norm_params[..., 4])
         norm_params[..., 5] = np.abs(norm_params[..., 5])
@@ -933,14 +952,14 @@ class gaussian_lorentzian_psf_model(pixelated_psf_model):
 class born_wolf_psf_model(pixelated_psf_model):
     """
     Born-wolf PSF function evaluated using Airy function if in-focus, and axial function if along the axis.
-    Otherwise evaluated using numerical integration.
+    Otherwise, evaluated using numerical integration.
     """
     def __init__(self,
                  wavelength: float,
                  ni: float,
                  dc: Optional[float] = None,
                  sf: int = 1,
-                 angles: tuple[float] = (0., 0., 0.)):
+                 angles: Sequence[float] = (0., 0., 0.)):
         """
 
         :param wavelength:
@@ -957,15 +976,19 @@ class born_wolf_psf_model(pixelated_psf_model):
             raise NotImplementedError("Only implemented for sf=1")
 
         super().__init__(["A", "cx", "cy", "cz", "na", "bg"],
-                         dc=dc, sf=sf, angles=angles, has_jacobian=False, ndims=3)
+                         dc=dc,
+                         sf=sf,
+                         angles=angles,
+                         has_jacobian=False,
+                         ndims=3)
 
-    def model(self, coords: tuple[np.ndarray], p: np.ndarray):
+    def model(self,
+              coords: Sequence[np.ndarray, np.ndarray, np.ndarray],
+              p: np.ndarray):
         """
 
         :param coords:
         :param p:
-        :param wavelength:
-        :param ni:
         :return:
         """
         z, y, x = coords
@@ -1011,7 +1034,8 @@ class born_wolf_psf_model(pixelated_psf_model):
         if not np.all(is_in_focus):
 
             def integrand(rho, r, z):
-                return rho * j0(k * r * p[4] * rho) * np.exp(-1j * k * (z - p[3]) * p[4] ** 2 * rho ** 2 / (2 * self.ni))
+                return (rho * j0(k * r * p[4] * rho) *
+                        np.exp(-1j * k * (z - p[3]) * p[4] ** 2 * rho ** 2 / (2 * self.ni)))
 
             # like this approach because allows rr, z, etc. to have arbitrary dimension
             already_evaluated = np.logical_or(is_in_focus, is_in_focus)
@@ -1027,10 +1051,9 @@ class born_wolf_psf_model(pixelated_psf_model):
 
         return psfs
 
-
     def estimate_parameters(self,
                             img: np.ndarray,
-                            coords: tuple[np.ndarray],
+                            coords: Sequence[np.ndarray, np.ndarray, np.ndarray],
                             num_preserved_dims: int = 0):
 
         if num_preserved_dims != 0:
@@ -1052,7 +1075,7 @@ class born_wolf_psf_model(pixelated_psf_model):
 
 class gridded_psf_model(pixelated_psf_model):
     """
-    Wrapper function for evaluating different PSF models which are constrained to be on gridded coordinates. Therefore
+    Wrapper function for evaluating different PSF models which are constrained to be on gridded coordinates. Therefore,
     only grid parameters (i.e. nx and dxy) are provided and not the actual coordinates.
     The real coordinates can be obtained using get_psf_coords().
 
@@ -1076,7 +1099,7 @@ class gridded_psf_model(pixelated_psf_model):
                  model_name: str = "vectorial",
                  dc: Optional[float] = None,
                  sf: int = 1,
-                 angles: tuple[float] = (0., 0., 0.)):
+                 angles: Sequence[float, float, float] = (0., 0., 0.)):
         """
 
         :param wavelength:
@@ -1105,8 +1128,9 @@ class gridded_psf_model(pixelated_psf_model):
                          dc=dc, sf=sf, angles=angles, has_jacobian=False, ndims=3)
 
     def model(self,
-              coords: tuple[np.ndarray],
-              p: np.ndarray, **kwargs):
+              coords: Sequence[np.ndarray, np.ndarray, np.ndarray],
+              p: np.ndarray,
+              **kwargs):
         """
         Unlike other model functions this ONLY works if coords are of the same style as obtained from
         get_psf_coords()
@@ -1136,17 +1160,21 @@ class gridded_psf_model(pixelated_psf_model):
                 raise ValueError("only nx=ny is supported")
 
             if ny % 2 == 0 and self.sf != 1:
-                raise ValueError(f"psfmodel model has even sizes ({ny:d}, {nx:d}), but this is not compatible with sf != 1")
+                raise ValueError(f"psfmodel model has even sizes ({ny:d}, {nx:d}), "
+                                 f"but this is not compatible with sf != 1")
 
             psf_norm = psfm.vectorial_psf(0, 1, dxy, wvl=self.wavelength, params=model_params, normalize=False)
             val = psfm.vectorial_psf(z - p[3], nx, dxy, wvl=self.wavelength, params=model_params, normalize=False)
 
-            # add 1 to correct centering, since PSFmodels naturally centered at (n-1)//2, but coordinates centered at n//2
+            # correct centering, since PSFmodels naturally centered at (n-1)//2, but coordinates centered at n//2
             if ny % 2 == 0:
                 correction = 1
             else:
                 correction = 0
-            val = p[0] / psf_norm * shift(val, [0, p[2] / dxy + correction, p[1] / dxy + correction], mode='nearest') + p[5]
+            val = p[0] / psf_norm * shift(val,
+                                          [0, p[2] / dxy + correction,
+                                                p[1] / dxy + correction],
+                                          mode='nearest') + p[5]
 
         elif self.model_name == 'gibson-lanni':
             if nx != ny:
@@ -1158,15 +1186,22 @@ class gridded_psf_model(pixelated_psf_model):
 
             psf_norm = psfm.scalar_psf(0, 1, dxy, wvl=self.wavelength, params=model_params, normalize=False)
             val = psfm.scalar_psf(z - p[3], nx, dxy, wvl=self.wavelength, params=model_params, normalize=False)
-            # add 1 to correct centering, since PSFmodels naturally centered at (n-1)//2, but coordinates centered at n//2
+            # correct centering, since PSFmodels naturally centered at (n-1)//2, but coordinates centered at n//2
             if ny % 2 == 0:
                 correction = 1
             else:
                 correction = 0
-            val = p[0] / psf_norm * shift(val, [0, p[2] / dxy + correction, p[1] / dxy + correction], mode='nearest') + p[5]
+            val = p[0] / psf_norm * shift(val,
+                                          [0, p[2] / dxy + correction,
+                                           p[1] / dxy + correction],
+                                          mode='nearest') + p[5]
 
         elif self.model_name == "born-wolf":
-            bw_model = born_wolf_psf_model(wavelength=self.wavelength, ni=self.ni, dc=self.dc, sf=self.sf, angles=self.angles)
+            bw_model = born_wolf_psf_model(wavelength=self.wavelength,
+                                           ni=self.ni,
+                                           dc=self.dc,
+                                           sf=self.sf,
+                                           angles=self.angles)
             val = bw_model.model(coords, p)
 
         elif self.model_name == 'gaussian':
@@ -1175,7 +1210,9 @@ class gridded_psf_model(pixelated_psf_model):
                        np.sqrt(6) / np.pi * self.ni * self.wavelength / p[4] ** 2,
                        p[5]]
 
-            gauss_model = gaussian3d_psf_model(dc=self.dc, sf=self.sf, angles=self.angles)
+            gauss_model = gaussian3d_psf_model(dc=self.dc,
+                                               sf=self.sf,
+                                               angles=self.angles)
 
             # normalize so that amplitude parameter is actually amplitude
             psf_norm = gauss_model.model((p[3], p[2], p[1]), p_gauss) - p[5]
@@ -1188,7 +1225,7 @@ class gridded_psf_model(pixelated_psf_model):
 
     def estimate_parameters(self,
                             img: np.ndarray,
-                            coords: tuple[np.ndarray],
+                            coords: Sequence[np.ndarray],
                             num_preserved_dims: int = 0):
 
         if num_preserved_dims != 0:

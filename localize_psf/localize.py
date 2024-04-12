@@ -6,7 +6,7 @@ to GPUfit which can be found at https://github.com/QI2lab/Gpufit. To use the GPU
 compile this repository and install the python bindings.
 """
 from typing import Union, Optional
-from collections.abc import Sequence
+from collections.abc import Sequence, Callable
 from pathlib import Path
 import time
 from warnings import warn, catch_warnings, filterwarnings
@@ -657,7 +657,7 @@ def localize3d(img: np.ndarray,
 
 # @profile
 def fit_rois(img_rois: np.ndarray,
-             coords_rois: tuple[np.ndarray, np.ndarray, np.ndarray],
+             coords_rois: Sequence[np.ndarray, np.ndarray, np.ndarray],
              roi_sizes: np.ndarray[int],
              init_params: np.ndarray,
              max_number_iterations: int = 100,
@@ -842,10 +842,10 @@ def fit_rois(img_rois: np.ndarray,
     return fit_results
 
 
-def plot_fit_roi(fit_params: list[float],
-                 roi: list[int],
+def plot_fit_roi(fit_params: Sequence[float],
+                 roi: Sequence[int],
                  imgs: np.ndarray,
-                 coords: Optional[tuple[np.ndarray]] = None,
+                 coords: Optional[Sequence[np.ndarray]] = None,
                  init_params: Optional[np.ndarray] = None,
                  model: psf.pixelated_psf_model = psf.gaussian3d_psf_model(),
                  string: Optional[str] = None,
@@ -855,9 +855,9 @@ def plot_fit_roi(fit_params: list[float],
                  cmap="bone",
                  gamma: float = 1.,
                  scale_z_display: float = 1.,
-                 figsize: tuple[float] = (16, 8),
+                 figsize: Sequence[float, float] = (16., 8.),
                  prefix: str = "",
-                 save_dir: Optional[str] = None):
+                 save_dir: Optional[Union[str, Path]] = None):
     """
     Plot results obtained from fitting functions fit_gauss_roi() or fit_gauss_rois()
 
@@ -1089,13 +1089,18 @@ def plot_fit_roi(fit_params: list[float],
 # filter fit parameters
 class filter:
     """
-    Filter fit results to identfy "good" and "bad" fits
+    Filter fit results to identify "good" and "bad" fits
     """
-    def __init__(self, fn, condition_names):
+    def __init__(self,
+                 fn: Callable,
+                 condition_names: Sequence[str]):
         self._fn = fn
         self.condition_names = condition_names
 
-    def filter(self, fit_params, *args, **kwargs):
+    def filter(self,
+               fit_params: np.ndarray,
+               *args,
+               **kwargs):
         """
         Filter function requis parameters and can optionally accept other arguments, e.g. to
         to compare fit_params with initial parameters or etc. Filter functions are free to ignore all
@@ -1191,7 +1196,10 @@ class range_filter(filter):
         self.index = index
         self.condition_names = [f"{name:s} too small", f"{name:s} too large"]
 
-    def filter(self, fit_params, *args, **kwargs):
+    def filter(self,
+               fit_params: np.ndarray,
+               *args,
+               **kwargs):
         conditions = np.stack((fit_params[:, self.index] >= self.low,
                                fit_params[:, self.index] <= self.high), axis=1)
 
@@ -1203,13 +1211,21 @@ class proximity_filter(filter):
     Filter spots based on proximity to some other array. e.g. based on the distance from the initial guess position
     to the final fit position
     """
-    def __init__(self, indices, min_dist, max_dist, name):
+    def __init__(self,
+                 indices: Sequence[int],
+                 min_dist: float,
+                 max_dist: float,
+                 name: str):
         self.indices = tuple(indices)
         self.min_dist = min_dist
         self.max_dist = max_dist
         self.condition_names = [f"{name:s} deviation too small", f"{name:s} deviation too large"]
 
-    def filter(self, fit_params, ref_params, *args, **kwargs):
+    def filter(self,
+               fit_params: np.ndarray,
+               ref_params: np.ndarray,
+               *args,
+               **kwargs):
         dists = np.linalg.norm(ref_params[:, self.indices] - fit_params[:, self.indices], axis=1)
         conditions = np.stack((dists >= self.min_dist, dists <= self.max_dist), axis=1)
 
@@ -1223,8 +1239,8 @@ class unique_filter(filter):
     def __init__(self,
                  dxy_min_dist: float,
                  dz_min_dist: float,
-                 name="not unique",
-                 center_indices: tuple[int] = (3, 2, 1)):
+                 name: str = "not unique",
+                 center_indices: Sequence[int, int, int] = (3, 2, 1)):
         """
 
         :param dxy_min_dist:
@@ -1238,7 +1254,10 @@ class unique_filter(filter):
         self.center_indices = center_indices
         self.condition_names = [f"{name:s}"]
 
-    def filter(self, fit_params, *args, **kwargs):
+    def filter(self,
+               fit_params: np.ndarray,
+               *args,
+               **kwargs):
         """
 
         :param fit_params: we assume that cx = fit_params[:, 1], cy = fit_params[:, 2], cz = fit_params[:, 3]
@@ -1259,7 +1278,7 @@ class unique_filter(filter):
 def get_param_filter(coords: Sequence[np.ndarray],
                      fit_dist_max_err: Sequence[float] = (np.inf, np.inf),
                      min_spot_sep: Sequence[float] = (0., 0.),
-                     sigma_bounds: tuple[Sequence[float], Sequence[float]] = ((0., 0.), (np.inf, np.inf)),
+                     sigma_bounds: Sequence[Sequence[float], Sequence[float]] = ((0., 0.), (np.inf, np.inf)),
                      amp_bounds: Sequence[float] = (0., np.inf),
                      dist_boundary_min: Sequence[float] = (0., 0.)) -> filter:
     """
@@ -1313,10 +1332,10 @@ def get_param_filter(coords: Sequence[np.ndarray],
 
 
 def get_param_filter_model(model: psf.pixelated_psf_model,
-                           fit_dist_max_err: Sequence[float],
-                           min_spot_sep: Sequence[float] = (0, 0),
+                           fit_dist_max_err: Sequence[float, float],
+                           min_spot_sep: Sequence[float, float] = (0., 0.),
                            param_bounds: Optional[tuple[Sequence[float], Sequence[float]]] = None,
-                           center_param_inds: tuple[int] = (3, 2, 1),
+                           center_param_inds: tuple[int, int, int] = (3, 2, 1),
                            ) -> filter:
     """
     Simple composite filter testing bounds of fit parameters
@@ -1361,8 +1380,8 @@ def filter_localizations(fit_params: np.ndarray,
                          min_spot_sep: Sequence[float],
                          sigma_bounds: tuple[Sequence[float], Sequence[float]],
                          amp_min: float = 0,
-                         dist_boundary_min: Sequence[float] = (0, 0),
-                         sigma_ratios_bounds: Sequence[float] = (1.0, 4.0),
+                         dist_boundary_min: Sequence[float, float] = (0., 0.),
+                         sigma_ratios_bounds: Sequence[float, float] = (1.0, 4.0),
                          return_values: bool = False):
     """
     Given a list of fit parameters, return boolean arrays indicating which fits pass/fail given a variety
@@ -1492,12 +1511,12 @@ def filter_localizations(fit_params: np.ndarray,
 
 # @profile
 def localize_beads_generic(imgs: np.ndarray,
-                           drs: tuple[float],
+                           drs: Sequence[float, float, float],
                            threshold: float,
-                           roi_size: Sequence[float] = (4., 2., 2.),
+                           roi_size: Sequence[float, float, float] = (4., 2., 2.),
                            filter_sigma_small: Optional[Sequence[float]] = None,
                            filter_sigma_large: Optional[Sequence[float]] = None,
-                           min_spot_sep: Sequence[float] = (0., 0.),
+                           min_spot_sep: Sequence[float, float] = (0., 0.),
                            filter: Optional[filter] = None,
                            mask: Optional[np.ndarray] = None,
                            average_duplicates_before_fit: bool = True,
@@ -1803,14 +1822,14 @@ def localize_beads(imgs: np.ndarray,
                    dxy: float,
                    dz: float,
                    threshold: float,
-                   roi_size: tuple[float] = (4, 2, 2),
-                   filter_sigma_small: tuple[float] = (1, 0.1, 0.1),
-                   filter_sigma_large: tuple[float] = (10, 5, 5),
-                   min_spot_sep: tuple[float] = (0, 0),
-                   sigma_bounds: tuple[tuple[float], tuple[float]] = ((0, 0), (np.inf, np.inf)),
+                   roi_size: Sequence[float, float, float] = (4, 2, 2),
+                   filter_sigma_small: Sequence[float, float, float] = (1, 0.1, 0.1),
+                   filter_sigma_large: Sequence[float, float, float] = (10, 5, 5),
+                   min_spot_sep: Sequence[float, float] = (0, 0),
+                   sigma_bounds: Sequence[Sequence[float], Sequence[float]] = ((0, 0), (np.inf, np.inf)),
                    fit_amp_min: float = 0,
-                   fit_dist_max_err: tuple[float] = (np.inf, np.inf),
-                   dist_boundary_min: tuple[float] = (0, 0),
+                   fit_dist_max_err: Sequence[float, float] = (np.inf, np.inf),
+                   dist_boundary_min: Sequence[float, float] = (0, 0),
                    max_nfit_iterations: int = 100,
                    fit_filtered_images: bool = False,
                    use_gpu_fit: bool = _gpufit_available,
@@ -1853,15 +1872,15 @@ def localize_beads(imgs: np.ndarray,
 
 
 def plot_bead_locations(imgs: np.ndarray,
-                        center_lists: list[np.ndarray],
+                        center_lists: Sequence[np.ndarray],
                         title: str = "",
-                        color_lists: Optional[list[str]] = None,
-                        color_limits: Optional[list[list[float]]] = None,
-                        legend_labels: Optional[list[str]] = None,
-                        weights: Optional[list[np.ndarray]] = None,
-                        cbar_labels: Optional[list[str]] = None,
-                        coords: Optional[list] = None,
-                        vlims_percentile: tuple[float] = (0.01, 99.99),
+                        color_lists: Optional[Sequence[str]] = None,
+                        color_limits: Optional[Sequence[Sequence[float]]] = None,
+                        legend_labels: Optional[Sequence[str]] = None,
+                        weights: Optional[Sequence[np.ndarray]] = None,
+                        cbar_labels: Optional[Sequence[str]] = None,
+                        coords: Optional[Sequence] = None,
+                        vlims_percentile: Sequence[float, float] = (0.01, 99.99),
                         gamma: float = 1,
                         axes = None,
                         **kwargs):
@@ -2000,23 +2019,23 @@ def plot_bead_locations(imgs: np.ndarray,
 
 
 def autofit_psfs(imgs: np.ndarray,
-                 psf_roi_size: list[float],
+                 psf_roi_size: Sequence[float, float, float],
                  dxy: float,
                  dz: float,
                  summary_model: psf.pixelated_psf_model = psf.gridded_psf_model(wavelength=0.532, ni=1.5, model_name="gaussian"),
                  threshold: float = 100.,
-                 min_spot_sep: tuple[float] = (0., 0.),
-                 filter_sigma_small: tuple[float] = (1, 0.5, 0.5),
-                 filter_sigma_large: tuple[float] = (3, 5, 5),
-                 sigma_bounds: tuple[tuple[float]] = ((0., 0.), (np.inf, np.inf)),
-                 amp_bounds: tuple[float] = (0, np.inf),
-                 roi_size_loc=(2, 3, 3),
-                 dist_boundary_min: tuple[float] = (0., 0.),
+                 min_spot_sep: Sequence[float, float] = (0., 0.),
+                 filter_sigma_small: Sequence[float, float, float] = (1, 0.5, 0.5),
+                 filter_sigma_large: Sequence[float, float, float] = (3, 5, 5),
+                 sigma_bounds: Sequence[Sequence[float, float], Sequence[float, float]] = ((0., 0.), (np.inf, np.inf)),
+                 amp_bounds: Sequence[float, float] = (0., np.inf),
+                 roi_size_loc: Sequence[float, float, float] = (2, 3, 3),
+                 dist_boundary_min: Sequence[float, float] = (0., 0.),
                  localization_model: psf.pixelated_psf_model = psf.gaussian3d_psf_model(),
                  max_number_iterations: int = 100,
-                 fit_dist_max_err: tuple[float] = (np.inf, np.inf),
+                 fit_dist_max_err: Sequence[float, float] = (np.inf, np.inf),
                  num_localizations_to_plot: int = 5,
-                 psf_percentiles: tuple[float] = (5,),
+                 psf_percentiles: Sequence[float] = (5,),
                  plot_results: bool = True,
                  only_plot_good_fits: bool = True,
                  plot_filtered_image: bool = False,
@@ -2024,8 +2043,8 @@ def autofit_psfs(imgs: np.ndarray,
                  use_gpu_fit: bool = False,
                  verbose: bool = False,
                  gamma: float = 0.5,
-                 save_dir: Optional[str] = None,
-                 figsize: tuple[float] = (18, 10),
+                 save_dir: Optional[str, Path] = None,
+                 figsize: Sequence[float, float] = (18., 10.),
                  **kwargs) -> dict:
     """
     Given a 2D or 3D image, identify and localize diffraction limited spots. Aggregate the results to create

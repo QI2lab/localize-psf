@@ -1,11 +1,9 @@
 """
-Tools for fitting data using non-linear least squares. The recommended way to do this is to sub-class coordinate_model(),
-which keeps track of the jacobian, parameter names, parameter estimation, etc. For one-off fitting use fit_model().
-Various commonly used fit functions are collected here, primarily 1D, 2D, and 3D gaussians allowing for
-arbitrary rotations.
-
-All functions rely on fit_least_squares() which is a wrapper for scipy.optimize.least_squares()
-which additionally handles fixing parameters and calculating standard uncertainties.
+Tools for fitting data using non-linear least squares. The recommended way to do this is to sub-class
+coordinate_model(), which keeps track of the jacobian, parameter names, parameter estimation, etc.
+For one-off fitting use fit_model(). Various commonly used fit functions are collected here, primarily 1D, 2D, and 3D
+gaussians allowing for arbitrary rotations. All functions rely on fit_least_squares() which is a wrapper for
+scipy.optimize.least_squares() which additionally handles fixing parameters and calculating standard uncertainties.
 """
 from typing import Optional
 from collections.abc import Sequence
@@ -14,7 +12,7 @@ from scipy.optimize import least_squares
 from localize_psf.rotation import euler_mat_inv, euler_mat_inv_derivatives
 
 
-class coordinate_model():
+class coordinate_model:
     """
     Basic model for dealing with functions of coordinates. Coordinates are given as tuples (c0, c1, ..., cn)
     e.g. for 3D models (z, y, x) where ci are broadcastable to the same shape. m-dimensional models
@@ -47,15 +45,13 @@ class coordinate_model():
         self.has_jacobian = has_jacobian
         self.is_complex = is_complex
 
-
     def model(self,
-              coordinates: tuple[np.ndarray],
+              coordinates: Sequence[np.ndarray],
               parameters: np.ndarray) -> np.ndarray:
         pass
 
-
     def jacobian(self,
-                 coordinates: tuple[np.ndarray],
+                 coordinates: Sequence[np.ndarray],
                  parameters: np.ndarray) -> list[np.ndarray]:
         """
         Return the jacobian matrix of the model evaluated at the given coordinates and parameters
@@ -63,13 +59,12 @@ class coordinate_model():
         :param coordinates: (..., z, y, x) where all coordinate arrays must be broadcastable with each other
         :param parameters:
         :return jacobian: a list of ndarrays, where each entry in the list matches the size (after broadcasting)
-          of all of the coordinate arrays
+          of all the coordinate arrays
         """
         pass
 
-
     def test_jacobian(self,
-                      coordinates: tuple[np.ndarray],
+                      coordinates: Sequence[np.ndarray],
                       parameters: np.ndarray,
                       dp: float = 1e-7) -> (list[np.ndarray], list[np.ndarray]):
         """
@@ -88,14 +83,14 @@ class coordinate_model():
             dp_now = np.zeros(self.nparams)
             dp_now[ii] = dp * 0.5
 
-            jac_numerical.append((self.model(coordinates, parameters + dp_now) - self.model(coordinates, parameters - dp_now)) / dp)
+            jac_numerical.append((self.model(coordinates, parameters + dp_now) -
+                                  self.model(coordinates, parameters - dp_now)) / dp)
 
         return jac_numerical, jac_calc
 
-
     def estimate_parameters(self,
                             data: np.ndarray,
-                            coordinates: tuple[np.ndarray],
+                            coordinates: Sequence[np.ndarray],
                             num_preserved_dims: int = 0) -> np.ndarray:
         """
         Estimate model parameters from data. This function should support coordinate arrays being broadcastable
@@ -113,7 +108,7 @@ class coordinate_model():
         pass
 
     def estimate_bounds(self,
-                        coordinates: tuple[np.ndarray]) -> (tuple[float], tuple[float]):
+                        coordinates: Sequence[np.ndarray]) -> (tuple[float], tuple[float]):
         """
         Estimate upper and lower bounds from the coordinates
 
@@ -125,7 +120,6 @@ class coordinate_model():
 
         return lbs, ubs
 
-
     def normalize_parameters(self,
                              parameters) -> np.ndarray:
         """
@@ -136,19 +130,18 @@ class coordinate_model():
 
         This method should accept an array of parameters of size nfits x nparams and normalize them all
 
-        :param params:
+        :param parameters:
         :return normalized_params:
         """
         return parameters
 
-
     def fit(self,
             data: np.ndarray,
-            coordinates: tuple[np.ndarray],
-            init_params: Optional[list[float]] = None,
-            fixed_params: Optional[list[bool]] = None,
+            coordinates: Sequence[np.ndarray],
+            init_params: Optional[Sequence[float]] = None,
+            fixed_params: Optional[Sequence[bool]] = None,
             sd: Optional[np.ndarray] = None,
-            bounds: Optional[tuple[tuple[float]]] = None,
+            bounds: Optional[Sequence[Sequence[float]]] = None,
             use_jacobian: bool = True,
             guess_bounds: bool = False,
             **kwargs) -> dict:
@@ -163,9 +156,10 @@ class coordinate_model():
         :param init_params: [p1, p2, ..., pn]. If any entries in the list is None, that parameter will be estimated
           from the data. If None is passed instead of a list, try to guess all parameters from the data.
         :param fixed_params: list of boolean values, same size as init_params. If None, no parameters will be fixed.
-        :param sd: uncertainty in parameters y. e.g. if experimental curves come from averages then should be the standard
-          deviation of the mean. If None, then will use a value of 1 for all points. As long as these values are all the same
-          they will not affect the optimization results, although they will affect the chi squared value reported.
+        :param sd: uncertainty in parameters y. e.g. if experimental curves come from averages then should be the
+          standard deviation of the mean. If None, then will use a value of 1 for all points. As long as these values
+          are all the same they will not affect the optimization results, although they will affect the chi squared
+          value reported.
         :param bounds: (lower bounds, upper bounds) where lower bounds = [lb0, lb1, ...,]
           and similar for ubs. If any bound, lbn, is None, this bound will be estimated from the data. If bounds is None
           then either all bounds will be guessed (if guess_bounds is True) or else -/+ infinity will be used for
@@ -195,7 +189,6 @@ class coordinate_model():
                 sd = np.ones(data.shape) * (1 + 1j)
             else:
                 sd = np.ones(data.shape)
-
 
         # handle uncertainties that will cause fitting to fail
         if np.any(sd == 0) or np.any(np.isnan(sd)):
@@ -229,11 +222,13 @@ class coordinate_model():
 
         # function to be optimized
         def err_fn(p):
-            return np.divide(split(self.model(coordinates, p)[to_use]).ravel() - split(data[to_use]).ravel(), split(sd[to_use]).ravel())
+            return np.divide(split(self.model(coordinates, p)[to_use]).ravel() - split(data[to_use]).ravel(),
+                             split(sd[to_use]).ravel())
 
         # if it was passed, use model jacobian
         if self.has_jacobian and use_jacobian:
-            def jac_fn(p): return [split(v[to_use]).ravel() / split(sd[to_use]).ravel() for v in self.jacobian(coordinates, p)]
+            def jac_fn(p): return [split(v[to_use]).ravel() / split(sd[to_use]).ravel()
+                                   for v in self.jacobian(coordinates, p)]
         else:
             jac_fn = None
 
@@ -256,7 +251,7 @@ class rotated_model_2d(coordinate_model):
 
     def __init__(self,
                  model: coordinate_model,
-                 center_inds: tuple[int]):
+                 center_inds: Sequence[int]):
         """
 
         :param model:
@@ -285,7 +280,7 @@ class rotated_model_2d(coordinate_model):
                 setattr(self, k, v)
 
     def model(self,
-              coordinates: tuple[np.ndarray],
+              coordinates: Sequence[np.ndarray],
               parameters: np.ndarray) -> np.ndarray:
         y, x = coordinates[-2:]
 
@@ -307,7 +302,7 @@ class rotated_model_2d(coordinate_model):
         return self.base_model.model((yrot, xrot), params_base)
 
     def jacobian(self,
-                 coordinates: tuple[np.ndarray],
+                 coordinates: Sequence[np.ndarray],
                  parameters: np.ndarray) -> list[np.ndarray]:
         y, x = coordinates[-2:]
 
@@ -358,14 +353,14 @@ class rotated_model_2d(coordinate_model):
 
     def estimate_parameters(self,
                             data: np.ndarray,
-                            coordinates: tuple[np.ndarray],
+                            coordinates: Sequence[np.ndarray],
                             num_preserved_dims: int = 0):
         pguess_no_rot = self.base_model.estimate_parameters(data, coordinates, num_preserved_dims)
         pguess = np.concatenate((pguess_no_rot, np.array([0.])))
         return pguess
 
     def estimate_bounds(self,
-                        coordinates: tuple[np.ndarray]) -> (tuple[float], tuple[float]):
+                        coordinates: Sequence[np.ndarray]) -> (tuple[float], tuple[float]):
         lbs_no_rot, ubs_no_rot = self.base_model.estimate_bounds(coordinates)
         lbs_angles = (-np.inf,)
         ubs_angles = (np.inf,)
@@ -380,9 +375,11 @@ class rotated_model_2d(coordinate_model):
         normalized_params_no_rot = self.base_model.normalize_parameters(parameters[..., :-1])
 
         if parameters.ndim > 1:
-            normalized_params = np.concatenate((normalized_params_no_rot, np.mod(parameters[..., -1:], 2*np.pi)), axis=1)
+            normalized_params = np.concatenate((normalized_params_no_rot,
+                                                np.mod(parameters[..., -1:], 2*np.pi)), axis=1)
         else:
-            normalized_params = np.concatenate((normalized_params_no_rot, np.mod(parameters[..., -1:], 2*np.pi)), axis=0)
+            normalized_params = np.concatenate((normalized_params_no_rot,
+                                                np.mod(parameters[..., -1:], 2*np.pi)), axis=0)
 
         return normalized_params
 
@@ -403,7 +400,7 @@ class rotated_model_3d(coordinate_model):
 
     def __init__(self,
                  model: coordinate_model,
-                 center_inds: tuple[int]):
+                 center_inds: Sequence[int, int, int]):
         """
 
         :param model:
@@ -436,7 +433,7 @@ class rotated_model_3d(coordinate_model):
                 setattr(self, k, v)
 
     def model(self,
-              coordinates: tuple[np.ndarray],
+              coordinates: Sequence[np.ndarray],
               parameters: np.ndarray) -> np.ndarray:
         z, y, x = coordinates[-3:]
 
@@ -463,7 +460,7 @@ class rotated_model_3d(coordinate_model):
         return self.base_model.model((zrot, yrot, xrot), params_base)
 
     def jacobian(self,
-                 coordinates: tuple[np.ndarray],
+                 coordinates: Sequence[np.ndarray],
                  parameters: np.ndarray) -> list[np.ndarray]:
         z, y, x = coordinates[-3:]
 
@@ -539,14 +536,14 @@ class rotated_model_3d(coordinate_model):
 
     def estimate_parameters(self,
                             data: np.ndarray,
-                            coordinates: tuple[np.ndarray],
+                            coordinates: Sequence[np.ndarray],
                             num_preserved_dims: int = 0):
         pguess_no_rot = self.base_model.estimate_parameters(data, coordinates, num_preserved_dims)
         pguess = np.concatenate((pguess_no_rot, np.array([0., 0., 0.])))
         return pguess
 
     def estimate_bounds(self,
-                        coordinates: tuple[np.ndarray]) -> (tuple[float], tuple[float]):
+                        coordinates: Sequence[np.ndarray]) -> (tuple[float], tuple[float]):
         lbs_no_rot, ubs_no_rot = self.base_model.estimate_bounds(coordinates)
         lbs_angles = (-np.inf, -np.inf, -np.inf)
         ubs_angles = (np.inf, np.inf, np.inf)
@@ -575,8 +572,8 @@ class fixed_parameter_model(coordinate_model):
 
     def __init__(self,
                  model,
-                 fixed_inds: tuple[int],
-                 fixed_values: tuple[float]):
+                 fixed_inds: Sequence[int],
+                 fixed_values: Sequence[float]):
         self.base_model = model
         self.fixed_inds = fixed_inds
         self.fixed_mask = np.array([True if ii in fixed_inds else False for ii in range(model.nparams)])
@@ -593,7 +590,7 @@ class fixed_parameter_model(coordinate_model):
                          is_complex=model.is_complex)
 
     def model(self,
-              coordinates: tuple[np.ndarray],
+              coordinates: Sequence[np.ndarray],
               parameters: np.ndarray) -> np.ndarray:
 
         p = np.zeros(self.base_model.nparams)
@@ -603,7 +600,7 @@ class fixed_parameter_model(coordinate_model):
         return self.base_model.model(coordinates, p)
 
     def jacobian(self,
-                 coordinates: tuple[np.ndarray],
+                 coordinates: Sequence[np.ndarray],
                  parameters: np.ndarray) -> list[np.ndarray]:
 
         p = np.zeros(self.base_model.nparams)
@@ -615,7 +612,7 @@ class fixed_parameter_model(coordinate_model):
 
     def estimate_parameters(self,
                             data: np.ndarray,
-                            coordinates: tuple[np.ndarray],
+                            coordinates: Sequence[np.ndarray],
                             num_preserved_dims: int = 0):
 
         p = self.base_model.estimate_parameters(data, coordinates, num_preserved_dims)
@@ -624,8 +621,7 @@ class fixed_parameter_model(coordinate_model):
         return p_out
 
     def estimate_bounds(self,
-                        coordinates: tuple[np.ndarray]) -> (tuple[float], tuple[float]):
-
+                        coordinates: Sequence[np.ndarray]) -> (tuple[float], tuple[float]):
 
         lbs_full, ubs_full = self.base_model.estimate_bounds(coordinates)
         lbs = tuple([lb for ii, lb in enumerate(lbs_full) if ii not in self.fixed_inds])
@@ -653,14 +649,14 @@ class gauss1d(coordinate_model):
                          has_jacobian=True)
 
     def model(self,
-              coordinates: tuple[np.ndarray],
+              coordinates: Sequence[np.ndarray],
               parameters: np.ndarray):
         x, = coordinates[-1:]
         g = parameters[0] * np.exp(-(x - parameters[1]) ** 2 / (2 * parameters[2] ** 2)) + parameters[3]
         return g
 
     def jacobian(self,
-                 coordinates: tuple[np.ndarray],
+                 coordinates: Sequence[np.ndarray],
                  parameters: np.ndarray):
 
         amp, c, sig, bg = parameters
@@ -679,7 +675,7 @@ class gauss1d(coordinate_model):
 
     def estimate_parameters(self,
                             data: np.ndarray,
-                            coordinates: tuple[np.ndarray],
+                            coordinates: Sequence[np.ndarray],
                             num_preserved_dims: int = 0):
 
         if num_preserved_dims != 0:
@@ -698,7 +694,7 @@ class gauss1d(coordinate_model):
         return params
 
     def estimate_bounds(self,
-                        coordinates: tuple[np.ndarray]):
+                        coordinates: Sequence[np.ndarray]):
         x, = coordinates[-1:]
         lbs = (-np.inf, x.min(), 0, -np.inf)
         ubs = (np.inf, x.max(), x.max() - x.min(), np.inf)
@@ -711,12 +707,13 @@ class gauss1d(coordinate_model):
 
         return param_norm
 
+
 class gauss2d_symm(coordinate_model):
     def __init__(self):
         super().__init__(["amp", "cx", "cy", "sxy", "bg"], 2, has_jacobian=True)
 
     def model(self,
-              coordinates: tuple[np.ndarray],
+              coordinates: Sequence[np.ndarray],
               parameters: np.ndarray):
 
         y, x = coordinates[-2:]
@@ -727,7 +724,7 @@ class gauss2d_symm(coordinate_model):
         return val
 
     def jacobian(self,
-                 coordinates: tuple[np.ndarray],
+                 coordinates: Sequence[np.ndarray],
                  params: np.ndarray):
 
         y, x = coordinates[-2:]
@@ -749,7 +746,7 @@ class gauss2d_symm(coordinate_model):
 
     def estimate_parameters(self,
                             data: np.ndarray,
-                            coordinates: tuple[np.ndarray],
+                            coordinates: Sequence[np.ndarray],
                             num_preserved_dims: int = 0):
 
         if num_preserved_dims != 0:
@@ -771,9 +768,8 @@ class gauss2d_symm(coordinate_model):
 
         return ip_default
 
-
     def estimate_bounds(self,
-                        coordinates: tuple[np.ndarray]):
+                        coordinates: Sequence[np.ndarray]):
 
         yy, xx = coordinates[-2:]
         # replace any bounds which are none with default guesses
@@ -781,7 +777,6 @@ class gauss2d_symm(coordinate_model):
         ubs = (np.inf, xx.max(), yy.max(), np.inf, np.inf)
 
         return lbs, ubs
-
 
     def normalize_parameters(self,
                              parameters):
@@ -799,9 +794,8 @@ class gauss2d(coordinate_model):
             super().__init__(["amp", "cx", "cy", "sx", "sy", "bg", "theta"], 2, has_jacobian=True)
         self.use_sigma_ratio_parameterization = use_sigma_ratio_parameterization
 
-
     def model(self,
-              coordinates: tuple[np.ndarray],
+              coordinates: Sequence[np.ndarray],
               parameters: np.ndarray):
         y, x = coordinates[-2:]
 
@@ -809,15 +803,16 @@ class gauss2d(coordinate_model):
         yrot = np.cos(parameters[6]) * (y - parameters[2]) + np.sin(parameters[6]) * (x - parameters[1])
 
         if self.use_sigma_ratio_parameterization:
-            val = parameters[0] * np.exp(-xrot ** 2 / (2 * parameters[3] ** 2) - yrot ** 2 / (2 * parameters[3] ** 2 * parameters[4] ** 2)) + parameters[5]
+            val = parameters[0] * np.exp(-xrot ** 2 / (2 * parameters[3] ** 2) -
+                                         yrot ** 2 / (2 * parameters[3] ** 2 * parameters[4] ** 2)) + parameters[5]
         else:
-            val = parameters[0] * np.exp(-xrot ** 2 / (2 * parameters[3] ** 2) - yrot ** 2 / (2 * parameters[4] ** 2)) + parameters[5]
+            val = parameters[0] * np.exp(-xrot ** 2 / (2 * parameters[3] ** 2) -
+                                         yrot ** 2 / (2 * parameters[4] ** 2)) + parameters[5]
 
         return val
 
-
     def jacobian(self,
-                 coordinates: tuple[np.ndarray],
+                 coordinates: Sequence[np.ndarray],
                  params: np.ndarray):
 
         y, x = coordinates[-2:]
@@ -831,8 +826,10 @@ class gauss2d(coordinate_model):
             exps = np.exp(-xrot ** 2 / (2 * params[3] ** 2) - yrot ** 2 / (2 * params[3] ** 2 * params[4] ** 2))
 
             jac = [exps,
-                   params[0] * exps * (xrot / params[3] ** 2 * np.cos(params[6]) + yrot / params[3] ** 2 / params[4] ** 2 * np.sin(params[6])),
-                   params[0] * exps * (yrot / params[3] ** 2 / params[4] ** 2 * np.cos(params[6]) - xrot / params[3] ** 2 * np.sin(params[6])),
+                   params[0] * exps * (xrot / params[3] ** 2 * np.cos(params[6]) +
+                                       yrot / params[3] ** 2 / params[4] ** 2 * np.sin(params[6])),
+                   params[0] * exps * (yrot / params[3] ** 2 / params[4] ** 2 * np.cos(params[6]) -
+                                       xrot / params[3] ** 2 * np.sin(params[6])),
                    params[0] * exps * (xrot ** 2 / params[3] ** 3 + yrot ** 2 / params[3] ** 3 / params[4] ** 2),
                    params[0] * exps * yrot ** 2 / params[3] ** 2 / params[4] ** 3,
                    np.ones(bcast_shape),
@@ -841,8 +838,10 @@ class gauss2d(coordinate_model):
             exps = np.exp(-xrot ** 2 / (2 * params[3] ** 2) - yrot ** 2 / (2 * params[4] ** 2))
 
             jac = [exps,
-                   params[0] * exps * (xrot / params[3] ** 2 * np.cos(params[6]) + yrot / params[4] ** 2 * np.sin(params[6])),
-                   params[0] * exps * (yrot / params[4] ** 2 * np.cos(params[6]) - xrot / params[3] ** 2 * np.sin(params[6])),
+                   params[0] * exps * (xrot / params[3] ** 2 * np.cos(params[6]) +
+                                       yrot / params[4] ** 2 * np.sin(params[6])),
+                   params[0] * exps * (yrot / params[4] ** 2 * np.cos(params[6]) -
+                                       xrot / params[3] ** 2 * np.sin(params[6])),
                    params[0] * exps * xrot ** 2 / params[3] ** 3,
                    params[0] * exps * yrot ** 2 / params[4] ** 3,
                    np.ones(bcast_shape),
@@ -852,7 +851,7 @@ class gauss2d(coordinate_model):
 
     def estimate_parameters(self,
                             data: np.ndarray,
-                            coordinates: tuple[np.ndarray],
+                            coordinates: Sequence[np.ndarray],
                             num_preserved_dims: int = 0):
 
         if num_preserved_dims != 0:
@@ -876,9 +875,8 @@ class gauss2d(coordinate_model):
 
         return ip_default
 
-
     def estimate_bounds(self,
-                        coordinates: tuple[np.ndarray]):
+                        coordinates: Sequence[np.ndarray]):
 
         yy, xx = coordinates[-2:]
         # replace any bounds which are none with default guesses
@@ -889,7 +887,6 @@ class gauss2d(coordinate_model):
             ubs = (np.inf, xx.max(), yy.max(), xx.max() - xx.min(), yy.max() - yy.min(), np.inf, np.inf)
 
         return lbs, ubs
-
 
     def normalize_parameters(self,
                              parameters):
@@ -912,7 +909,7 @@ class complex_gauss2d(coordinate_model):
                          2, has_jacobian=True)
 
     def model(self,
-              coordinates: tuple[np.ndarray],
+              coordinates: Sequence[np.ndarray],
               parameters: np.ndarray) -> np.ndarray:
 
         y, x = coordinates[-2:]
@@ -923,7 +920,6 @@ class complex_gauss2d(coordinate_model):
         val = amp * np.exp(-x ** 2 / (2 * parameters[3] ** 2) - y ** 2 / (2 * parameters[4] ** 2)) + parameters[5]
 
         return val
-
 
 
 class ellipsoid2d(coordinate_model):
@@ -937,7 +933,7 @@ class ellipsoid2d(coordinate_model):
         super().__init__(["amp", "cx", "cy", "ax", "ay", "bg"], 2, has_jacobian=True)
 
     def model(self,
-              coordinates: tuple[np.ndarray],
+              coordinates: Sequence[np.ndarray],
               parameters: np.ndarray) -> np.ndarray:
         y, x = coordinates[-2:]
         bcast_shape = (x + y).shape
@@ -954,7 +950,7 @@ class ellipsoid2d(coordinate_model):
         return val
 
     def jacobian(self,
-                 coordinates: tuple[np.ndarray],
+                 coordinates: Sequence[np.ndarray],
                  parameters: np.ndarray) -> list[np.ndarray]:
         y, x = coordinates[-2:]
         bcast_shape = (x + y).shape
@@ -989,12 +985,12 @@ class ellipsoid2d(coordinate_model):
 
     def estimate_parameters(self,
                             data: np.ndarray,
-                            coordinates: tuple[np.ndarray],
+                            coordinates: Sequence[np.ndarray],
                             num_preserved_dims: int = 0):
         return gauss2d().estimate_parameters(data, coordinates, num_preserved_dims)[..., :-1]
 
     def estimate_bounds(self,
-                        coordinates: tuple[np.ndarray]) -> (tuple[float], tuple[float]):
+                        coordinates: Sequence[np.ndarray]) -> (tuple[float], tuple[float]):
         lbs, ubs = gauss2d().estimate_bounds(coordinates)
         return lbs[:-1], ubs[:-1]
 
@@ -1006,7 +1002,7 @@ class gauss2d_sum(coordinate_model):
         self.ngaussians = int(ngaussians)
 
     def model(self,
-              coordinates: tuple[np.ndarray],
+              coordinates: Sequence[np.ndarray],
               p: np.ndarray):
 
         # todo: need to check if this is implemented correctly
@@ -1021,9 +1017,8 @@ class gauss2d_sum(coordinate_model):
 
         return val
 
-
     def jacobian(self,
-                 coordinates: tuple[np.ndarray],
+                 coordinates: Sequence[np.ndarray],
                  p: np.ndarray):
 
         jac_list = []
@@ -1039,7 +1034,6 @@ class gauss2d_sum(coordinate_model):
 
         return jac_list
 
-
     def normalize_parameters(self,
                              parameters):
 
@@ -1054,16 +1048,15 @@ class gauss2d_sum(coordinate_model):
 # todo: should derive this from gauss3d_asymmetric?
 class gauss3d(coordinate_model):
     def __init__(self,
-                 minimum_sigmas: tuple[float] = (0., 0.)):
+                 minimum_sigmas: Sequence[float, float] = (0., 0.)):
         """
         3D gaussian symmetric in xy
         """
         self.minimum_sigmas = minimum_sigmas
         super().__init__(["amp", "cx", "cy", "cz", "sxy", "sz", "bg"], ndims=3, has_jacobian=True)
 
-
     def model(self,
-              coordinates: tuple[np.ndarray],
+              coordinates: Sequence[np.ndarray],
               params: np.ndarray) -> np.ndarray:
 
         z, y, x, = coordinates[-3:]
@@ -1078,9 +1071,8 @@ class gauss3d(coordinate_model):
 
         return val
 
-
     def jacobian(self,
-                 coordinates: tuple[np.ndarray],
+                 coordinates: Sequence[np.ndarray],
                  params: np.ndarray) -> list[np.ndarray]:
 
         z, y, x = coordinates[-3:]
@@ -1092,7 +1084,7 @@ class gauss3d(coordinate_model):
         v = np.exp(-(x - cx) ** 2 / 2 / (sxy_min ** 2 + sxy ** 2)
                    -(y - cy) ** 2 / 2 / (sxy_min ** 2 + sxy ** 2)
                    -(z - cz) ** 2 / 2 / (sz_min ** 2 + sz ** 2)
-                  )
+                   )
 
         # [A, cx, cy, cz, sxy, sz, bg]
         jac = [v,
@@ -1105,10 +1097,9 @@ class gauss3d(coordinate_model):
 
         return jac
 
-
     def estimate_parameters(self,
                             data: np.ndarray,
-                            coordinates: tuple[np.ndarray],
+                            coordinates: Sequence[np.ndarray],
                             num_preserved_dims: int = 0):
 
         if self.ndim != len(coordinates):
@@ -1116,7 +1107,6 @@ class gauss3d(coordinate_model):
 
         z, y, x = coordinates[-3:]
         data_ndim = data.ndim
-
 
         average_axes = tuple(range(num_preserved_dims, data_ndim))
 
@@ -1151,9 +1141,8 @@ class gauss3d(coordinate_model):
 
         return self.normalize_parameters(guess_params)
 
-
     def estimate_bounds(self,
-                        coordinates: tuple[np.ndarray]):
+                        coordinates: Sequence[np.ndarray]):
         z, y, x = coordinates[-3:]
 
         lbs = (-np.inf, x.min(), y.min(), z.min(), 0, 0, -np.inf)
@@ -1172,7 +1161,7 @@ class gauss3d(coordinate_model):
 class gauss3d_asymmetric(coordinate_model):
     def __init__(self,
                  use_sigma_ratio_parameterization: bool = False,
-                 minimum_sigmas: tuple[float] = (0., 0., 0.)):
+                 minimum_sigmas: Sequence[float, float, float] = (0., 0., 0.)):
         self.use_sigma_ratio_parameterization = use_sigma_ratio_parameterization
         self.minimum_sigmas = minimum_sigmas
 
@@ -1183,9 +1172,8 @@ class gauss3d_asymmetric(coordinate_model):
             super().__init__(["A", "cx", "cy", "cz", "sx", "sy", "sz", "bg"],
                              3, has_jacobian=True)
 
-
     def model(self,
-              coords: tuple[np.ndarray],
+              coords: Sequence[np.ndarray],
               params: np.ndarray):
 
         z, y, x, = coords[-3:]
@@ -1203,9 +1191,8 @@ class gauss3d_asymmetric(coordinate_model):
 
         return vals
 
-
     def jacobian(self,
-                 coords: tuple[np.ndarray],
+                 coords: Sequence[np.ndarray],
                  params: np.ndarray):
 
         z, y, x, = coords[-3:]
@@ -1252,10 +1239,9 @@ class gauss3d_asymmetric(coordinate_model):
 
         return jac
 
-
     def estimate_parameters(self,
                             img: np.ndarray,
-                            coords: tuple[np.ndarray],
+                            coords: Sequence[np.ndarray],
                             num_preserved_dims: int = 0):
 
         if num_preserved_dims != 0:
@@ -1300,15 +1286,13 @@ class gauss3d_asymmetric(coordinate_model):
 
         return self.normalize_parameters(guess_params)
 
-
     def estimate_bounds(self,
-                        coordinates: tuple[np.ndarray]) -> (tuple[float], tuple[float]):
+                        coordinates: Sequence[np.ndarray]) -> (tuple[float], tuple[float]):
         z, y, x = coordinates[-3:]
 
         lbs = (-np.inf, x.min(), y.min(), z.min(), 0, 0, 0, -np.inf)
         ubs = (np.inf, x.max(), y.max(), z.max(), np.inf, np.inf, np.inf, np.inf)
         return lbs, ubs
-
 
     def normalize_parameters(self, params):
         norm_params = np.array(params, copy=True)
@@ -1331,7 +1315,7 @@ class ellipsoid3d(coordinate_model):
         super().__init__(["amp", "cx", "cy", "cz", "ax", "ay", "az", "bg"], 3, has_jacobian=True)
 
     def model(self,
-              coordinates: tuple[np.ndarray],
+              coordinates: Sequence[np.ndarray],
               parameters: np.ndarray) -> np.ndarray:
         z, y, x = coordinates[-3:]
         bcast_shape = (x + y + z).shape
@@ -1349,7 +1333,7 @@ class ellipsoid3d(coordinate_model):
         return val
 
     def jacobian(self,
-                 coordinates: tuple[np.ndarray],
+                 coordinates: Sequence[np.ndarray],
                  parameters: np.ndarray) -> list[np.ndarray]:
 
         z, y, x = coordinates[-3:]
@@ -1391,12 +1375,12 @@ class ellipsoid3d(coordinate_model):
 
     def estimate_parameters(self,
                             data: np.ndarray,
-                            coordinates: tuple[np.ndarray],
+                            coordinates: Sequence[np.ndarray],
                             num_preserved_dims: int = 0):
         return gauss3d_asymmetric().estimate_parameters(data, coordinates, num_preserved_dims)
 
     def estimate_bounds(self,
-                        coordinates: tuple[np.ndarray]) -> (tuple[float], tuple[float]):
+                        coordinates: Sequence[np.ndarray]) -> (tuple[float], tuple[float]):
         return gauss3d_asymmetric().estimate_bounds(coordinates)
 
 
@@ -1406,13 +1390,13 @@ class line_piecewisem(coordinate_model):
         super().__init__(["slope1", "y intercept1", "slope2", "crossover"], 1, has_jacobian=True)
 
     def model(self,
-              coordinates: tuple[np.ndarray],
+              coordinates: Sequence[np.ndarray],
               parameters: np.ndarray) -> np.ndarray:
         """
         Two piecewise lines which connect at a point
 
-        :param x: x-positions to evaluate function
-        :param p: [slope 1, y-intercept 1, slope 2, changover point]
+        :param coordinates: coordinates to evaluate function
+        :param parameters: [slope 1, y-intercept 1, slope 2, changover point]
         :return value:
         """
 
@@ -1434,7 +1418,7 @@ class line_piecewisem(coordinate_model):
         return line
 
     def jacobian(self,
-                 coordinates: tuple[np.ndarray],
+                 coordinates: Sequence[np.ndarray],
                  parameters: np.ndarray) -> list[np.ndarray]:
 
         x = coordinates[-1:]
@@ -1460,11 +1444,9 @@ class line_piecewisem(coordinate_model):
 
         return jac
 
-
-
     def estimate_parameters(self,
                             data: np.ndarray,
-                            coordinates: tuple[np.ndarray],
+                            coordinates: Sequence[np.ndarray],
                             num_preserved_dims: int = 0):
         pass
 
@@ -1474,33 +1456,33 @@ def fit_model(img: np.ndarray,
               init_params: list[float],
               fixed_params: Optional[list[bool]] = None,
               sd: Optional[np.ndarray] = None,
-              bounds: Optional[tuple[tuple[float]]] = None,
+              bounds: Optional[Sequence[Sequence[float]]] = None,
               model_jacobian: Optional[callable] = None,
               function_is_complex: bool = False,
               **kwargs) -> dict:
     """
-    Fit 2D model function to an image. Any Nan values in the image will be ignored. This function is a wrapper for
+    Fit 2D model function to an image. Any Nan values in the image will be ignored. This function is a wrapper
     for the non-linear least squares fit function scipy.optimize.least_squares() which additionally handles fixing
     parameters and calculating fit uncertainty.
 
     This function is kep for convenience when working with one-off models. Preferred method is to subclass
     coordinate_model()
 
-    :param np.array img: nd array
+    :param img: nd array
     :param model_fn: function f(p)
-    :param list[float] init_params: p = [p1, p2, ..., pn]
-    :param list[boolean] fixed_params: list of boolean values, same size as init_params. If None,
-      no parameters will be fixed.
+    :param init_params: p = [p1, p2, ..., pn]
+    :param fixed_params: list of boolean values, same size as init_params. If None,
+     no parameters will be fixed.
     :param sd: uncertainty in parameters y. e.g. if experimental curves come from averages then should be the standard
-      deviation of the mean. If None, then will use a value of 1 for all points. As long as these values are all the same
-      they will not affect the optimization results, although they will affect chi squared.
-    :param tuple[tuple[float]] bounds: (lbs, ubs). If None, -/+ infinity used for all parameters.
+     deviation of the mean. If None, then will use a value of 1 for all points. As long as these values are all
+     the same they will not affect the optimization results, although they will affect chi squared.
+    :param bounds: (lbs, ubs). If None, -/+ infinity used for all parameters.
     :param model_jacobian: Jacobian of the model function as a list, [df/dp[0], df/dp[1], ...]. If None,
      no jacobian used.
+    :param function_is_complex: if function values are complex, must set this flag to true to handle correctly
     :param kwargs: additional key word arguments will be passed through to scipy.optimize.least_squares
     :return: results
     """
-
 
     has_jacobian = model_jacobian is not None
 
@@ -1512,15 +1494,14 @@ def fit_model(img: np.ndarray,
                              is_complex=function_is_complex)
 
         def model(self,
-                  coordinates: tuple[np.ndarray],
+                  coordinates: Sequence[np.ndarray],
                   parameters: np.ndarray) -> np.ndarray:
             return model_fn(parameters)
 
         def jacobian(self,
-                 coordinates: tuple[np.ndarray],
-                 parameters: np.ndarray) -> list[np.ndarray]:
+                     coordinates: Sequence[np.ndarray],
+                     parameters: np.ndarray) -> list[np.ndarray]:
             return model_jacobian(parameters)
-
 
     results = mtemp().fit(img,
                           None,
@@ -1538,7 +1519,7 @@ def fit_model(img: np.ndarray,
 def fit_least_squares(model_fn,
                       init_params: list[float],
                       fixed_params: Optional[list[bool]] = None,
-                      bounds: Optional[tuple[tuple[float]]] = None,
+                      bounds: Optional[Sequence[Sequence[float]]] = None,
                       model_jacobian: Optional[callable] = None,
                       **kwargs) -> dict:
     """
@@ -1555,10 +1536,10 @@ def fit_least_squares(model_fn,
     :param  bounds: (lbs, ubs). If None, -/+ infinity used for all parameters.
     :param model_jacobian: Jacobian of the model function as a list, [df/dp[0], df/dp[1], ...]. If None,
       no jacobian used.
-    :param function_is_complex: if function values are complex, must set this flag to true to handle correctly
     :param kwargs: additional key word arguments will be passed through to scipy.optimize.least_squares()
     :return results: dictionary object. Uncertainty can be obtained from the square roots of the diagonals of the
-      covariance matrix, but these will only be meaningful if variances were appropriately provided for the cost function
+      covariance matrix, but these will only be meaningful if variances were appropriately provided for
+      the cost function
     """
 
     # ###########################
@@ -1590,7 +1571,8 @@ def fit_least_squares(model_fn,
     # if some parameters are fixed, we need to hide them from the fit function to produce correct covariance, etc.
     # Idea: map the "reduced" (i.e. not fixed) parameters onto the full parameter list.
     # do this by looking at each parameter. If it is supposed to be "fixed" substitute the initial parameter. If not,
-    # then get the next value from pfree. We find the right index of pfree by summing the number of previously unfixed parameters
+    # then get the next value from pfree. We find the right index of pfree by summing the number of
+    # previously unfixed parameters
     # ###########################
     free_inds = [int(np.sum(np.logical_not(fixed_params[:ii]))) for ii in range(len(fixed_params))]
 
@@ -1686,7 +1668,7 @@ def fit_least_squares(model_fn,
 
 def get_moments(img: np.ndarray,
                 order: int = 1,
-                coords: Optional[tuple[np.ndarray]] = None,
+                coords: Optional[Sequence[np.ndarray]] = None,
                 dims: Optional[list[int]] = None) -> list[float]:
     """
     Calculate moments of distribution of arbitrary size
