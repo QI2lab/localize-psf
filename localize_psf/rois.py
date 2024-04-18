@@ -35,8 +35,8 @@ def roi2global(coords_roi: Union[Sequence[float], Sequence[int]],
     return coords_full
 
 
-def global2roi(coords_full: Union[Sequence[float], Sequence[int]],
-               roi: Sequence[int],
+def global2roi(coords_full: Union[Sequence[float], Sequence[int], np.ndarray],
+               roi: Union[Sequence[int], np.ndarray],
                ensure_in_roi: bool = False) -> np.ndarray:
     """
     Convert from global coordinates to ROI coordinates. i.e. if we have an array M, then
@@ -60,8 +60,8 @@ def global2roi(coords_full: Union[Sequence[float], Sequence[int]],
     return coords_roi
 
 
-def get_centered_roi(centers: Union[Sequence[float], Sequence[int]],
-                     sizes: Sequence[int],
+def get_centered_roi(centers: Union[Sequence[float], Sequence[int], np.ndarray],
+                     sizes: Union[Sequence[int], np.ndarray],
                      min_vals: Optional[Sequence[int]] = None,
                      max_vals: Optional[Sequence[int]] = None):
     """
@@ -113,7 +113,7 @@ def get_centered_roi(centers: Union[Sequence[float], Sequence[int]],
     return roi
 
 
-def get_centered_rois(centers: Union[np.ndarray[int], np.ndarray[float]],
+def get_centered_rois(centers: Union[np.ndarray[int], np.ndarray[float], np.ndarray],
                       sizes: np.ndarray[int],
                       min_vals: Optional[np.ndarray[int]] = None,
                       max_vals: Optional[np.ndarray[int]] = None) -> np.ndarray[int]:
@@ -339,8 +339,8 @@ def _cut_rois2d(rois: Sequence[int],
     return arrs
 
 
-def get_roi_size(sizes: Union[Sequence[float], Sequence[int]],
-                 drs: Sequence[float],
+def get_roi_size(sizes: Union[Sequence[float], Sequence[int], np.ndarray],
+                 drs: Union[Sequence[float], np.ndarray],
                  ensure_odd: bool = True) -> np.ndarray:
     """
     Get closest larger ROI size in pixels given a set of sizes in real units
