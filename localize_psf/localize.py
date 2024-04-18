@@ -2043,7 +2043,7 @@ def autofit_psfs(imgs: np.ndarray,
                  use_gpu_fit: bool = False,
                  verbose: bool = False,
                  gamma: float = 0.5,
-                 save_dir: Optional[str, Path] = None,
+                 save_dir: Optional[Union[str, Path]] = None,
                  figsize: Sequence[float, float] = (18., 10.),
                  **kwargs) -> dict:
     """
