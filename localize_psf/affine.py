@@ -229,44 +229,6 @@ def xform_points(coords: array,
     return coords_out
 
 
-# modify affine xform
-def xform_shift_center(xform: np.ndarray,
-                       cobj_new: Optional[Sequence[float]] = None,
-                       cimg_new: Optional[Sequence[float]] = None) -> np.ndarray:
-    """
-    Modify affine transform for coordinate shift in object or image space.
-
-    Useful e.g. for changing region of interest
-
-    Ro_new = Ro_old - Co
-    Ri_new = Ri_old - Ci
-
-    :param xform:
-    :param cobj_new: [cox, coy]
-    :param cimg_new: [cix, ciy]
-    :return xform:
-    """
-    # todo: this could be implemented by multiplying affine matrices
-
-    xform = np.array(xform, copy=True)
-
-    if cobj_new is None:
-        cobj_new = [0, 0]
-    cox, coy = cobj_new
-
-    xform[0, 2] = xform[0, 2] + xform[0, 0] * cox + xform[0, 1] * coy
-    xform[1, 2] = xform[1, 2] + xform[1, 0] * cox + xform[1, 1] * coy
-
-    if cimg_new is None:
-        cimg_new = [0, 0]
-    cix, ciy = cimg_new
-
-    xform[0, 2] = xform[0, 2] - cix
-    xform[1, 2] = xform[1, 2] - ciy
-
-    return xform
-
-
 # transform sinusoid parameters under full affine transformation
 def xform_sinusoid_params(fx_obj: float,
                           fy_obj: float,
