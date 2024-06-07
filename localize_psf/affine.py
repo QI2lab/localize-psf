@@ -37,7 +37,6 @@ def xform2params(affine_mat: np.ndarray) -> np.ndarray:
     Both theta_x and theta_y are measured CCW from the x-axis
 
     :param np.array affine_mat:
-
     :return list[float]: [mx, theta_x, vx, my, theta_y, vy]
     """
     if affine_mat.shape != (3, 3):
@@ -66,9 +65,8 @@ def params2xform(params: Sequence[float]) -> np.ndarray:
         Mx * sin(tx),  My * cos(ty), vy
            0        ,    0        , 1
 
-    :param list[float] params: [Mx, theta_x, vx ,My, theta_y, vy]
-
-    :return np.array affine_xform:
+    :param params: [Mx, theta_x, vx ,My, theta_y, vy]
+    :return affine_xform:
     """
     # read parameters
     mx = params[0]
@@ -93,7 +91,7 @@ def rotation2xform(angle: float,
 
     :param angle:
     :param center:
-    :return:
+    :return xform:
     """
 
     # think of this xform as
@@ -110,7 +108,7 @@ def rotation2xform(angle: float,
 # transform functions/matrices under action of affine transformation
 def xform_mat(mat_obj: array,
               xform: array,
-              img_coords: tuple[array],
+              img_coords: Sequence[array],
               mode: str = 'nearest') -> array:
     """
     Given a matrix defined on object space coordinates, M[yo, xo], calculate corresponding matrix at image
@@ -171,13 +169,13 @@ def xform_mat(mat_obj: array,
         mat_img = RectBivariateSpline(*coords_obj_bounds, mat_obj.transpose()).ev(*coords_obj_from_img)
         mat_img[xp.logical_not(to_use)] = np.nan
     else:
-        raise ValueError("'mode' must be 'nearest' or 'interp' but was '%s'" % mode)
+        raise ValueError(f"'mode' must be 'nearest' or 'interp' but was '{mode:s}'")
 
     return mat_img
 
 
 def xform_fn(fn: callable,
-             xform: np.ndarray):
+             xform: np.ndarray) -> callable:
     """
     Given a function f(xo, yo) and an affine transformation, (xi, yi, ...) = T * (xo, yo, ...), create the function
     f'(xi, yi, ...) = f( T^{-1}(xo, yo, ...) )
@@ -246,9 +244,9 @@ def xform_shift_center(xform: np.ndarray,
     :param xform:
     :param cobj_new: [cox, coy]
     :param cimg_new: [cix, ciy]
-    :return:
+    :return xform:
     """
-    # todo ... this should be implemented by multiplying affine matrices ...
+    # todo: this could be implemented by multiplying affine matrices
 
     xform = np.array(xform, copy=True)
 
@@ -267,83 +265,6 @@ def xform_shift_center(xform: np.ndarray,
     xform[1, 2] = xform[1, 2] - ciy
 
     return xform
-
-
-# transform sinusoid parameters for coordinate shifts
-def phase_edge2fft(frq: Sequence[float],
-                   phase: float,
-                   img_shape: Sequence[int],
-                   dx: float = 1.):
-    """
-    Give a sinusoidal pattern where we have defined the edge of the image to be x=0, and given the phase determined
-    using this coordinate choice, transform the phase to the value referenced to near the center of the image
-    (i.e. using the coordinate conventions of the discrete Fourier transform)
-
-    :param frq:
-    :param phase:
-    :param img_shape:
-    :param dx:
-
-    :return phase_fft:
-    """
-    nx = img_shape[1]
-    xft = fftshift(fftfreq(nx, 1 / (dx*nx)))
-    ny = img_shape[0]
-    yft = fftshift(fftfreq(ny, 1 / (dx*ny)))
-
-    # xft = tools.get_fft_pos(img_shape[1], dt=dx, centered=True, mode="symmetric")
-    # yft = tools.get_fft_pos(img_shape[0], dt=dx, centered=True, mode="symmetric")
-    phase_fft = xform_phase_translation(frq[0], frq[1], phase, [-xft[0], -yft[0]])
-
-    return phase_fft
-
-
-def phase_fft2edge(frq: Sequence[float],
-                   phase: float,
-                   img_shape: Sequence[int],
-                   dx: float = 1.):
-    """
-
-    :param frq:
-    :param phase:
-    :param img_shape:
-    :param dx:
-
-    :return phase_edge:
-    """
-
-    nx = img_shape[1]
-    xft = fftshift(fftfreq(nx, 1 / (dx*nx)))
-    ny = img_shape[0]
-    yft = fftshift(fftfreq(ny, 1 / (dx*ny)))
-
-    phase_edge = xform_phase_translation(frq[0], frq[1], phase, [xft[0], yft[0]])
-
-    return phase_edge
-
-
-def xform_phase_translation(fx: float,
-                            fy: float,
-                            phase: float,
-                            shifted_center: Sequence[float]):
-    """
-    Transform sinusoid phase based on translating coordinate center. If we make the transformation,
-    x' = x - cx
-    y' = y - cy
-    then the phase transforms
-    phase' = phase + 2*pi * (fx * cx + fy * cy)
-
-    :param fx: x-component of frequency
-    :param fy: y-component of frequency
-    :param phase:
-    :param shifted_center: shifted center in initial coordinates, [cx, cy]
-
-    :return phase_shifted:
-    """
-
-    cx, cy = shifted_center
-    phase_shifted = np.mod(phase + 2*np.pi * (fx * cx + fy * cy), 2*np.pi)
-    return phase_shifted
 
 
 # transform sinusoid parameters under full affine transformation
@@ -371,7 +292,10 @@ def xform_sinusoid_params(fx_obj: float,
     affine_inv = np.linalg.inv(affine_mat)
     fx_img = fx_obj * affine_inv[0, 0] + fy_obj * affine_inv[1, 0]
     fy_img = fx_obj * affine_inv[0, 1] + fy_obj * affine_inv[1, 1]
-    phi_img = np.mod(phi_obj + 2 * np.pi * fx_obj * affine_inv[0, 2] + 2 * np.pi * fy_obj * affine_inv[1, 2], 2 * np.pi)
+    phi_img = np.mod(phi_obj +
+                     2 * np.pi * fx_obj * affine_inv[0, 2] +
+                     2 * np.pi * fy_obj * affine_inv[1, 2],
+                     2 * np.pi)
 
     return fx_img, fy_img, phi_img
 
@@ -379,15 +303,19 @@ def xform_sinusoid_params(fx_obj: float,
 def xform_sinusoid_params_roi(fx: float,
                               fy: float,
                               phase: float,
-                              object_size: list[int],
-                              img_roi: list[int],
                               affine_mat: np.ndarray,
-                              input_origin: str = "fft",
-                              output_origin: str = "fft"):
+                              object_size: Optional[Sequence[int]] = None,
+                              img_roi: Optional[Sequence[int]] = None,
+                              input_origin_fft: bool = True,
+                              output_origin_fft: bool = True) -> (float, float, float):
     """
     Transform sinusoid parameter from object space to a region of interest in image space.
 
-    # todo: would it be more appropriate to put this function in sim_reconstruction.py?
+    Given a sinusoid function of object space,
+    cos[2pi f_x * xo + 2pi f_y * yo + phi_o],
+    and an affine transformation mapping object space to image space, [xi, yi] = A * [xo, yo]
+    find the frequency and phase parameters for the corresponding function on image space,
+    cos[2pi f_xi * xi + 2pi f_yi * yi + phi_i]
 
     This is an unfortunately complicated function because we have five coordinate systems to worry about
     o: object space coordinates with origin at the corner of the DMD pattern
@@ -397,61 +325,56 @@ def xform_sinusoid_params_roi(fx: float,
     r': roi coordinates, with origin near the center of the roi (coordinates for fft)
     The frequencies don't care about the coordinate origin, but the phase does
 
-    :param float fx: x-component of frequency in object space
-    :param float fy: y-component of frequency in object space
-    :param float phase: phase of pattern in object space coordinates system o or o'.
-    :param list[int] object_size: [sy, sx], size of object space, required to define origin of o'
-    :param list[int] img_roi: [ystart, yend, xstart, xend], region of interest in image space. Note: this region does
+    :param fx: x-component of frequency in object space
+    :param fy: y-component of frequency in object space
+    :param phase: phase of pattern in object space coordinates system o or o'.
+    :param object_size: [sy, sx], size of object space, required to define origin of o'
+    :param img_roi: [ystart, yend, xstart, xend], region of interest in image space. Note: this region does
      not include the pixels at yend and xend! In coordinates with integer values the pixel centers, it is the area
-    [ystart - 0.5*dy, yend-0.5*dy] x [xstart -0.5*dx, xend - 0.5*dx]
-    :param np.array affine_mat: affine transformation matrix, which takes points from o -> i
-    :param str input_origin: "fft" if phase is provided in coordinate system o', or "edge" if provided in
+     [ystart - 0.5*dy, yend-0.5*dy] x [xstart -0.5*dx, xend - 0.5*dx]
+    :param affine_mat: affine transformation matrix, which takes points from o -> i
+    :param input_origin_fft: True if phase is provided in coordinate system o', or "edge" if provided in
      coordinate system o
-    :param str output_origin: "fft" if output phase should be in coordinate system r' or "edge" if in
+    :param output_origin_fft: True if output phase should be in coordinate system r' or "edge" if in
      coordinate system r
-
-    :return fx_xform: x-component of frequency in coordinate system r'
-    :return fy_xform: y-component of frequency in coordinates system r'
-    :return phi_xform: phase in coordinates system r or r' (depending on the value of output_origin)
+    :return fx_xform, fy_xform, phi_xform: frequency components and phase in coordinate system r or r' depending
+     on the value of output_origin_fft
     """
 
-    if input_origin == "fft":
-        phase_o = phase_fft2edge([fx, fy], phase, object_size, dx=1)
-    elif input_origin == "edge":
-        phase_o = phase
+    if input_origin_fft:
+        xft = fftshift(fftfreq(object_size[1], 1 / object_size[1]))
+        yft = fftshift(fftfreq(object_size[0], 1 / object_size[0]))
+
+        xform_a = params2xform([1, 0, -xft[0], 1, 0, -yft[0]])
+        phase_o = xform_sinusoid_params(fx, fy, phase, xform_a)[-1]
     else:
-        raise ValueError("input origin must be 'fft' or 'edge' but was '%s'" % input_origin)
+        phase_o = phase
 
     # affine transformation, where here we take coordinate origins at the corners
     fx_xform, fy_xform, phase_i = xform_sinusoid_params(fx, fy, phase_o, affine_mat)
 
-    if output_origin == "edge":
-        phase_r = xform_phase_translation(fx_xform, fy_xform, phase_i, [img_roi[2], img_roi[0]])
-        phase_xform = phase_r
-    elif output_origin == "fft":
+    if not output_origin_fft:
+        xform_b = params2xform([1, 0, -img_roi[2], 1, 0, -img_roi[0]])
+        phase_xform = xform_sinusoid_params(fx_xform, fy_xform, phase_i, xform_b)[-1]
+    else:
         # transform so that phase is relative to center of ROI
         ystart, yend, xstart, xend = img_roi
 
         nx = xend - xstart
         x_rp = fftshift(fftfreq(nx, 1 / nx))
         ny = yend - ystart
-        y_rp = fftshift(fftfreq(ny, 1/ny))
+        y_rp = fftshift(fftfreq(ny, 1 / ny))
 
         # origin of rp-coordinate system, written in the i-coordinate system
-        cx = xstart - x_rp[0]
-        cy = ystart - y_rp[0]
-
-        phase_rp = xform_phase_translation(fx_xform, fy_xform, phase_i, [cx, cy])
-        phase_xform = phase_rp
-    else:
-        raise ValueError("output_origin must be 'fft' or 'edge' but was '%s'" % output_origin)
+        xform_c = params2xform([1, 0, -(xstart - x_rp[0]), 1, 0, -(ystart - y_rp[0])])
+        phase_xform = xform_sinusoid_params(fx_xform, fy_xform, phase_i, xform_c)[-1]
 
     return fx_xform, fy_xform, phase_xform
 
 
 # fit affine transformation
-def fit_xform_points(from_pts,
-                     to_pts,
+def fit_xform_points(from_pts: np.ndarray,
+                     to_pts: np.ndarray,
                      translate_only: bool = False) -> (np.ndarray, np.ndarray):
     """
     Solve for an affine transformation of arbitrary dimensions, where the transformation
@@ -494,16 +417,23 @@ def fit_xform_points(from_pts,
     vars = np.zeros(affine_mat.shape)
     for ii in range(ndim):
         if not translate_only:
-            params_temp, residuals, rank, svals = np.linalg.lstsq(from_pts_aug.transpose(), to_pts[ii], rcond=None)
+            params_temp, residuals, rank, svals = np.linalg.lstsq(from_pts_aug.transpose(),
+                                                                  to_pts[ii],
+                                                                  rcond=None)
             affine_mat[ii] = params_temp
 
             # variances of fit parameters
             xt_x_inv = np.linalg.inv(from_pts_aug.dot(from_pts_aug.transpose()))
             var_sample = residuals / (npts - (ndim + 1))
-            vars[ii] = np.diag(xt_x_inv) * var_sample
+            try:
+                vars[ii] = np.diag(xt_x_inv) * var_sample
+            except:
+                vars[ii] = np.nan
         else:
             params_temp, residuals, rank, svals = \
-                np.linalg.lstsq(np.expand_dims(from_pts_aug[-1], axis=1), to_pts[ii] - from_pts[ii], rcond=None)
+                np.linalg.lstsq(np.expand_dims(from_pts_aug[-1], axis=1),
+                                to_pts[ii] - from_pts[ii],
+                                rcond=None)
             affine_mat[ii, -1] = params_temp
             affine_mat[ii, ii] = 1
 
@@ -579,7 +509,9 @@ def fit_xform_points_ransac(from_pts: np.ndarray,
         for ii in range(niterations):
             # get initial proposed points and determine transformation
             is_inlier_prop = np.zeros(pts_shape, dtype=bool)
-            is_inlier_prop.ravel()[np.sort(np.random.choice(np.arange(npts), size=ninit_pts, replace=False))] = True
+            is_inlier_prop.ravel()[np.sort(np.random.choice(np.arange(npts),
+                                                            size=ninit_pts,
+                                                            replace=False))] = True
             not_inlier_prop = np.logical_not(is_inlier_prop)
 
             xform_prop, _ = fit_xform_points(from_pts[is_inlier_prop],
@@ -587,7 +519,9 @@ def fit_xform_points_ransac(from_pts: np.ndarray,
                                              translate_only=translate_only)
 
             # get distance errors of other points to determine if inliers or outliers
-            dist_errs = np.linalg.norm(to_pts[not_inlier_prop] - xform_points(from_pts[not_inlier_prop], xform_prop), axis=-1)
+            dist_errs = np.linalg.norm(to_pts[not_inlier_prop] -
+                                       xform_points(from_pts[not_inlier_prop], xform_prop),
+                                       axis=-1)
 
             is_inlier_prop[not_inlier_prop] = dist_errs < dist_err_max
 
@@ -625,11 +559,11 @@ def fit_xform_img(mat_obj: np.ndarray,
     """
     Fit affine transformation by comparing image with transformed image
 
-    :param mat_obj: matrix in object space
-    :param mat_img: matrix in image space
+    :param mat_obj: array of size ny_o x nx_o in object space
+    :param mat_img: array of size ny_i x nx_i in image space
     :param init_params: let t by the affine transformation matrix which acts on object space coordinates to prouce
-    image space coordinates. Then the initial parameters are
-    [amplitude, background, t[0, 0], t[0, 1], t[0, 2], t[1, 0], t[1, 1], t[1, 2]]
+     image space coordinates. Then the initial parameters are
+     [amplitude, background, t[0, 0], t[0, 1], t[0, 2], t[1, 0], t[1, 1], t[1, 2]]
     :param fixed_params:
     :param bounds:
     :return results, xform:
@@ -652,7 +586,10 @@ def fit_xform_img(mat_obj: np.ndarray,
         diff[np.isnan(diff)] = 0
         return diff
 
-    results = fit_least_squares(err_fn, init_params, fixed_params=fixed_params, bounds=bounds)
+    results = fit_least_squares(err_fn,
+                                init_params,
+                                fixed_params=fixed_params,
+                                bounds=bounds)
     xform = p2xform(results["fit_params"])
 
     return results, xform

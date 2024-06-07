@@ -99,7 +99,8 @@ class Test_affine(unittest.TestCase):
         # yn = yo - cy
         cx = -100.62362
         cy = 0.3743743
-        phase_xlated = affine.xform_phase_translation(fobj[0], fobj[1], phase_obj, [cx, cy])
+        xform_a = affine.params2xform([1, 0, -cx, 1, 0, -cy])
+        phase_xlated = affine.xform_sinusoid_params(fobj[0], fobj[1], phase_obj, xform_a)[-1]
 
         # fn of new coordinates
         # xo = xn + cx
@@ -130,7 +131,9 @@ class Test_affine(unittest.TestCase):
         # xn = xo - cx
         # yn = yo - cy
         roi = [30, 450, 100, 210]
-        phase_roi = affine.xform_phase_translation(fobj[0], fobj[1], phase_obj, [roi[2], roi[0]])
+
+        xform_a = affine.params2xform([1, 0, -roi[2], 1, 0, -roi[0]])
+        phase_roi = affine.xform_sinusoid_params(fobj[0], fobj[1], phase_obj, xform_a)[-1]
 
         # determine ROI phase from fitting
         img_roi = img[roi[0]:roi[1], roi[2]:roi[3]]
@@ -162,22 +165,22 @@ class Test_affine(unittest.TestCase):
         fxi, fyi, phase_roi = affine.xform_sinusoid_params_roi(fobj[0],
                                                                fobj[1],
                                                                phase_obj,
+                                                               xform,
                                                                None,
                                                                roi_img,
-                                                               xform,
-                                                               input_origin="edge",
-                                                               output_origin="edge")
+                                                               input_origin_fft=False,
+                                                               output_origin_fft=False)
         fimg = np.array([fxi, fyi])
 
         # FFT phase
         _, _, phase_roi_ft = affine.xform_sinusoid_params_roi(fobj[0],
                                                               fobj[1],
                                                               phase_obj,
+                                                              xform,
                                                               None,
                                                               roi_img,
-                                                              xform,
-                                                              input_origin="edge",
-                                                              output_origin="fft")
+                                                              input_origin_fft=False,
+                                                              output_origin_fft=True)
 
         # compared with phase from fitting image directly
         out_coords = np.meshgrid(range(roi_img[2], roi_img[3]), range(roi_img[0], roi_img[1]))
