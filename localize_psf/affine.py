@@ -35,8 +35,8 @@ def xform2params(affine_mat: np.ndarray) -> np.ndarray:
 
     Both theta_x and theta_y are measured CCW from the x-axis
 
-    :param np.array affine_mat:
-    :return list[float]: [mx, theta_x, vx, my, theta_y, vy]
+    :param affine_mat:
+    :return [mx, theta_x, vx, my, theta_y, vy]:
     """
     if affine_mat.shape != (3, 3):
         raise ValueError("xform2params only works with 2D affine transformations (i.e. 3x3 matrices)")
@@ -60,25 +60,17 @@ def params2xform(params: Sequence[float]) -> np.ndarray:
     """
     Construct a 2D affine transformation from parameters. Inverse function for xform2params()
 
-    T = Mx * cos(tx), -My * sin(ty), vx
-        Mx * sin(tx),  My * cos(ty), vy
+    T = Ma * cos(ta), -Mb * sin(tb), va
+        Ma * sin(ta),  Mb * cos(tb), vb
            0        ,    0        , 1
 
-    :param params: [Mx, theta_x, vx ,My, theta_y, vy]
+    :param params: [Ma, ta, va ,Mb, tb, vb]
     :return affine_xform:
     """
-    # read parameters
-    mx = params[0]
-    theta_x = params[1]
-    vx = params[2]
-    my = params[3]
-    theta_y = params[4]
-    vy = params[5]
-
-    # construct affine xform
-    affine_xform = np.array([[mx * np.cos(theta_x), -my * np.sin(theta_y), vx],
-                             [mx * np.sin(theta_x),  my * np.cos(theta_y), vy],
-                             [0                   ,  0                   ,  1]])
+    ma, ta, va, mb, tb, vb = params
+    affine_xform = np.array([[ma * np.cos(ta), -mb * np.sin(tb), va],
+                             [ma * np.sin(ta),  mb * np.cos(tb), vb],
+                             [0              ,  0              ,  1]])
 
     return affine_xform
 
@@ -86,16 +78,13 @@ def params2xform(params: Sequence[float]) -> np.ndarray:
 def rotation2xform(angle: float,
                    center: Sequence[float]) -> np.ndarray:
     """
-    Get 2D transform corresponding to a rotation by a given angle about a given center
+    Get 2D affine transformation corresponding to a rotation by an angle about a given center
 
-    :param angle:
-    :param center:
+    :param angle: angle in radians
+    :param center: (cx, cy)
     :return xform:
     """
-
-    # think of this xform as
-    # Rot Matrix * [[X - cx], [Y - cy]] + [[cx], [cy]]
-
+    # think of this xform as Rot Matrix * [[X - cx], [Y - cy]] + [[cx], [cy]]
     cx, cy = center
     xform = params2xform([1, angle, cx, 1, angle, cy])
     extra_offset = -xform[:2, :2].dot(np.array([[cy], [cx]]))
@@ -104,7 +93,6 @@ def rotation2xform(angle: float,
     return xform
 
 
-# transform functions/matrices under action of affine transformation
 def xform_mat(mat_obj: array,
               xform: array,
               img_coords: Sequence[array],
@@ -183,8 +171,7 @@ def xform_fn(fn: callable,
 
     :param fn: function on object space, fn(xo, yo)
     :param xform: affine transformation matrix which takes points in object space to points in image space,
-    (xi, yi, ...) = T * (xo, yo, ...)
-
+     (xi, yi, ...) = T * (xo, yo, ...)
     :return fn_out: function of coordinates (xi, yi, ...)
     """
 
@@ -228,7 +215,6 @@ def xform_points(coords: array,
     return coords_out
 
 
-# transform sinusoid parameters under full affine transformation
 def xform_sinusoid_params(fx_obj: float,
                           fy_obj: float,
                           phi_obj: float,
@@ -245,10 +231,7 @@ def xform_sinusoid_params(fx_obj: float,
     :param phi_obj: phase in object space
     :param affine_mat: affine transformation homogeneous coordinate matrix transforming
      points in object space to image space
-
-    :return fx_img: x-component of frequency in image space
-    :return fy_img: y-component of frequency in image space
-    :return phi_img: phase in image space
+    :return fx_img, fy_img, phi_mig: frequency components and phase in image space
     """
     affine_inv = np.linalg.inv(affine_mat)
     fx_img = fx_obj * affine_inv[0, 0] + fy_obj * affine_inv[1, 0]
@@ -316,7 +299,6 @@ def xform_sinusoid_params_roi(fx: float,
     return xform_sinusoid_params(fx, fy, phase, xform_full)
 
 
-# fit affine transformation
 def fit_xform_points(from_pts: np.ndarray,
                      to_pts: np.ndarray,
                      translate_only: bool = False) -> (np.ndarray, np.ndarray):
@@ -331,10 +313,9 @@ def fit_xform_points(from_pts: np.ndarray,
      column is x, second is y,...
     :param to_pts: npts x ndims array. The desired affine transformation acts on from_pts to produce to_pts
     :param translate_only: if True do not allow scaling/shearing in affine transformation, only allow translation
-
-    :return affine_mat: affine matrix. This is an (ndim + 1) x (ndim + 1) matrix which act on homogeneous coordinates.
-    To transform coordinates using this affine transformation use xform_points()
-    :return vars: estimated variances of the affine transformation matrix entries
+    :return affine_mat, vars: affine_mat is an (ndim + 1) x (ndim + 1) matrix which act on homogeneous coordinates.
+     To transform coordinates using this affine transformation use xform_points(). vars are the estimated
+     variances of the affine transformation matrix entries
     """
     # todo: could add ability to fix certain parameters, but tricky to do this for 2D/3D dims in same code
 
@@ -410,7 +391,7 @@ def fit_xform_points_ransac(from_pts: np.ndarray,
     :param njobs: passed through to joblib to set number of cores to use
     :param n_inliers_stop: stop iterating when find at least this many inliers
     :param translate_only: only fit the translation parameters in the affine transformation
-    :result xform_best, inliers_best, err_best, vars_best:
+    :return xform_best, inliers_best, err_best, vars_best:
     """
 
     if njobs > 1:
