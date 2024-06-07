@@ -12,7 +12,6 @@ from typing import Optional, Union
 from collections.abc import Sequence
 from joblib import Parallel, delayed
 import numpy as np
-from numpy.fft import fftfreq, fftshift
 from scipy.interpolate import RectBivariateSpline
 from localize_psf.fit import fit_least_squares
 
@@ -273,12 +272,6 @@ def xform_sinusoid_params_roi(fx: float,
     """
     Transform sinusoid parameter from object space to a region of interest in image space.
 
-    Given a sinusoid function of object space,
-    cos[2pi f_x * xo + 2pi f_y * yo + phi_o],
-    and an affine transformation mapping object space to image space, [xi, yi] = A * [xo, yo]
-    find the frequency and phase parameters for the corresponding function on image space,
-    cos[2pi f_xi * xi + 2pi f_yi * yi + phi_i]
-
     This is an unfortunately complicated function because we have five coordinate systems to worry about
     o: object space coordinates with origin at the corner of the DMD pattern
     o': object space coordinates assumed by fft functions
@@ -304,34 +297,23 @@ def xform_sinusoid_params_roi(fx: float,
     """
 
     if input_origin_fft:
-        xft = fftshift(fftfreq(object_size[1], 1 / object_size[1]))
-        yft = fftshift(fftfreq(object_size[0], 1 / object_size[0]))
-
-        xform_a = params2xform([1, 0, -xft[0], 1, 0, -yft[0]])
-        phase_o = xform_sinusoid_params(fx, fy, phase, xform_a)[-1]
+        xform_a = params2xform([1, 0, -(object_size[1] // 2),
+                                1, 0, -(object_size[0] // 2)])
     else:
-        phase_o = phase
+        xform_a = params2xform([1, 0, 0, 1, 0, 0])
 
-    # affine transformation, where here we take coordinate origins at the corners
-    fx_xform, fy_xform, phase_i = xform_sinusoid_params(fx, fy, phase_o, affine_mat)
-
+    xform_full2roi = params2xform([1, 0, -img_roi[2],
+                                   1, 0, -img_roi[0]])
     if not output_origin_fft:
-        xform_b = params2xform([1, 0, -img_roi[2], 1, 0, -img_roi[0]])
-        phase_xform = xform_sinusoid_params(fx_xform, fy_xform, phase_i, xform_b)[-1]
+        xform_c = params2xform([1, 0, 0, 1, 0, 0])
     else:
-        # transform so that phase is relative to center of ROI
-        ystart, yend, xstart, xend = img_roi
-
-        nx = xend - xstart
-        x_rp = fftshift(fftfreq(nx, 1 / nx))
-        ny = yend - ystart
-        y_rp = fftshift(fftfreq(ny, 1 / ny))
-
         # origin of rp-coordinate system, written in the i-coordinate system
-        xform_c = params2xform([1, 0, -(xstart - x_rp[0]), 1, 0, -(ystart - y_rp[0])])
-        phase_xform = xform_sinusoid_params(fx_xform, fy_xform, phase_i, xform_c)[-1]
+        xform_c = params2xform([1, 0, -((img_roi[3] - img_roi[2]) // 2),
+                                1, 0, -((img_roi[1] - img_roi[0]) // 2)])
 
-    return fx_xform, fy_xform, phase_xform
+    xform_full = xform_c.dot(xform_full2roi.dot(affine_mat.dot(xform_a)))
+
+    return xform_sinusoid_params(fx, fy, phase, xform_full)
 
 
 # fit affine transformation
