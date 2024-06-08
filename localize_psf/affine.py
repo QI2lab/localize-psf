@@ -2,11 +2,10 @@
 Code for working with affine transformations in 2D and 3D
 
 Determine affine transformation mapping object space to image space.
-The affine transformation (in homogeneous coordinates) is represented by a matrix,
-[[xi], [yi], [1]] = T * [[xo], [yo], [1]]
-
+The affine transformation (in homogeneous coordinates) is represented by a matrix, T
+[[c0_i], [c0_i], [1]] = T * [[c0_o], [c1_0o], [1]]
 Given a function defined on object space, g(xo, yo), we can define a corresponding function on image space
-gi(xi, yi) = g(T^{-1} [[xi], [yi], [1]])
+gi(c0_i, c1_i) = g(T^{-1} [[c0_i], [c1_i], [1]])
 """
 from typing import Optional, Union
 from collections.abc import Sequence
@@ -29,14 +28,13 @@ else:
 def xform2params(affine_mat: np.ndarray) -> np.ndarray:
     """
     Parametrize 2D affine transformation in terms of rotation angles, magnifications, and offsets.
-    T = [[Mx * cos(tx), -My * sin(ty), vx],
-         [Mx * sin(tx),  My * cos(ty), vy],
-         [   0        ,    0        , 1]]
-
-    Both theta_x and theta_y are measured CCW from the x-axis
+    T = [[M0 * cos(t0), -M1 * sin(t1), v0],
+         [M0 * sin(t0),  M1 * cos(t1), v1],
+         [   0        ,    0         , 1]]
+    Both t0 and t1 are measured CCW from the 0-axis
 
     :param affine_mat:
-    :return [mx, theta_x, vx, my, theta_y, vy]:
+    :return params: [M0, t0, v0 ,M1, t1, v1]
     """
     if affine_mat.shape != (3, 3):
         raise ValueError("xform2params only works with 2D affine transformations (i.e. 3x3 matrices)")
@@ -59,12 +57,11 @@ def xform2params(affine_mat: np.ndarray) -> np.ndarray:
 def params2xform(params: Sequence[float]) -> np.ndarray:
     """
     Construct a 2D affine transformation from parameters. Inverse function for xform2params()
+    T = [[M0 * cos(t0), -M1 * sin(t1), v0],
+         [M0 * sin(t0),  M1 * cos(t1), v1],
+         [   0        ,    0         , 1]]
 
-    T = Ma * cos(ta), -Mb * sin(tb), va
-        Ma * sin(ta),  Mb * cos(tb), vb
-           0        ,    0        , 1
-
-    :param params: [Ma, ta, va ,Mb, tb, vb]
+    :param params: [M0, t0, v0 ,M1, t1, v1]
     :return affine_xform:
     """
     ma, ta, va, mb, tb, vb = params
@@ -112,6 +109,7 @@ def xform_mat(mat_obj: array,
     :return mat_img: matrix in image space, M'[yi, xi]
     """
     # todo: want to change img_coords to order (c0, c1)
+    # todo: want to change affine matrix to order [yi, xi] rather than [xi, yi]
     if cp and isinstance(mat_obj, cp.ndarray):
         xp = cp
         if mode == "interp":
