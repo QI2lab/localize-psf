@@ -225,6 +225,7 @@ def xform_sinusoid_params(fx_obj: Union[float, np.ndarray],
     and an affine transformation mapping object space to image space, [xi, yi] = A * [xo, yo]
     find the frequency and phase parameters for the corresponding function on image space,
     cos[2pi f_xi * xi + 2pi f_yi * yi + phi_i]
+    fx_obj, fy_obj, and phi_ob should be broadcastable to the same shape
 
     :param fx_obj: x-component of frequency (in units 1/cycles) in object space
     :param fy_obj: y-component of frequency (in units of 1/cycles) in object space
@@ -242,66 +243,6 @@ def xform_sinusoid_params(fx_obj: Union[float, np.ndarray],
                      2 * np.pi)
 
     return fx_img, fy_img, phi_img
-
-
-def xform_sinusoid_params_roi(fx: float,
-                              fy: float,
-                              phase: float,
-                              affine_mat: np.ndarray,
-                              object_size: Optional[Sequence[int]] = None,
-                              img_roi: Optional[Sequence[int]] = None,
-                              input_origin_fft: bool = True,
-                              output_origin_fft: bool = True) -> (float, float, float):
-    """
-    Transform sinusoid parameter from object space to a region of interest in image space.
-
-    This is an unfortunately complicated function because we have five coordinate systems to worry about
-    o: object space coordinates with origin at the corner of the DMD pattern
-    o': object space coordinates assumed by fft functions
-    i: image space coordinates, with origin at corner of the camera
-    r: roi coordinates with origin at the edge of the roi
-    r': roi coordinates, with origin near the center of the roi (coordinates for fft)
-    The frequencies don't care about the coordinate origin, but the phase does
-
-    :param fx: x-component of frequency in object space
-    :param fy: y-component of frequency in object space
-    :param phase: phase of pattern in object space coordinates system o or o'.
-    :param object_size: [sy, sx], size of object space, required to define origin of o'
-    :param img_roi: [ystart, yend, xstart, xend], region of interest in image space. Note: this region does
-     not include the pixels at yend and xend! In coordinates with integer values the pixel centers, it is the area
-     [ystart - 0.5*dy, yend-0.5*dy] x [xstart -0.5*dx, xend - 0.5*dx]
-    :param affine_mat: affine transformation matrix, which takes points from o -> i
-    :param input_origin_fft: True if phase is provided in coordinate system o', or "edge" if provided in
-     coordinate system o
-    :param output_origin_fft: True if output phase should be in coordinate system r' or "edge" if in
-     coordinate system r
-    :return fx_xform, fy_xform, phi_xform: frequency components and phase in coordinate system r or r' depending
-     on the value of output_origin_fft
-    """
-    # todo: think it would be better to construct these affine transformations as needed in code elsewhere,
-    # todo: and simply call xform_sinusoid_params()
-    # todo: remove this function once that is completed
-
-    if input_origin_fft:
-        if object_size is None:
-            raise ValueError("if input_origin_fft = True, then object size must be provided")
-        xform_input2edge = params2xform([1, 0, (object_size[1] // 2),
-                                         1, 0, (object_size[0] // 2)])
-    else:
-        xform_input2edge = params2xform([1, 0, 0, 1, 0, 0])
-
-    xform_full2roi = params2xform([1, 0, -img_roi[2],
-                                   1, 0, -img_roi[0]])
-    if output_origin_fft:
-        # origin of rp-coordinate system, written in the i-coordinate system
-        xform_edge2output = params2xform([1, 0, -((img_roi[3] - img_roi[2]) // 2),
-                                          1, 0, -((img_roi[1] - img_roi[0]) // 2)])
-    else:
-        xform_edge2output = params2xform([1, 0, 0, 1, 0, 0])
-
-    xform_full = xform_edge2output.dot(xform_full2roi.dot(affine_mat.dot(xform_input2edge)))
-
-    return xform_sinusoid_params(fx, fy, phase, xform_full)
 
 
 def fit_xform_points(from_pts: np.ndarray,
