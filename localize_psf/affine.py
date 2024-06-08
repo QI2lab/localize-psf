@@ -111,6 +111,7 @@ def xform_mat(mat_obj: array,
       affine transformation.
     :return mat_img: matrix in image space, M'[yi, xi]
     """
+    # todo: want to change img_coords to order (c0, c1)
     if cp and isinstance(mat_obj, cp.ndarray):
         xp = cp
         if mode == "interp":
@@ -164,15 +165,14 @@ def xform_mat(mat_obj: array,
 def xform_fn(fn: callable,
              xform: np.ndarray) -> callable:
     """
-    Given a function f(xo, yo) and an affine transformation, (xi, yi, ...) = T * (xo, yo, ...), create the function
-    f'(xi, yi, ...) = f( T^{-1}(xo, yo, ...) )
+    Given a function f(c0_o, c1_o, ...) on object space coordinates and an affine transformation,
+    (c0_i, c1_i, ...) = T * (c0_o, c1_o, ...), create the function
+    f_i(c0_i, c1_i, ...) = f( T^{-1}(c0_o, c1_o, ...) )
+    Evaluate f_i at ci by calling xform_fn(fn, xform)(*ci)
 
-    Given a set of output coordinates, ci, evaluate f' at ci by calling xform_fn(fn, xform)(*ci)
-
-    :param fn: function on object space, fn(xo, yo)
-    :param xform: affine transformation matrix which takes points in object space to points in image space,
-     (xi, yi, ...) = T * (xo, yo, ...)
-    :return fn_out: function of coordinates (xi, yi, ...)
+    :param fn: function on object space coordines, f(c_o)
+    :param xform: affine transformation matrix which takes points in object space to points in image space
+    :return fn_out: function of image space coordinates (c0_i, c1_i, ...)
     """
 
     xform_inv = np.linalg.inv(xform)
@@ -234,6 +234,8 @@ def xform_sinusoid_params(fx_obj: Union[float, np.ndarray],
      points in object space to image space
     :return fx_img, fy_img, phi_mig: frequency components and phase in image space
     """
+    # todo: should twe accept an array frq_obj of shape n0 x n1 x ... x nk x ndim
+    # todo: and support arbitary dimensional sinusoids?
     affine_inv = np.linalg.inv(affine_mat)
     fx_img = fx_obj * affine_inv[0, 0] + fy_obj * affine_inv[1, 0]
     fy_img = fx_obj * affine_inv[0, 1] + fy_obj * affine_inv[1, 1]
@@ -298,7 +300,7 @@ def fit_xform_points(from_pts: np.ndarray,
             var_sample = residuals / (npts - (ndim + 1))
             try:
                 vars[ii] = np.diag(xt_x_inv) * var_sample
-            except:
+            except ValueError:
                 vars[ii] = np.nan
         else:
             params_temp, residuals, rank, svals = \
