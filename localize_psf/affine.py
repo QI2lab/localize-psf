@@ -215,10 +215,10 @@ def xform_points(coords: array,
     return coords_out
 
 
-def xform_sinusoid_params(fx_obj: float,
-                          fy_obj: float,
-                          phi_obj: float,
-                          affine_mat: np.ndarray) -> (float, float, float):
+def xform_sinusoid_params(fx_obj: Union[float, np.ndarray],
+                          fy_obj: Union[float, np.ndarray],
+                          phi_obj: Union[float, np.ndarray],
+                          affine_mat: np.ndarray) -> (Union[float, np.ndarray], Union[float, np.ndarray], Union[float, np.ndarray],):
     """
     Given a sinusoid function of object space,
     cos[2pi f_x * xo + 2pi f_y * yo + phi_o],
@@ -226,8 +226,8 @@ def xform_sinusoid_params(fx_obj: float,
     find the frequency and phase parameters for the corresponding function on image space,
     cos[2pi f_xi * xi + 2pi f_yi * yi + phi_i]
 
-    :param fx_obj: x-component of frequency in object space
-    :param fy_obj: y-component of frequency in object space
+    :param fx_obj: x-component of frequency (in units 1/cycles) in object space
+    :param fy_obj: y-component of frequency (in units of 1/cycles) in object space
     :param phi_obj: phase in object space
     :param affine_mat: affine transformation homogeneous coordinate matrix transforming
      points in object space to image space
@@ -278,23 +278,28 @@ def xform_sinusoid_params_roi(fx: float,
     :return fx_xform, fy_xform, phi_xform: frequency components and phase in coordinate system r or r' depending
      on the value of output_origin_fft
     """
+    # todo: think it would be better to construct these affine transformations as needed in code elsewhere,
+    # todo: and simply call xform_sinusoid_params()
+    # todo: remove this function once that is completed
 
     if input_origin_fft:
-        xform_a = params2xform([1, 0, -(object_size[1] // 2),
-                                1, 0, -(object_size[0] // 2)])
+        if object_size is None:
+            raise ValueError("if input_origin_fft = True, then object size must be provided")
+        xform_input2edge = params2xform([1, 0, (object_size[1] // 2),
+                                         1, 0, (object_size[0] // 2)])
     else:
-        xform_a = params2xform([1, 0, 0, 1, 0, 0])
+        xform_input2edge = params2xform([1, 0, 0, 1, 0, 0])
 
     xform_full2roi = params2xform([1, 0, -img_roi[2],
                                    1, 0, -img_roi[0]])
-    if not output_origin_fft:
-        xform_c = params2xform([1, 0, 0, 1, 0, 0])
-    else:
+    if output_origin_fft:
         # origin of rp-coordinate system, written in the i-coordinate system
-        xform_c = params2xform([1, 0, -((img_roi[3] - img_roi[2]) // 2),
-                                1, 0, -((img_roi[1] - img_roi[0]) // 2)])
+        xform_edge2output = params2xform([1, 0, -((img_roi[3] - img_roi[2]) // 2),
+                                          1, 0, -((img_roi[1] - img_roi[0]) // 2)])
+    else:
+        xform_edge2output = params2xform([1, 0, 0, 1, 0, 0])
 
-    xform_full = xform_c.dot(xform_full2roi.dot(affine_mat.dot(xform_a)))
+    xform_full = xform_edge2output.dot(xform_full2roi.dot(affine_mat.dot(xform_input2edge)))
 
     return xform_sinusoid_params(fx, fy, phase, xform_full)
 

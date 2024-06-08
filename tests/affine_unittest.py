@@ -149,61 +149,132 @@ class Test_affine(unittest.TestCase):
 
         :return:
         """
-        # define object space parameters
-        # roi_img = [0, 2048, 0, 2048]
-        roi_img = [512, 788, 390, 871]
 
-        fobj = np.array([0.08333333, 0.08333333])
+        # define object space parameters
+        fobj = np.array([0.08333333, 0.07333333])
         phase_obj = 5.497787143782089
+        nx_o = 613
+        ny_o = 518
+        xo, yo = np.meshgrid(range(nx_o), range(ny_o))
+
+        # image space parameters and coordinates
+        roi_img = [512, 788, 390, 871]
+        nx_roi = roi_img[3] - roi_img[2]
+        ny_roi = roi_img[1] - roi_img[0]
+
+        xi_roi, yi_roi = np.meshgrid(range(nx_roi), range(ny_roi))
+
         def fn(x, y): return 1 + np.cos(2 * np.pi * (fobj[0] * x + fobj[1] * y) + phase_obj)
 
-        # define affine transform
-        xform = affine.params2xform([1.4296003114502853, 2.3693263411981396, 2671.39109,
-                                     1.4270495211450602, 2.3144621088632635, 790.402632])
+        # affine transforms
+        xform_obj_edge2fft = affine.params2xform([1, 0, -(nx_o // 2),
+                                                  1, 0, -(ny_o // 2)])
+        xform_obj2img = affine.params2xform([1.4296003114502853, 2.3693263411981396, 2671.39109,
+                                             1.4270495211450602, 2.3144621088632635, 790.402632])
+        xform_full2roi = affine.params2xform([1, 0, -roi_img[2],
+                                              1, 0, -roi_img[0]])
+        xform_img_edge2fft = affine.params2xform([1, 0, -(nx_roi // 2),
+                                                  1, 0, -(ny_roi // 2)])
 
-        # sinusoid parameter transformation
+        # ###########################
+        # test object phase real-space
+        # ###########################
+        obj = fn(xo, yo)
+        phase_obj_fit = get_phase_realspace(obj, fobj, 1, phase_guess=phase_obj)[0]
+        self.assertAlmostEqual(phase_obj, phase_obj_fit, 4)
+
+        # ###########################
+        # test object phase from ft
+        # ###########################
+        window_obj = np.outer(hann(ny_o), hann(nx_o))
+        obj_ft = fftshift(fft2(ifftshift(obj * window_obj)))
+        fx_ft_obj = fftshift(fftfreq(nx_o))
+        fy_ft_obj = fftshift(fftfreq(ny_o))
+
+        xind_obj = np.argmin(np.abs(fx_ft_obj - fobj[0]))
+        yind_obj = np.argmin(np.abs(fy_ft_obj - fobj[1]))
+        peak_obj = np.mean(obj_ft[yind_obj - 1 : yind_obj + 2, xind_obj - 1 : xind_obj + 2])
+
+        phase_obj_ft_peak = np.mod(np.angle(peak_obj), 2 * np.pi)
+        phase_obj_ft = affine.xform_sinusoid_params(fobj[0],
+                                                    fobj[1],
+                                                    phase_obj,
+                                                    xform_obj_edge2fft)[-1]
+        self.assertAlmostEqual(phase_obj_ft, phase_obj_ft_peak, places=4)
+
+        # ###########################
+        # test image space phase
+        # accuracy is limited by frequency fitting routine
+        # ###########################
+        img_roi = affine.xform_fn(fn, xform_full2roi.dot(xform_obj2img))(xi_roi, yi_roi)
         fxi, fyi, phase_roi = affine.xform_sinusoid_params_roi(fobj[0],
                                                                fobj[1],
                                                                phase_obj,
-                                                               xform,
+                                                               xform_obj2img,
                                                                None,
                                                                roi_img,
                                                                input_origin_fft=False,
                                                                output_origin_fft=False)
-        fimg = np.array([fxi, fyi])
+        # fxi, fyi, phase_roi = affine.xform_sinusoid_params(fobj[0],
+        #                                                    fobj[1],
+        #                                                    phase_obj,
+        #                                                    xform_full2roi.dot(xform_obj2img))
+        phase_roi_fit = get_phase_realspace(img_roi, [fxi, fyi], 1, phase_guess=phase_roi)[0]
+        self.assertAlmostEqual(phase_roi, phase_roi_fit, 1)
 
-        # FFT phase
+        # ###########################
+        # predict image space sinusoid parameters if image coordinates are ci = [-(n//2), ...]
+        # accuracy probably limited by peak height finding routine
+        # ###########################
         _, _, phase_roi_ft = affine.xform_sinusoid_params_roi(fobj[0],
                                                               fobj[1],
                                                               phase_obj,
-                                                              xform,
+                                                              xform_obj2img,
                                                               None,
                                                               roi_img,
                                                               input_origin_fft=False,
                                                               output_origin_fft=True)
 
-        # compared with phase from fitting image directly
-        out_coords = np.meshgrid(range(roi_img[2], roi_img[3]), range(roi_img[0], roi_img[1]))
-        # img = affine.xform_fn(fn, xform, out_coords)
-        img = affine.xform_fn(fn, xform)(*out_coords)
-        phase_fit_roi = get_phase_realspace(img, fimg, 1, phase_guess=phase_roi)[0]
+        window = np.outer(hann(ny_roi), hann(nx_roi))
+        img_ft = fftshift(fft2(ifftshift(img_roi * window)))
+        fx = fftshift(fftfreq(nx_roi))
+        fy = fftshift(fftfreq(ny_roi))
 
-        # phase FFT
-        ny, nx = img.shape
-        window = np.expand_dims(hann(nx), axis=0) * np.expand_dims(hann(ny), axis=1)
-        img_ft = fftshift(fft2(ifftshift(img * window)))
-        fx = fftshift(fftfreq(nx, 1))
-        fy = fftshift(fftfreq(ny, 1))
-
-        xind = np.argmin(np.abs(fx - fimg[0]))
-        yind = np.argmin(np.abs(fy - fimg[1]))
+        xind = np.argmin(np.abs(fx - fxi))
+        yind = np.argmin(np.abs(fy - fyi))
         peak = np.mean(img_ft[yind-1:yind+2, xind-1:xind+2])
-        phase_fit_roi_ft = np.mod(np.angle(peak), 2 * np.pi)
+        phase_roi_ft_fit = np.mod(np.angle(peak), 2 * np.pi)
 
-        # accuracy is limited by frequency fitting routine...
-        self.assertAlmostEqual(phase_roi, phase_fit_roi, 1)
-        # probably limited by peak height finding routine
-        self.assertAlmostEqual(phase_roi_ft, phase_fit_roi_ft, 2)
+        self.assertAlmostEqual(phase_roi_ft, phase_roi_ft_fit, 2)
+
+        # ###########################
+        # predict image space sinusoid parameters if object space and image space use FFT params
+        # ###########################
+        _, _, phase_in_ft_roi = affine.xform_sinusoid_params_roi(fobj[0],
+                                                                   fobj[1],
+                                                                   phase_obj_ft,
+                                                                   xform_obj2img,
+                                                                   (ny_o, nx_o),
+                                                                   roi_img,
+                                                                   input_origin_fft=True,
+                                                                   output_origin_fft=False)
+        self.assertAlmostEqual(phase_in_ft_roi, phase_roi, 2)
+
+        # ###########################
+        # predict image space sinusoid parameters if object space and image space use FFT params
+        # ###########################
+        _, _, phase_roi_ft_both = affine.xform_sinusoid_params_roi(fobj[0],
+                                                                 fobj[1],
+                                                                 phase_obj_ft,
+                                                                 xform_obj2img,
+                                                                 (ny_o, nx_o),
+                                                                 roi_img,
+                                                                 input_origin_fft=True,
+                                                                 output_origin_fft=True)
+
+        self.assertAlmostEqual(phase_roi_ft_both, phase_roi_ft)
+
+
 
     def test_fit_affine_points_2d(self):
         xform = np.array([[5.346346, 3.4357347, 25.7677],
