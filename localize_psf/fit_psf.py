@@ -32,7 +32,10 @@ except ImportError:
 _cupy_available = True
 try:
     import cupy as cp
-    from cupyx.scipy.signal import convolve as convolve_gpu
+
+    with catch_warnings():
+        simplefilter("ignore")
+        from cupyx.scipy.signal import convolve as convolve_gpu
 except ImportError:
     cp = np
     _cupy_available = False
