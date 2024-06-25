@@ -28,37 +28,36 @@ else:
 def xform2params(affine_mat: np.ndarray) -> np.ndarray:
     """
     Parametrize 2D affine transformation in terms of rotation angles, magnifications, and offsets.
-    T = [[M0 * cos(t0), -M1 * sin(t1), v0],
-         [M0 * sin(t0),  M1 * cos(t1), v1],
+    T = [[m0 * cos(t0), -m1 * sin(t1), v0],
+         [m0 * sin(t0),  m1 * cos(t1), v1],
          [   0        ,    0         , 1]]
-    Both t0 and t1 are measured CCW from the 0-axis
 
     :param affine_mat:
-    :return params: [M0, t0, v0 ,M1, t1, v1]
+    :return params: [m0, t0, v0 ,m1, t1, v1]
     """
     if affine_mat.shape != (3, 3):
         raise ValueError("xform2params only works with 2D affine transformations (i.e. 3x3 matrices)")
 
     # get offsets
-    vx = affine_mat[0, -1]
-    vy = affine_mat[1, -1]
+    v0 = affine_mat[0, -1]
+    v1 = affine_mat[1, -1]
 
     # get rotation and scale for x-axis
-    theta_x = np.angle(affine_mat[0, 0] + 1j * affine_mat[1, 0])
-    mx = np.nanmean([affine_mat[0, 0] / np.cos(theta_x), affine_mat[1, 0] / np.sin(theta_x)])
+    t0 = np.angle(affine_mat[0, 0] + 1j * affine_mat[1, 0])
+    m0 = np.nanmean([affine_mat[0, 0] / np.cos(t0), affine_mat[1, 0] / np.sin(t0)])
 
     # get rotation and scale for y-axis
-    theta_y = np.angle(affine_mat[1, 1] - 1j * affine_mat[0, 1])
-    my = np.nanmean([affine_mat[1, 1] / np.cos(theta_y), -affine_mat[0, 1] / np.sin(theta_y)])
+    t1 = np.angle(affine_mat[1, 1] - 1j * affine_mat[0, 1])
+    m1 = np.nanmean([affine_mat[1, 1] / np.cos(t1), -affine_mat[0, 1] / np.sin(t1)])
 
-    return np.array([mx, theta_x, vx, my, theta_y, vy])
+    return np.array([m0, t0, v0, m1, t1, v1])
 
 
 def params2xform(params: Sequence[float]) -> np.ndarray:
     """
     Construct a 2D affine transformation from parameters. Inverse function for xform2params()
-    T = [[M0 * cos(t0), -M1 * sin(t1), v0],
-         [M0 * sin(t0),  M1 * cos(t1), v1],
+    T = [[m0 * cos(t0), -m1 * sin(t1), v0],
+         [m0 * sin(t0),  m1 * cos(t1), v1],
          [   0        ,    0         , 1]]
 
     :param params: [M0, t0, v0 ,M1, t1, v1]
