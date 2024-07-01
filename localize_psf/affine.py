@@ -127,32 +127,30 @@ def xform_mat(mat_obj: array,
     # get corresponding object space coordinates
     xform_inv = xp.linalg.inv(xp.asarray(xform))
 
-    coords_obj_from_img = [xp.reshape(c, output_shape)
+    coords_obj = [xp.reshape(c, output_shape)
                            for c in xform_points(coords_img, xform_inv).transpose()]
 
     # only use points with coords in image
-    coords_obj_bounds = [xp.arange(mat_obj.shape[1]),
-                         xp.arange(mat_obj.shape[0])]
+    coords_obj_range = [xp.arange(s) for s in mat_obj.shape]
 
     # since CuPy logical_and() does not support reduce
-    to_use = xp.ones(coords_obj_from_img[0].shape, dtype=bool)
+    to_use = xp.ones(coords_obj[0].shape, dtype=bool)
     for ii in range(mat_obj.ndim):
-        to_use[coords_obj_from_img[ii] < coords_obj_bounds[ii].min()] = False
-        to_use[coords_obj_from_img[ii] > coords_obj_bounds[ii].max()] = False
+        to_use[coords_obj[ii] < coords_obj_range[ii].min()] = False
+        to_use[coords_obj[ii] > coords_obj_range[ii].max()] = False
 
     # get matrix in image space
     if mode == 'nearest':
         # find the closest point in image to each output point
         inds = [tuple(xp.array(xp.round(oc[to_use]), dtype=int))
-                for oc in coords_obj_from_img]
-        inds.reverse()
+                for oc in coords_obj]
 
         # evaluate matrix
         mat_img = xp.zeros(output_shape) * xp.nan
         mat_img[to_use] = mat_obj[tuple(inds)]
 
     elif mode == 'interp':
-        mat_img = RectBivariateSpline(*coords_obj_bounds, mat_obj.transpose()).ev(*coords_obj_from_img)
+        mat_img = RectBivariateSpline(*coords_obj_range, mat_obj).ev(*coords_obj)
         mat_img[xp.logical_not(to_use)] = np.nan
     else:
         raise ValueError(f"'mode' must be 'nearest' or 'interp' but was '{mode:s}'")
@@ -452,7 +450,7 @@ def fit_xform_img(mat_obj: np.ndarray,
                                      [0   , 0   , 1]])
 
     def err_fn(p):
-        img_coords = np.meshgrid(np.arange(mat_img.shape[1]), np.arange(mat_img.shape[0]))
+        img_coords = np.meshgrid(np.arange(mat_img.shape[1]), np.arange(mat_img.shape[0]), indexing="ij")
         diff = mat_img.ravel() - (p[0] * xform_mat(mat_obj, p2xform(p), img_coords, mode='interp').ravel() + p[1])
         diff[np.isnan(diff)] = 0
         return diff
