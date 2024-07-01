@@ -9,15 +9,18 @@ gi(c0_i, c1_i) = g(T^{-1} [[c0_i], [c1_i], [1]])
 """
 from typing import Optional, Union
 from collections.abc import Sequence
+from warnings import warn
 from joblib import Parallel, delayed
 import numpy as np
-from scipy.interpolate import RectBivariateSpline
+from scipy.interpolate import RegularGridInterpolator
 from localize_psf.fit import fit_least_squares
 
 try:
     import cupy as cp
+    import cupyx.scipy.RegularGridInterpolator as RegularGridInterpolatorGPU
 except ImportError:
     cp = None
+    RegularGridInterpolatorGPU = None
 
 if cp:
     array = Union[np.ndarray, cp.ndarray]
@@ -95,65 +98,46 @@ def xform_mat(mat_obj: array,
               mode: str = 'nearest') -> array:
     """
     Given a matrix defined on object space coordinates, M[c0_obj, c1_obj], calculate corresponding matrix at image
-    space coordinates. This is given by (roughly speaking)
+    space coordinates. This is given by
     M'[c0_img, c1_img] = M[ T^{-1} * [c0_img, c1_img] ]
-    where T is the affine transformation from object space to image space
-    Object coordinates are assumed to be [0, ..., n0-1], ...
+    where T is the affine transformation from object space to image space.
+    Object coordinates are assumed to be on a regular pixel grid [0, ..., n0-1], ...
+    This function is a wrapper for scipy.optimize.RegularGridInterpolator
 
     :param mat_obj: matrix in object space
     :param xform: affine transformation which takes object space coordinates as input, [yi, xi] = T * [yo, xo].
     :param img_coords: (c0_i, c1_i, ..., cn_i) list of coordinate arrays where the image-space matrix is to be
       evaluated. All coordinate arrays must be the same shape. i.e., c0_i.shape = c1_i.shape.
-    :param mode: 'nearest' or 'interp'. 'interp' will produce better results if e.g. looking at phase content after
-      affine transformation.
+    :param mode: passed through as the `method` argument to RegularGridInterpolator. Options include "nearest",
+      "linear", and "cubic".
     :return mat_img: matrix in image space, M'[c0_i, c1_i]
     """
-    # todo: want to change img_coords to order (c0, c1)
-    # todo: want to change affine matrix to order [yi, xi] rather than [xi, yi]
     if cp and isinstance(mat_obj, cp.ndarray):
         xp = cp
-        if mode == "interp":
-            raise NotImplementedError("mode 'interp' is not implemented for CuPy arrays")
+        Interp = RegularGridInterpolatorGPU
     else:
         xp = np
-
-    if mat_obj.ndim != 2:
-        raise ValueError("img_obj must be a 2D array")
+        Interp = RegularGridInterpolator
 
     # image space coordinates
     output_shape = img_coords[0].shape
     coords_img = xp.stack([xp.asarray(ic).ravel() for ic in img_coords], axis=1)
 
-    # get corresponding object space coordinates
+    # corresponding object space coordinates
     xform_inv = xp.linalg.inv(xp.asarray(xform))
-
     coords_obj = [xp.reshape(c, output_shape)
                            for c in xform_points(coords_img, xform_inv).transpose()]
+    co = np.stack(coords_obj, axis=-1)
 
-    # only use points with coords in image
+    # object space range
     coords_obj_range = [xp.arange(s) for s in mat_obj.shape]
 
-    # since CuPy logical_and() does not support reduce
-    to_use = xp.ones(coords_obj[0].shape, dtype=bool)
-    for ii in range(mat_obj.ndim):
-        to_use[coords_obj[ii] < coords_obj_range[ii].min()] = False
-        to_use[coords_obj[ii] > coords_obj_range[ii].max()] = False
-
     # get matrix in image space
-    if mode == 'nearest':
-        # find the closest point in image to each output point
-        inds = [tuple(xp.array(xp.round(oc[to_use]), dtype=int))
-                for oc in coords_obj]
-
-        # evaluate matrix
-        mat_img = xp.zeros(output_shape) * xp.nan
-        mat_img[to_use] = mat_obj[tuple(inds)]
-
-    elif mode == 'interp':
-        mat_img = RectBivariateSpline(*coords_obj_range, mat_obj).ev(*coords_obj)
-        mat_img[xp.logical_not(to_use)] = np.nan
-    else:
-        raise ValueError(f"'mode' must be 'nearest' or 'interp' but was '{mode:s}'")
+    mat_img = Interp(coords_obj_range,
+                     mat_obj,
+                     bounds_error=False,
+                     fill_value=np.nan,
+                     method=mode)(co)
 
     return mat_img
 
