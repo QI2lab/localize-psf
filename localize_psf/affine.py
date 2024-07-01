@@ -94,18 +94,19 @@ def xform_mat(mat_obj: array,
               img_coords: Sequence[array],
               mode: str = 'nearest') -> array:
     """
-    Given a matrix defined on object space coordinates, M[yo, xo], calculate corresponding matrix at image
+    Given a matrix defined on object space coordinates, M[c0_obj, c1_obj], calculate corresponding matrix at image
     space coordinates. This is given by (roughly speaking)
-    M'[yi, xi] = M[ T^{-1} * [xi, yi] ]
-    Object coordinates are assumed to be [0, ..., nx-1] and [0, ..., ny-1]
+    M'[c0_img, c1_img] = M[ T^{-1} * [c0_img, c1_img] ]
+    where T is the affine transformation from object space to image space
+    Object coordinates are assumed to be [0, ..., n0-1], ...
 
     :param mat_obj: matrix in object space
-    :param xform: affine transformation which takes object space coordinates as input, [yi, xi] = T * [xo, yo]
-    :param img_coords: (c1, c0) list of coordinate arrays where the image-space matrix is to be evaluated. All
-      coordinate arrays must be the same shape. i.e., xi.shape = yi.shape.
-    :param str mode: 'nearest' or 'interp'. 'interp' will produce better results if e.g. looking at phase content after
+    :param xform: affine transformation which takes object space coordinates as input, [yi, xi] = T * [yo, xo].
+    :param img_coords: (c0_i, c1_i, ..., cn_i) list of coordinate arrays where the image-space matrix is to be
+      evaluated. All coordinate arrays must be the same shape. i.e., c0_i.shape = c1_i.shape.
+    :param mode: 'nearest' or 'interp'. 'interp' will produce better results if e.g. looking at phase content after
       affine transformation.
-    :return mat_img: matrix in image space, M'[yi, xi]
+    :return mat_img: matrix in image space, M'[c0_i, c1_i]
     """
     # todo: want to change img_coords to order (c0, c1)
     # todo: want to change affine matrix to order [yi, xi] rather than [xi, yi]
@@ -212,36 +213,36 @@ def xform_points(coords: array,
     return coords_out
 
 
-def xform_sinusoid_params(fx_obj: Union[float, np.ndarray],
-                          fy_obj: Union[float, np.ndarray],
+def xform_sinusoid_params(f0_obj: Union[float, np.ndarray],
+                          f1_obj: Union[float, np.ndarray],
                           phi_obj: Union[float, np.ndarray],
                           affine_mat: np.ndarray) -> (Union[float, np.ndarray], Union[float, np.ndarray], Union[float, np.ndarray],):
     """
     Given a sinusoid function of object space,
-    cos[2pi f_x * xo + 2pi f_y * yo + phi_o],
-    and an affine transformation mapping object space to image space, [xi, yi] = A * [xo, yo]
+    cos[2pi f0 * c0_obj + 2pi f1 * c1_obj + phi_o],
+    and an affine transformation mapping object space to image space, [c0_img, c1_img] = A * [c0_obj, c1_obj]
     find the frequency and phase parameters for the corresponding function on image space,
-    cos[2pi f_xi * xi + 2pi f_yi * yi + phi_i]
-    fx_obj, fy_obj, and phi_ob should be broadcastable to the same shape
+    cos[2pi f0_img * c0_img + 2pi f1_img * y1_img + phi_i]
+    f0_obj, f1_obj, and phi_obj should be broadcastable to the same shape
 
-    :param fx_obj: x-component of frequency (in units 1/cycles) in object space
-    :param fy_obj: y-component of frequency (in units of 1/cycles) in object space
+    :param f0_obj: 0th coordinate component of frequency (in units 1/cycles) in object space
+    :param f1_obj: 1st coordinate component of frequency (in units of 1/cycles) in object space
     :param phi_obj: phase in object space
     :param affine_mat: affine transformation homogeneous coordinate matrix transforming
      points in object space to image space
-    :return fx_img, fy_img, phi_mig: frequency components and phase in image space
+    :return f0_img, f1_img, phi_mig: frequency components and phase in image space
     """
     # todo: should twe accept an array frq_obj of shape n0 x n1 x ... x nk x ndim
     # todo: and support arbitary dimensional sinusoids?
     affine_inv = np.linalg.inv(affine_mat)
-    fx_img = fx_obj * affine_inv[0, 0] + fy_obj * affine_inv[1, 0]
-    fy_img = fx_obj * affine_inv[0, 1] + fy_obj * affine_inv[1, 1]
+    f0_img = f0_obj * affine_inv[0, 0] + f1_obj * affine_inv[1, 0]
+    f1_img = f0_obj * affine_inv[0, 1] + f1_obj * affine_inv[1, 1]
     phi_img = np.mod(phi_obj +
-                     2 * np.pi * fx_obj * affine_inv[0, 2] +
-                     2 * np.pi * fy_obj * affine_inv[1, 2],
+                     2 * np.pi * f0_obj * affine_inv[0, 2] +
+                     2 * np.pi * f1_obj * affine_inv[1, 2],
                      2 * np.pi)
 
-    return fx_img, fy_img, phi_img
+    return f0_img, f1_img, phi_img
 
 
 def fit_xform_points(from_pts: np.ndarray,
