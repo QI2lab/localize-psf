@@ -435,7 +435,7 @@ def fit_xform_img(mat_obj: np.ndarray,
 
     def err_fn(p):
         img_coords = np.meshgrid(np.arange(mat_img.shape[1]), np.arange(mat_img.shape[0]), indexing="ij")
-        diff = mat_img.ravel() - (p[0] * xform_mat(mat_obj, p2xform(p), img_coords, mode='interp').ravel() + p[1])
+        diff = mat_img.ravel() - (p[0] * xform_mat(mat_obj, p2xform(p), img_coords, mode='linear').ravel() + p[1])
         diff[np.isnan(diff)] = 0
         return diff
 
