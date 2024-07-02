@@ -163,7 +163,7 @@ def xform_points(coords: array,
     if xform.ndim != 2:
         raise ValueError(f"xform should have two dimensions, but had {xform.ndim:d}")
 
-    if xform.shape[0] != coords.shape[-1]:
+    if xform.shape[0] - 1 != coords.shape[-1]:
         raise ValueError(f"xform and coords had incompatible shapes {xform.shape}, {coords.shape}")
 
     xp = cp if cp and isinstance(coords, cp.ndarray) else np
