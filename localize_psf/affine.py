@@ -9,7 +9,6 @@ gi(c0_i, c1_i) = g(T^{-1} [[c0_i], [c1_i], [1]])
 """
 from typing import Optional, Union
 from collections.abc import Sequence
-from warnings import warn
 from joblib import Parallel, delayed
 import numpy as np
 from scipy.interpolate import RegularGridInterpolator
@@ -74,35 +73,17 @@ def params2xform(params: Sequence[float]) -> np.ndarray:
     return affine_xform
 
 
-def rotation2xform(angle: float,
-                   center: Sequence[float]) -> np.ndarray:
-    """
-    Get 2D affine transformation corresponding to a rotation by an angle about a given center
-
-    :param angle: angle in radians
-    :param center: (cx, cy)
-    :return xform:
-    """
-    # think of this xform as Rot Matrix * [[X - cx], [Y - cy]] + [[cx], [cy]]
-    cx, cy = center
-    xform = params2xform([1, angle, cx, 1, angle, cy])
-    extra_offset = -xform[:2, :2].dot(np.array([[cy], [cx]]))
-    xform[:-1, -1] += extra_offset.ravel()
-
-    return xform
-
-
 def xform_mat(mat_obj: array,
               xform: array,
               img_coords: Sequence[array],
               mode: str = 'nearest') -> array:
     """
     Given a matrix defined on object space coordinates, M[c0_obj, c1_obj], calculate corresponding matrix at image
-    space coordinates. This is given by
-    M'[c0_img, c1_img] = M[ T^{-1} * [c0_img, c1_img] ]
+    space coordinates. This is given by M'[c0_img, c1_img] = M[ T^{-1} * [c0_img, c1_img] ]
     where T is the affine transformation from object space to image space.
     Object coordinates are assumed to be on a regular pixel grid [0, ..., n0-1], ...
-    This function is a wrapper for scipy.optimize.RegularGridInterpolator
+    This function is a wrapper for scipy.optimize.RegularGridInterpolator.
+    In many cases, scipy.ndimage.affine_transform() may be a better choice
 
     :param mat_obj: matrix in object space
     :param xform: affine transformation which takes object space coordinates as input, [yi, xi] = T * [yo, xo].
@@ -125,8 +106,7 @@ def xform_mat(mat_obj: array,
 
     # corresponding object space coordinates
     xform_inv = xp.linalg.inv(xp.asarray(xform))
-    coords_obj = [xp.reshape(c, output_shape)
-                           for c in xform_points(coords_img, xform_inv).transpose()]
+    coords_obj = [xp.reshape(c, output_shape) for c in xform_points(coords_img, xform_inv).transpose()]
     co = np.stack(coords_obj, axis=-1)
 
     # object space range
@@ -198,7 +178,9 @@ def xform_points(coords: array,
 def xform_sinusoid_params(f0_obj: Union[float, np.ndarray],
                           f1_obj: Union[float, np.ndarray],
                           phi_obj: Union[float, np.ndarray],
-                          affine_mat: np.ndarray) -> (Union[float, np.ndarray], Union[float, np.ndarray], Union[float, np.ndarray],):
+                          affine_mat: np.ndarray) -> (Union[float, np.ndarray],
+                                                      Union[float, np.ndarray],
+                                                      Union[float, np.ndarray],):
     """
     Given a sinusoid function of object space,
     cos[2pi f0 * c0_obj + 2pi f1 * c1_obj + phi_o],
@@ -214,7 +196,7 @@ def xform_sinusoid_params(f0_obj: Union[float, np.ndarray],
      points in object space to image space
     :return f0_img, f1_img, phi_mig: frequency components and phase in image space
     """
-    # todo: should twe accept an array frq_obj of shape n0 x n1 x ... x nk x ndim
+    # todo: should accept an array frq_obj of shape n0 x n1 x ... x nk x ndim
     # todo: and support arbitary dimensional sinusoids?
     affine_inv = np.linalg.inv(affine_mat)
     f0_img = f0_obj * affine_inv[0, 0] + f1_obj * affine_inv[1, 0]
@@ -245,7 +227,6 @@ def fit_xform_points(from_pts: np.ndarray,
      To transform coordinates using this affine transformation use xform_points(). vars are the estimated
      variances of the affine transformation matrix entries
     """
-    # todo: could add ability to fix certain parameters, but tricky to do this for 2D/3D dims in same code
 
     # interpret as ndims x npts, i.e. rows are coord_0, coord_1, ..., coord_(n-1)
     from_pts = np.asarray(from_pts).transpose()
@@ -260,14 +241,13 @@ def fit_xform_points(from_pts: np.ndarray,
     # rows are coord_0, coord_1, ..., coord_(n-1), 1
     from_pts_aug = np.concatenate((from_pts, np.ones((1, npts))), axis=0)
 
-    # Solve for affine matrix as a linear least squares problem or actually two separate problems:
+    # Solve for affine matrix using a linear least squares problem for each dimensions
     # [coord_0_from, coord_1_from, 1] * M1 = coord_0_to; M1 = [[A], [B], [C]]
     # [coord_0_from, coord_1_from, 1] * M2 = coord_1_to; M2 = [[D], [E], [F]]
-    # and this naturally generalizes to any number of dimensions
     affine_mat = np.zeros((ndim + 1, ndim + 1))
     affine_mat[-1, -1] = 1
 
-    vars = np.zeros(affine_mat.shape)
+    variance = np.zeros(affine_mat.shape)
     for ii in range(ndim):
         if not translate_only:
             params_temp, residuals, rank, svals = np.linalg.lstsq(from_pts_aug.transpose(),
@@ -277,11 +257,10 @@ def fit_xform_points(from_pts: np.ndarray,
 
             # variances of fit parameters
             xt_x_inv = np.linalg.inv(from_pts_aug.dot(from_pts_aug.transpose()))
-            var_sample = residuals / (npts - (ndim + 1))
             try:
-                vars[ii] = np.diag(xt_x_inv) * var_sample
+                variance[ii] = np.diag(xt_x_inv) * residuals / (npts - (ndim + 1))
             except ValueError:
-                vars[ii] = np.nan
+                variance[ii] = np.nan
         else:
             params_temp, residuals, rank, svals = \
                 np.linalg.lstsq(np.expand_dims(from_pts_aug[-1], axis=1),
@@ -291,10 +270,9 @@ def fit_xform_points(from_pts: np.ndarray,
             affine_mat[ii, ii] = 1
 
             xt_x_inv = 1 / np.sum(from_pts_aug[-1]**2)
-            var_sample = residuals / (npts - (ndim + 1))
-            vars[ii, -1] = xt_x_inv * var_sample
+            variance[ii, -1] = xt_x_inv * residuals / (npts - (ndim + 1))
 
-    return affine_mat, vars
+    return affine_mat, variance
 
 
 def fit_xform_points_ransac(from_pts: np.ndarray,
@@ -332,7 +310,7 @@ def fit_xform_points_ransac(from_pts: np.ndarray,
                                                    njobs=1,
                                                    n_inliers_stop=n_inliers_stop,
                                                    translate_only=translate_only)
-                  for ii in range(njobs))
+                  for _ in range(njobs))
 
         xforms, inliers, errs, vars = zip(*results)
 
@@ -410,15 +388,15 @@ def fit_xform_img(mat_obj: np.ndarray,
                   fixed_params: Optional[Sequence[bool]] = None,
                   bounds: Optional[Sequence[Sequence[float]]] = None) -> (dict, np.ndarray):
     """
-    Fit affine transformation by comparing image with transformed image
+    Fit affine transformation by comparing image with transformed 2D image
 
     :param mat_obj: array of size ny_o x nx_o in object space
     :param mat_img: array of size ny_i x nx_i in image space
-    :param init_params: let t by the affine transformation matrix which acts on object space coordinates to prouce
-     image space coordinates. Then the initial parameters are
+    :param init_params: If t is the affine transformation matrix which acts on object space coordinates to produce
+     image space coordinates, the initial parameters are
      [amplitude, background, t[0, 0], t[0, 1], t[0, 2], t[1, 0], t[1, 1], t[1, 2]]
-    :param fixed_params:
-    :param bounds:
+    :param fixed_params: boolean array of same size as init_params determining which parameters are fixed
+    :param bounds: (lower bounds, upper bounds)
     :return results, xform:
     """
 
@@ -434,7 +412,7 @@ def fit_xform_img(mat_obj: np.ndarray,
                                      [0   , 0   , 1]])
 
     def err_fn(p):
-        img_coords = np.meshgrid(np.arange(mat_img.shape[1]), np.arange(mat_img.shape[0]), indexing="ij")
+        img_coords = np.meshgrid(np.arange(mat_img.shape[0]), np.arange(mat_img.shape[1]), indexing="ij")
         diff = mat_img.ravel() - (p[0] * xform_mat(mat_obj, p2xform(p), img_coords, mode='linear').ravel() + p[1])
         diff[np.isnan(diff)] = 0
         return diff
