@@ -45,7 +45,8 @@ def get_rot_mat_angle_axis(rot_mat: np.ndarray) -> (np.ndarray, float):
     the inverse function for get_rot_mat()
 
     Note that get_rot_mat_angle_axis(get_rot_mat(axis, angle)) can return either axis, angle or -axis, -angle
-    as these two rotation matrices are equivalent
+    as these two rotation matrices are equivalent. For consistency, this function always returns axis such
+    that its largest magnitude component is positive.
 
     :param rot_mat:
     :return rot_axis, angle:
