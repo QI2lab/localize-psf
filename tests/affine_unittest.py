@@ -292,6 +292,62 @@ class Test_affine(unittest.TestCase):
 
         np.testing.assert_allclose(np.zeros((4, 4)), xform - xform_fit, atol=1e-10)
 
+    def test_rot_mat(self):
+        angles = [np.pi / 17, np.pi/8, np.pi / 4, np.pi/3, np.pi/2, np.pi]
+
+        for angle in angles:
+            # z-rotations
+            rmat = rotation.get_rot_mat(np.array([0, 0, 1]), angle)
+            rmat_exp = np.array([[np.cos(angle), -np.sin(angle), 0.],
+                                 [np.sin(angle), np.cos(angle), 0.],
+                                 [0., 0., 1.]])
+            np.testing.assert_allclose(rmat, rmat_exp, atol=1e-10)
+
+            # x-rotations
+            rmat = rotation.get_rot_mat(np.array([1, 0, 0]), angle)
+            rmat_exp = np.array([[1, 0, 0.],
+                             [0., np.cos(angle), -np.sin(angle)],
+                             [0., np.sin(angle), np.cos(angle)]])
+            np.testing.assert_allclose(rmat, rmat_exp, atol=1e-10)
+
+            # y-rotations
+            rmat = rotation.get_rot_mat(np.array([0, 1, 0]), angle)
+            rmat_exp = np.array([[np.cos(angle), 0, np.sin(angle)],
+                             [0., 1, 0],
+                             [-np.sin(angle), 0, np.cos(angle)]])
+            np.testing.assert_allclose(rmat, rmat_exp, atol=1e-10)
+
+    def test_rot_axis(self):
+        angles = [np.pi / 17, np.pi/8, np.pi / 4, np.pi/3, np.pi/2, 2/3 * np.pi]
+
+        for angle in angles:
+            # z-rotations
+            rmat = np.array([[np.cos(angle), -np.sin(angle), 0.],
+                             [np.sin(angle), np.cos(angle), 0.],
+                             [0., 0., 1.]])
+            axis, a = rotation.get_rot_mat_angle_axis(rmat)
+
+            np.testing.assert_allclose(a, angle, atol=1e-10)
+            np.testing.assert_allclose(axis, np.array([0, 0, 1]))
+
+            # x-rotations
+            rmat = np.array([[1, 0, 0.],
+                             [0., np.cos(angle), -np.sin(angle)],
+                             [0., np.sin(angle), np.cos(angle)]])
+            axis, a = rotation.get_rot_mat_angle_axis(rmat)
+
+            np.testing.assert_allclose(a, angle, atol=1e-10)
+            np.testing.assert_allclose(axis, np.array([1, 0, 0]))
+
+            # y-rotations
+            rmat = np.array([[np.cos(angle), 0, np.sin(angle)],
+                             [0., 1, 0],
+                             [-np.sin(angle), 0, np.cos(angle)]])
+            axis, a = rotation.get_rot_mat_angle_axis(rmat)
+
+            np.testing.assert_allclose(a, angle, atol=1e-10)
+            np.testing.assert_allclose(axis, np.array([0, 1, 0]))
+
     def test_euler(self):
         em = rotation.euler_mat(15 * np.pi / 180, 17.2346346 * np.pi / 180, 67 * np.pi/180)
         np.testing.assert_allclose(np.identity(3), em.dot(em.transpose()), atol=1e-10)
