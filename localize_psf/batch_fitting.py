@@ -8,7 +8,7 @@ import numpy as np
 from localize_psf import fit_psf as psf
 from localize_psf.array_backend import get_array_module
 from localize_psf.fitting_controls import validate_bounds, validate_fixed
-from localize_psf.uncertainty import add_covariance, validate_uncertainty
+from localize_psf.uncertainty import add_covariance, parameter_bound_activity, validate_uncertainty
 
 
 def _host_array(value, dtype=None):
@@ -230,6 +230,7 @@ def fit_rois(
         "fit_time": 0.0,
         "model": repr(model),
         "bounds": (lower, upper),
+        "active_bounds": np.zeros((nfits, model.nparams), bool),
     }
     variance, flags = (None, None)
     if return_covariance:
@@ -333,6 +334,13 @@ def fit_rois(
             use_gpu,
             cpu_covariance,
         )
+    else:
+        if use_gpu:
+            import cupy as xp
+        else:
+            xp = np
+        activity = parameter_bound_activity(result["fit_params"], result["bounds"], mask, xp)
+        result["active_bounds"][:] = xp.asnumpy(activity) if use_gpu else activity
     result["fit_time"] = perf_counter() - started
     return result
 

@@ -47,6 +47,19 @@ Only compact fit results accumulate; full-volume filtering and detection still
 require the input image in memory. GPUfit's public binding transfers packed ROI
 buffers to the host before native CUDA fitting.
 
+`localize_psf.optical_bounds.gaussian_width_bounds` derives Gaussian width
+priors from NA, wavelength in micrometres, immersion refractive index, and stored
+ZYX voxel sizes. It reuses `na2sxy` for the lateral Airy/Gaussian convention and
+the existing model's axial approximation. The caller explicitly supplies a
+relative sigma range and sampling floor in pixels. Production calculations use
+CuPy; `use_gpu=False` provides independent CPU references. These are optical
+priors, not measured deconvolution resolution or covariance calibration.
+
+Pass the nominal widths through `localize_beads_generic`'s
+`initial_parameter_values={"sxy": ..., "sz": ...}` to initialize them explicitly.
+Other parameters use the existing estimates. Infeasible starts still fail;
+they are never clipped. `active_bounds` is returned even without covariance.
+
 It also contains a high-level function for determining an experimental point-spread function and fitting
 an image containing many 3D diffraction limited spots to a PSF model, `autofit_psfs()`.
 

@@ -1410,6 +1410,7 @@ def localize_beads_generic(imgs: np.ndarray,
                            origin: Sequence[float] = (0., 0., 0.),
                            variances: np.ndarray | None = None,
                            roi_batch_size: int = 32,
+                           initial_parameter_values: dict | None = None,
                            **kwargs) -> tuple[tuple, dict, np.ndarray]:
     """
     Given an image consisting of diffraction limited features and background, identify the diffraction limited features
@@ -1455,6 +1456,8 @@ def localize_beads_generic(imgs: np.ndarray,
     :param model_zposition_index: index of model parameter giving z-position information
     :param roi_batch_size: maximum candidates packed, guessed and fitted at once.
       Only compact fit evidence is retained between batches; detection still uses the input volume.
+    :param initial_parameter_values: explicit shared named initial values, such as optical width estimates.
+      Other parameters use the existing moment guesses. Bounds are still validated without clipping.
     :return coords, fit_results, imgs_filtered: coords = (z, y, x)
     """
 
@@ -1521,6 +1524,13 @@ def localize_beads_generic(imgs: np.ndarray,
         xp = np
 
     imgs = xp.asarray(imgs)
+    initial_values = {} if initial_parameter_values is None else initial_parameter_values
+    if not isinstance(initial_values, dict) or set(initial_values) - set(model.parameter_names):
+        raise ValueError("initial_parameter_values must contain known model parameter names")
+    initial_values = {name: xp.asarray(value) for name, value in initial_values.items()}
+    if any(value.shape != () or value.dtype.kind not in "fiu" or not bool(xp.isfinite(value))
+           for value in initial_values.values()):
+        raise ValueError("initial parameter values must be finite numeric scalars")
 
     if filter_sigma_small is not None:
         ks = xp.asarray(get_filter_kernel(filter_sigma_small, (dz, dy, dx)))
@@ -1643,6 +1653,8 @@ def localize_beads_generic(imgs: np.ndarray,
             if variances is not None:
                 roi_variances, _, _ = prepare_rois(variances, (z, y, x), batch_rois)
             init_params = model.estimate_parameters(img_rois, roi_coords, num_preserved_dims=1)
+            for name, value in initial_values.items():
+                init_params[:, model.parameter_names.index(name)] = value
             if xp.any(xp.isnan(init_params)):
                 raise ValueError("one or more init_params was NaN")
             if data_is_2d:
@@ -1702,10 +1714,14 @@ def localize_beads_generic(imgs: np.ndarray,
             print(f"Identified {np.sum(to_keep):d} likely candidates in {time.perf_counter() - tstart_filter:.3f}s")
 
     else:
+        empty_bounds, empty_flags = _slice_fit_controls(
+            bounds, kwargs.pop("quality_flags", None), slice(0, 0), 0, model.nparams
+        )
         fit_results = fit_rois(np.empty((0, 0)), tuple(np.empty((0, 0)) for _ in range(3)),
                                np.empty(0, dtype=int), np.empty((0, model.nparams)),
                                model=model, use_gpu=use_gpu_fit, estimator=estimator,
-                               fixed_params=fixed_params, bounds=bounds,
+                               fixed_params=fixed_params, bounds=empty_bounds,
+                               quality_flags=empty_flags,
                                variances=None if variances is None else np.empty((0, 0)), **kwargs)
         fit_results.update({"rois": np.empty((0, 6), dtype=int), "to_keep": np.empty(0, bool),
                             "conditions": np.empty((0, 0), bool), "condition_names": [],

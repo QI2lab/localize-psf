@@ -5,6 +5,17 @@ import numpy as np
 QUALITY_FLAGS = ("saturated", "truncated", "unresolved_overlap", "model_mismatch")
 
 
+def parameter_bound_activity(parameters, bounds, fixed, xp):
+    """Reuse optimizer-precision activity checks with or without covariance."""
+    parameters = xp.asarray(parameters)
+    lower, upper = (xp.asarray(side) for side in bounds)
+    tolerance = (1e-7 if xp is np else 2e-5) * (1 + xp.abs(parameters))
+    return (~xp.asarray(fixed))[None, :] & (
+        (xp.isfinite(lower) & (xp.abs(parameters - lower) <= tolerance))
+        | (xp.isfinite(upper) & (xp.abs(parameters - upper) <= tolerance))
+    )
+
+
 def validate_uncertainty(
     data, valid, estimator, noise_model, variances, quality_flags, batch_size, max_condition
 ):
@@ -179,13 +190,9 @@ def add_covariance(
             covariance[selected] = cpu_covariance[selected]
         condition[selected] = to_host(cond)
         flags["invalid_information"][selected] = ~to_host(solvable)
-        lower, upper = (xp.asarray(side[selected]) for side in result["bounds"])
-        tolerance = (2e-5 if use_gpu else 1e-7) * (1 + xp.abs(parameters))
         active[selected] = to_host(
-            (~xp.asarray(fixed))[None, :]
-            & (
-                (xp.isfinite(lower) & (xp.abs(parameters - lower) <= tolerance))
-                | (xp.isfinite(upper) & (xp.abs(parameters - upper) <= tolerance))
+            parameter_bound_activity(
+                parameters, tuple(side[selected] for side in result["bounds"]), fixed, xp
             )
         )
     flags["active_bound"][:] = np.any(active, axis=1)
