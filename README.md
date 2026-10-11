@@ -5,22 +5,17 @@ contained here are general purpose, and they have been split into a separate pac
 so that both the [mcSIM code](https://github.com/QI2lab/mcSIM) and the 
 [OPM code](https://github.com/QI2lab/OPM) can use them.
 
-To install the code in this repository as a package,
-```
+For a locked editable development environment (Python >=3.12),
+```powershell
 git clone https://github.com/QI2lab/localize-psf.git
 cd localize-psf
-pip install .
+uv sync --locked
+uv run --locked pytest
+uv build
 ```
-If you wish to edit the code, then install with the `-e` option,
-```
-git clone https://github.com/QI2lab/localize-psf.git
-cd localize-psf
-pip install -e .
-```
-
-If GPU support is desired,[CuPy](https://cupy.dev/) and our
-modified version of [GPUfit](https://github.com/QI2lab/Gpufit) must be installed. For installation
-instructions see the links above.
+See [development instructions](docs/development.md) for independently locked CPU
+and local GPU profiles, build prerequisites and publication checks. GPU fitting
+requires the tested [QI2lab GPUfit fork](https://github.com/QI2lab/Gpufit).
 
 # Examples
 Scripts illustrating example usage of localize-psf are available in [examples](examples).
