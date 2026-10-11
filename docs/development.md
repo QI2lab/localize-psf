@@ -63,3 +63,19 @@ The high-level `localize_beads_generic` forwards these controls and accepts a
 physical ZYX `origin`, applied once when building coordinates. Its image-shaped
 weights use the same ROI packing as the data. Empty outputs retain array shapes
 and candidate IDs. Optimizer failures and acceptance-filter decisions are distinct.
+# GPU model and uncertainty execution
+
+The four microscopy models reuse their existing model and derivative code with
+CuPy arrays, including rotated models and batched ROI coordinates. Device arrays
+stay on CUDA through model evaluation; CPU calculations remain available as test
+references. Windows CuPy requires the selected CUDA SDK headers as well as DLLs.
+The local runner sets those paths for its child process and keeps its kernel cache
+inside the ignored build directory:
+
+```powershell
+./scripts/run_gpu.ps1 -CommandArguments @('pytest', '-q', 'tests/test_gpu_psf_derivatives.py')
+```
+
+The runner defaults to the tested CUDA 12.8 installation. Supply `-CudaPath` to
+select another compatible SDK. It uses the existing locked `build/local-gpu`
+profile and never modifies persistent environment variables or installs packages.

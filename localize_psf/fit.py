@@ -9,6 +9,7 @@ from typing import Optional
 from collections.abc import Sequence
 import numpy as np
 from scipy.optimize import least_squares
+from localize_psf.array_backend import get_array_module
 from localize_psf.fitting_controls import validate_bounds, validate_fixed
 from localize_psf.rotation import euler_mat_inv, euler_mat_inv_derivatives
 
@@ -426,6 +427,7 @@ class rotated_model_3d(coordinate_model):
               coordinates: Sequence[np.ndarray],
               parameters: np.ndarray) -> np.ndarray:
         z, y, x = coordinates[-3:]
+        xp = get_array_module(z, y, x)
 
         phi = parameters[-3]
         theta = parameters[-2]
@@ -442,7 +444,7 @@ class rotated_model_3d(coordinate_model):
         zrot = (x - cx) * rot_mat[2, 0] + (y - cy) * rot_mat[2, 1] + (z - cz) * rot_mat[2, 2]
 
         # evaluate base model at rotated coordinates
-        params_base = np.array(parameters[:-3], copy=True)
+        params_base = xp.array(parameters[:-3], copy=True)
         params_base[self.center_inds[2]] = 0
         params_base[self.center_inds[1]] = 0
         params_base[self.center_inds[0]] = 0
@@ -453,6 +455,7 @@ class rotated_model_3d(coordinate_model):
                  coordinates: Sequence[np.ndarray],
                  parameters: np.ndarray) -> list[np.ndarray]:
         z, y, x = coordinates[-3:]
+        xp = get_array_module(z, y, x)
 
         phi = parameters[-3]
         theta = parameters[-2]
@@ -481,7 +484,7 @@ class rotated_model_3d(coordinate_model):
         dzrot_dcz = -rot_mat[2, 2]
 
         # evaluate base model at rotated coordinates
-        params_base = np.array(parameters[:-3], copy=True)
+        params_base = xp.array(parameters[:-3], copy=True)
         params_base[self.center_inds[2]] = 0.
         params_base[self.center_inds[1]] = 0.
         params_base[self.center_inds[0]] = 0.
@@ -490,9 +493,9 @@ class rotated_model_3d(coordinate_model):
         # need to correct jacobian with
         # (1) derivatives of rotated coordinates wrt centers
         # (2) derivatives wrt Euler angles
-        j_cx = np.array(jac_base[self.center_inds[2]], copy=True)
-        j_cy = np.array(jac_base[self.center_inds[1]], copy=True)
-        j_cz = np.array(jac_base[self.center_inds[0]], copy=True)
+        j_cx = xp.array(jac_base[self.center_inds[2]], copy=True)
+        j_cy = xp.array(jac_base[self.center_inds[1]], copy=True)
+        j_cz = xp.array(jac_base[self.center_inds[0]], copy=True)
 
         # need negative sign, because thinking the j_cx and etc. terms as actually taking derivative wrt x, y, z coords
         # since these enter in the same way as cx, cy, cz, but with opposite sign
@@ -1050,11 +1053,12 @@ class gauss3d(coordinate_model):
               params: np.ndarray) -> np.ndarray:
 
         z, y, x, = coordinates[-3:]
+        xp = get_array_module(z, y, x)
         amp, cx, cy, cz, sxy, sz, bg = params
         sxy_min, sz_min = self.minimum_sigmas
 
         # calculate psf at oversampled points
-        val = amp * np.exp(-(x - cx) ** 2 / 2 / (sxy_min ** 2 + sxy ** 2)
+        val = amp * xp.exp(-(x - cx) ** 2 / 2 / (sxy_min ** 2 + sxy ** 2)
                            -(y - cy) ** 2 / 2 / (sxy_min ** 2 + sxy ** 2)
                            -(z - cz) ** 2 / 2 / (sz_min ** 2 + sz ** 2)
                            ) + bg
@@ -1066,12 +1070,13 @@ class gauss3d(coordinate_model):
                  params: np.ndarray) -> list[np.ndarray]:
 
         z, y, x = coordinates[-3:]
+        xp = get_array_module(z, y, x)
         amp, cx, cy, cz, sxy, sz, bg = params
         sxy_min, sz_min = self.minimum_sigmas
         bcast_shape = (x + y + z).shape
 
         # use sxy * |sxy| instead of sxy**2 to enforce sxy > 0
-        v = np.exp(-(x - cx) ** 2 / 2 / (sxy_min ** 2 + sxy ** 2)
+        v = xp.exp(-(x - cx) ** 2 / 2 / (sxy_min ** 2 + sxy ** 2)
                    -(y - cy) ** 2 / 2 / (sxy_min ** 2 + sxy ** 2)
                    -(z - cz) ** 2 / 2 / (sz_min ** 2 + sz ** 2)
                    )
@@ -1083,7 +1088,7 @@ class gauss3d(coordinate_model):
                amp * v * 2 * (z - params[3]) / 2 / (sz_min ** 2 + sz ** 2),
                amp * v * (2 * sxy / (sxy_min ** 2 + sxy ** 2) ** 2) * ((x - cx) ** 2 / 2 + (y - cy) ** 2 / 2),
                amp * v * 2 * sz / (sz_min ** 2 + sz ** 2) ** 2 * (z - cz) ** 2 / 2,
-               np.ones(bcast_shape)]
+               xp.ones(bcast_shape)]
 
         return jac
 
@@ -1167,6 +1172,7 @@ class gauss3d_asymmetric(coordinate_model):
               params: np.ndarray):
 
         z, y, x, = coords[-3:]
+        xp = get_array_module(z, y, x)
         sx_min, sy_min, sz_min = self.minimum_sigmas
 
         if self.use_sigma_ratio_parameterization:
@@ -1175,7 +1181,7 @@ class gauss3d_asymmetric(coordinate_model):
         else:
             amp, cx, cy, cz, sx, sy, sz, bg = params
 
-        vals = amp * np.exp(- (x - cx) ** 2 / 2 / (sx_min ** 2 + sx ** 2)
+        vals = amp * xp.exp(- (x - cx) ** 2 / 2 / (sx_min ** 2 + sx ** 2)
                             - (y - cy) ** 2 / 2 / (sy_min ** 2 + sy ** 2)
                             - (z - cz) ** 2 / 2 / (sz_min ** 2 + sz ** 2)) + bg
 
@@ -1186,6 +1192,7 @@ class gauss3d_asymmetric(coordinate_model):
                  params: np.ndarray):
 
         z, y, x, = coords[-3:]
+        xp = get_array_module(z, y, x)
         sx_min, sy_min, sz_min = self.minimum_sigmas
         bcast_shape = (x + y + z).shape
 
@@ -1196,7 +1203,7 @@ class gauss3d_asymmetric(coordinate_model):
             amp, cx, cy, cz, sx, sy, sz, bg = params
 
         # calculate psf at oversampled points
-        val0 = np.exp(-(x - cx) ** 2 / 2 / (sx_min ** 2 + sx ** 2)
+        val0 = xp.exp(-(x - cx) ** 2 / 2 / (sx_min ** 2 + sx ** 2)
                       -(y - cy) ** 2 / 2 / (sy_min ** 2 + sy ** 2)
                       -(z - cz) ** 2 / 2 / (sz_min ** 2 + sz ** 2))
 
@@ -1224,7 +1231,7 @@ class gauss3d_asymmetric(coordinate_model):
                amp * dpsf_dsx * val0,  # sx
                amp * dpsf_dsy_like * val0,  # sy/sx or sy
                amp * dpsf_dsz * val0,  # sz
-               np.ones(bcast_shape)  # bg
+               xp.ones(bcast_shape)  # bg
                ]
 
         return jac

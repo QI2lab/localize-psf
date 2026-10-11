@@ -4,6 +4,13 @@ Tools for constructing and working with 3D rotation matrices
 
 from collections.abc import Sequence
 import numpy as np
+from localize_psf.array_backend import get_array_module
+
+
+def _matrix(values, xp):
+    entries = xp.broadcast_arrays(*(xp.asarray(v) for row in values for v in row))
+    return xp.stack(entries).reshape(3, 3, *entries[0].shape)
+
 
 
 def get_rot_mat(rot_axis: Sequence[float],
@@ -107,13 +114,14 @@ def euler_mat(phi: float,
     :param psi:
     :return euler_mat: U_z(phi) * U_y(theta) * U_z(psi)
     """
-    euler_mat = np.array([[np.cos(phi) * np.cos(theta) * np.cos(psi) - np.sin(phi) * np.sin(psi),
-                          -np.cos(phi) * np.cos(theta) * np.sin(psi) - np.sin(phi) * np.cos(psi),
-                           np.cos(phi) * np.sin(theta)],
-                          [np.sin(phi) * np.cos(theta) * np.cos(psi) + np.cos(phi) * np.sin(psi),
-                          -np.sin(phi) * np.cos(theta) * np.sin(psi) + np.cos(phi) * np.cos(psi),
-                           np.sin(phi) * np.sin(theta)],
-                          [-np.sin(theta) * np.cos(psi), np.sin(theta) * np.sin(psi), np.cos(theta)]])
+    xp = get_array_module(phi, theta, psi)
+    euler_mat = _matrix([[xp.cos(phi) * xp.cos(theta) * xp.cos(psi) - xp.sin(phi) * xp.sin(psi),
+                          -xp.cos(phi) * xp.cos(theta) * xp.sin(psi) - xp.sin(phi) * xp.cos(psi),
+                           xp.cos(phi) * xp.sin(theta)],
+                          [xp.sin(phi) * xp.cos(theta) * xp.cos(psi) + xp.cos(phi) * xp.sin(psi),
+                          -xp.sin(phi) * xp.cos(theta) * xp.sin(psi) + xp.cos(phi) * xp.cos(psi),
+                           xp.sin(phi) * xp.sin(theta)],
+                          [-xp.sin(theta) * xp.cos(psi), xp.sin(theta) * xp.sin(psi), xp.cos(theta)]], xp)
 
     return euler_mat
 
@@ -143,27 +151,28 @@ def euler_mat_derivatives(phi: float,
     :param psi:
     :return dphi, dtheta, dsi:
     """
-    dphi = np.array([[-np.sin(phi) * np.cos(theta) * np.cos(psi) - np.cos(phi) * np.sin(psi),
-                       np.sin(phi) * np.cos(theta) * np.sin(psi) - np.cos(phi) * np.cos(psi),
-                      -np.sin(phi) * np.sin(theta)],
-                     [ np.cos(phi) * np.cos(theta) * np.cos(psi) - np.sin(phi) * np.sin(psi),
-                      -np.cos(phi) * np.cos(theta) * np.sin(psi) - np.sin(phi) * np.cos(psi),
-                       np.cos(phi) * np.sin(theta)],
-                     [0, 0, 0]])
-    dtheta = np.array([[-np.cos(phi) * np.sin(theta) * np.cos(psi),
-                         np.cos(phi) * np.sin(theta) * np.sin(psi),
-                         np.cos(phi) * np.cos(theta)],
-                       [-np.sin(phi) * np.sin(theta) * np.cos(psi),
-                         np.sin(phi) * np.sin(theta) * np.sin(psi),
-                         np.sin(phi) * np.cos(theta)],
-                       [-np.cos(theta) * np.cos(psi), np.cos(theta) * np.sin(psi), -np.sin(theta)]])
-    dpsi = np.array([[-np.cos(phi) * np.cos(theta) * np.sin(psi) - np.sin(phi) * np.cos(psi),
-                      -np.cos(phi) * np.cos(theta) * np.cos(psi) + np.sin(phi) * np.sin(psi),
+    xp = get_array_module(phi, theta, psi)
+    dphi = _matrix([[-xp.sin(phi) * xp.cos(theta) * xp.cos(psi) - xp.cos(phi) * xp.sin(psi),
+                       xp.sin(phi) * xp.cos(theta) * xp.sin(psi) - xp.cos(phi) * xp.cos(psi),
+                      -xp.sin(phi) * xp.sin(theta)],
+                     [ xp.cos(phi) * xp.cos(theta) * xp.cos(psi) - xp.sin(phi) * xp.sin(psi),
+                      -xp.cos(phi) * xp.cos(theta) * xp.sin(psi) - xp.sin(phi) * xp.cos(psi),
+                       xp.cos(phi) * xp.sin(theta)],
+                     [0, 0, 0]], xp)
+    dtheta = _matrix([[-xp.cos(phi) * xp.sin(theta) * xp.cos(psi),
+                         xp.cos(phi) * xp.sin(theta) * xp.sin(psi),
+                         xp.cos(phi) * xp.cos(theta)],
+                       [-xp.sin(phi) * xp.sin(theta) * xp.cos(psi),
+                         xp.sin(phi) * xp.sin(theta) * xp.sin(psi),
+                         xp.sin(phi) * xp.cos(theta)],
+                       [-xp.cos(theta) * xp.cos(psi), xp.cos(theta) * xp.sin(psi), -xp.sin(theta)]], xp)
+    dpsi = _matrix([[-xp.cos(phi) * xp.cos(theta) * xp.sin(psi) - xp.sin(phi) * xp.cos(psi),
+                      -xp.cos(phi) * xp.cos(theta) * xp.cos(psi) + xp.sin(phi) * xp.sin(psi),
                       0],
-                     [-np.sin(phi) * np.cos(theta) * np.sin(psi) + np.cos(phi) * np.cos(psi),
-                      -np.sin(phi) * np.cos(theta) * np.cos(psi) - np.cos(phi) * np.sin(psi),
+                     [-xp.sin(phi) * xp.cos(theta) * xp.sin(psi) + xp.cos(phi) * xp.cos(psi),
+                      -xp.sin(phi) * xp.cos(theta) * xp.cos(psi) - xp.cos(phi) * xp.sin(psi),
                       0],
-                     [np.sin(theta) * np.sin(psi), np.sin(theta) * np.cos(psi), 0]])
+                     [xp.sin(theta) * xp.sin(psi), xp.sin(theta) * xp.cos(psi), 0]], xp)
 
     return dphi, dtheta, dpsi
 

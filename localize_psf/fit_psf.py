@@ -871,13 +871,14 @@ class gaussian_lorentzian_psf_model(pixelated_psf_model):
         # oversample points in pixel
         coordinates_over = oversample_pixel(coords, self.dc, sf=self.sf, euler_angles=self.angles)
         zz_s, yy_s, xx_s = coordinates_over
+        xp = cp.get_array_module(zz_s, yy_s, xx_s) if _cupy_available else np
 
         # calculate psf at oversampled points
         lor_factor = 1 + (zz_s - p[3]) ** 2 / p[5] ** 2
-        psf_s = np.exp(- ((xx_s - p[1]) ** 2 + (yy_s - p[2]) ** 2) / (2 * p[4] ** 2 * lor_factor)) / lor_factor
+        psf_s = xp.exp(- ((xx_s - p[1]) ** 2 + (yy_s - p[2]) ** 2) / (2 * p[4] ** 2 * lor_factor)) / lor_factor
 
         # normalization is such that the predicted peak value of the PSF ignoring binning would be p[0]
-        psf = p[0] * np.mean(psf_s, axis=-1) + p[6]
+        psf = xp.mean(p[0] * psf_s + p[6], axis=-1)
 
         return psf
 
@@ -885,6 +886,7 @@ class gaussian_lorentzian_psf_model(pixelated_psf_model):
                  coords: Sequence[np.ndarray],
                  p: np.ndarray):
         z, y, x = coords
+        xp = cp.get_array_module(z, y, x) if _cupy_available else np
 
         # oversample points in pixel
         coords_over = oversample_pixel(coords, self.dc, sf=self.sf, euler_angles=self.angles)
@@ -892,21 +894,17 @@ class gaussian_lorentzian_psf_model(pixelated_psf_model):
 
         lor = 1 + (zz_s - p[3]) ** 2 / p[5] ** 2
         r_sqr = (xx_s - p[1]) ** 2 + (yy_s - p[2]) ** 2
-        factor = np.exp(- r_sqr / (2 * p[4] ** 2 * lor)) / lor
-
-        bcast_shape = (x + y + z).shape
-        jac = [np.mean(factor, axis=-1),  # amp
-               p[0] * np.mean((x - p[1]) / p[4] ** 2 / lor * factor, axis=-1),  # cx
-               p[0] * np.mean((y - p[2]) / p[4] ** 2 / lor * factor, axis=-1),  # cy
-               p[0] * np.mean(-(z - p[3]) / p[5] ** 2 / lor ** 2 * (r_sqr / 2 / p[4] ** 2) * factor, axis=-1) +
-               p[0] * np.mean(factor / lor * 2 * (z - p[3]) / p[5] ** 2, axis=-1),  # cz
-               p[0] * np.mean(factor * r_sqr / lor / p[4] ** 3, axis=-1),  # sxy
-               p[0] * np.mean(factor * r_sqr / 2 / p[4] ** 2 / lor ** 2 * 2 * (z - p[3]) ** 2 / p[5] ** 3, axis=-1) +
-               p[0] * np.mean(factor / lor * 2 * (z - p[3]) ** 2 / p[5] ** 3, axis=-1),  # hwhm_z
-               np.ones(bcast_shape)  # bg
-               ]
-
-        return jac
+        factor = xp.exp(- r_sqr / (2 * p[4] ** 2 * lor)) / lor
+        jac = [factor,  # amp
+               p[0] * (xx_s - p[1]) / p[4] ** 2 / lor * factor,  # cx
+               p[0] * (yy_s - p[2]) / p[4] ** 2 / lor * factor,  # cy
+               p[0] * factor * (zz_s - p[3]) / p[5] ** 2 *
+               (2 / lor - r_sqr / p[4] ** 2 / lor ** 2),  # cz
+               p[0] * factor * r_sqr / lor / p[4] ** 3,  # sxy
+               p[0] * factor * (zz_s - p[3]) ** 2 / p[5] ** 3 *
+               (2 / lor - r_sqr / p[4] ** 2 / lor ** 2),  # hwhm_z
+               xp.ones(factor.shape)]  # bg
+        return [xp.mean(j, axis=-1) for j in jac]
 
     def estimate_parameters(self,
                             img: np.ndarray,
