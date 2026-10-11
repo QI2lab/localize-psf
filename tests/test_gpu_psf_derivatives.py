@@ -31,6 +31,7 @@ def microscopy_model(request):
 
 
 def numerical_jacobian(model, coords, parameters):
+    parameters = np.asarray(parameters, dtype=np.float64)
     columns = []
     for index in range(len(parameters)):
         step = 1e-5 * max(1, abs(parameters[index]))

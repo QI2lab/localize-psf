@@ -1352,6 +1352,7 @@ def localize_beads_generic(imgs: np.ndarray,
                            fixed_params: np.ndarray | None = None,
                            weights: np.ndarray | None = None,
                            origin: Sequence[float] = (0., 0., 0.),
+                           variances: np.ndarray | None = None,
                            **kwargs) -> tuple[tuple, dict, np.ndarray]:
     """
     Given an image consisting of diffraction limited features and background, identify the diffraction limited features
@@ -1547,6 +1548,14 @@ def localize_beads_generic(imgs: np.ndarray,
             if weights.shape != imgs_fit.shape:
                 raise ValueError("weights must have the input image shape")
             roi_weights, _, _ = prepare_rois(weights, (z, y, x), rois)
+        roi_variances = None
+        if variances is not None:
+            variances = np.asarray(variances)
+            if data_is_2d and variances.ndim == 2:
+                variances = variances[None, ...]
+            if variances.shape != imgs_fit.shape:
+                raise ValueError("variances must have the input image shape")
+            roi_variances, _, _ = prepare_rois(variances, (z, y, x), rois)
 
         # ###################################################
         # determine initial guess values for fits
@@ -1594,6 +1603,7 @@ def localize_beads_generic(imgs: np.ndarray,
                                estimator=estimator,
                                bounds=bounds,
                                weights=roi_weights,
+                               variances=roi_variances,
                                fixed_params=fixed_params,
                                model=model,
                                guess_bounds=guess_bounds,

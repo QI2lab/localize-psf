@@ -1518,6 +1518,7 @@ def fit_least_squares(model_fn,
                       fixed_params: Optional[list[bool]] = None,
                       bounds: Optional[Sequence[Sequence[float]]] = None,
                       model_jacobian: Optional[callable] = None,
+                      absolute_sigma: bool = False,
                       **kwargs) -> dict:
     """
     Wrapper for non-linear least squares fit function scipy.optimize.least_squares which handles fixing parameters
@@ -1533,6 +1534,8 @@ def fit_least_squares(model_fn,
     :param  bounds: (lbs, ubs). If None, -/+ infinity used for all parameters.
     :param model_jacobian: Jacobian of the model function as a list, [df/dp[0], df/dp[1], ...]. If None,
       no jacobian used.
+    :param absolute_sigma: when True the residual scaling is calibrated, so covariance
+      is not multiplied by the reduced residual variance. False estimates that variance.
     :param kwargs: additional key word arguments will be passed through to scipy.optimize.least_squares()
     :return results: dictionary object. Uncertainty can be obtained from the square roots of the diagonals of the
       covariance matrix, but these will only be meaningful if variances were appropriately provided for
@@ -1600,16 +1603,22 @@ def fit_least_squares(model_fn,
     # ###########################
     nfree_params = np.sum(np.logical_not(fixed_params))
     # scipy.optimize.least_squares minimizes s = 0.5 * \sum |fn(x_i)|^2, so need a factor of two to correct their cost
-    red_chi_sq = (2 * fit_info["cost"]) / (model_fn(init_params).size - nfree_params)
+    degrees_of_freedom = model_fn(init_params).size - nfree_params
+    red_chi_sq = (2 * fit_info["cost"]) / degrees_of_freedom if degrees_of_freedom > 0 else np.nan
 
     # ###########################
     # calculate covariance matrix
     # ###########################
     try:
         jacobian = fit_info['jac']
-        cov_free = red_chi_sq * np.linalg.inv(jacobian.transpose().dot(jacobian))
+        information = jacobian.transpose().dot(jacobian)
+        covariance_condition = np.linalg.cond(information)
+        cov_free = np.linalg.inv(information)
+        if not absolute_sigma:
+            cov_free *= red_chi_sq
     except np.linalg.LinAlgError:
         cov_free = np.nan * np.zeros((jacobian.shape[1], jacobian.shape[1]))
+        covariance_condition = np.inf
 
     cov = np.nan * np.zeros((len(init_params), len(init_params)))
     ii_free = 0
@@ -1635,6 +1644,7 @@ def fit_least_squares(model_fn,
     result = {'fit_params': pfit,
               'chi_squared': red_chi_sq,
               'covariance': cov,
+              'covariance_condition': covariance_condition,
               'init_params': init_params,
               'fixed_params': fixed_params,
               'bounds': bounds,

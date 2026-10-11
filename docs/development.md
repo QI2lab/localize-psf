@@ -79,3 +79,43 @@ inside the ignored build directory:
 The runner defaults to the tested CUDA 12.8 installation. Supply `-CudaPath` to
 select another compatible SDK. It uses the existing locked `build/local-gpu`
 profile and never modifies persistent environment variables or installs packages.
+# Localization uncertainty
+
+`fit_rois(..., use_gpu=True, return_covariance=True)` evaluates the existing PSF
+derivatives and undamped free-parameter information on CUDA in bounded batches
+(default 32 ROIs), using float64 CuPy linear algebra. The full nuisance-parameter
+covariance is solved before extracting `center_covariance_zyx`; off-diagonal terms
+are retained. The native fitting ABI still takes host float32 NumPy buffers;
+the uncertainty postpass has explicit transfers and does not imply zero-copy fitting.
+
+Choose the noise convention explicitly:
+
+- `estimated_gaussian`: weighted residual variance scales inverse information.
+  Weights specify relative independent variances under this model.
+- `calibrated_gaussian`: supply positive `variances` separately from LSE objective
+  `weights`. Inverse-variance weights give inverse information; other weights,
+  including unweighted heteroscedastic fitting, give the estimator's sandwich
+  covariance. Known variance is never scaled by the observed residual.
+- `poisson`: requires native `estimator='MLE'` and positive fitted means. It uses
+  Poisson Fisher information. This convention does not describe camera read noise
+  or correlated statistics after deskewing/deconvolution.
+
+The result includes full `covariance`, `center_covariance_zyx`, method/backend,
+information condition number, active bounds, validity, and named quality flags.
+Failed fits, ill-conditioned information, fixed centers, active bounds, saturation,
+truncation, unresolved overlap, or model mismatch invalidate center covariance.
+Callers supply observed quality flags; their absence is not a calibration claim.
+Invalid center covariance is NaN and must be excluded from covariance-based linking.
+No numerical repair or arbitrary fallback covariance is supplied. Fixing nuisance
+parameters makes uncertainty conditional on those values and excludes uncertainty
+in their independent calibration.
+
+`localize_beads_generic` packs an image-shaped `variances` map through the existing
+ROI preparation and forwards covariance controls. CPU fitting is retained for
+independent references: its already-computed covariance is propagated without a
+second fit, and `absolute_sigma=True` disables residual scaling in the lower fitter.
+Production PTV uses CUDA; CPU fitting is a test reference only.
+
+```powershell
+./scripts/run_gpu.ps1 -CommandArguments @('pytest', '-q', 'tests/test_localization_covariance.py')
+```

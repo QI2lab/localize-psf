@@ -7,6 +7,7 @@ import numpy as np
 
 from localize_psf import fit_psf as psf
 from localize_psf.fitting_controls import validate_bounds, validate_fixed
+from localize_psf.uncertainty import add_covariance, validate_uncertainty
 
 
 def fit_rois(
@@ -25,6 +26,12 @@ def fit_rois(
     model: psf.pixelated_psf_model | None = None,
     bounds: tuple | None = None,
     weights: np.ndarray | None = None,
+    return_covariance: bool = False,
+    noise_model: str = "estimated_gaussian",
+    variances: np.ndarray | None = None,
+    quality_flags: dict | None = None,
+    covariance_batch_size: int = 32,
+    max_covariance_condition: float = 1e12,
 ) -> dict:
     """Fit valid ROI samples with explicit bounds and inverse-variance LSE weights.
 
@@ -43,6 +50,20 @@ def fit_rois(
         Explicit bounds override guess_bounds. Equal bounds require fixed parameters.
     weights : ndarray or None
         Nonnegative LSE objective multipliers shaped like data; zero excludes a sample.
+    return_covariance : bool
+        Request full parameter and ZYX center covariance and validity diagnostics.
+    noise_model : {'estimated_gaussian', 'calibrated_gaussian', 'poisson'}
+        Explicit independent-noise convention. Estimated Gaussian scales by residual
+        variance; calibrated Gaussian uses known variances; Poisson requires MLE.
+    variances : ndarray or None
+        Known positive per-sample variances for calibrated_gaussian, separate from weights.
+    quality_flags : dict or None
+        Boolean (nfits,) arrays for saturated, truncated, unresolved_overlap,
+        and model_mismatch. Each invalidates ordinary center covariance.
+    covariance_batch_size : int
+        Maximum ROIs per uncertainty batch. CUDA derivatives and solves use float64.
+    max_covariance_condition : float
+        Largest accepted undamped free-parameter information condition number.
     estimator : {'LSE', 'MLE'}
         MLE uses GPUfit's pure-Poisson objective and requires nonnegative counts.
         CPU reference fitting supports LSE only.
@@ -129,7 +150,36 @@ def fit_rois(
         "model": repr(model),
         "bounds": (lower, upper),
     }
+    variance, flags = (None, None)
+    if return_covariance:
+        variance, flags = validate_uncertainty(
+            data,
+            valid,
+            estimator,
+            noise_model,
+            variances,
+            quality_flags,
+            covariance_batch_size,
+            max_covariance_condition,
+        )
+    cpu_covariance = None
     if not nfits:
+        if return_covariance:
+            add_covariance(
+                result,
+                data,
+                coordinates,
+                sizes,
+                mask,
+                objective_weights,
+                model,
+                noise_model,
+                variance,
+                flags,
+                covariance_batch_size,
+                max_covariance_condition,
+                use_gpu,
+            )
         return result
     started = perf_counter()
     if not use_gpu:
@@ -152,6 +202,7 @@ def fit_rois(
                     fixed_params=mask,
                     bounds=(lower[i], upper[i]),
                     sd=sd,
+                    absolute_sigma=noise_model == "calibrated_gaussian" and return_covariance,
                     max_nfev=max_number_iterations,
                     **options,
                 )
@@ -165,6 +216,8 @@ def fit_rois(
         ]:
             result[output] = np.asarray([r[key] for r in results])
         result["fit_states_key"] = results[0]["status_codes"]
+        if return_covariance:
+            cpu_covariance = np.array([r["covariance"] for r in results])
     else:
         _fit_gpu(
             result,
@@ -181,6 +234,23 @@ def fit_rois(
             estimator,
             tolerance,
             max_number_iterations,
+        )
+    if return_covariance:
+        add_covariance(
+            result,
+            data,
+            coordinates,
+            sizes,
+            mask,
+            objective_weights,
+            model,
+            noise_model,
+            variance,
+            flags,
+            covariance_batch_size,
+            max_covariance_condition,
+            use_gpu,
+            cpu_covariance,
         )
     result["fit_time"] = perf_counter() - started
     return result
