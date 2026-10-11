@@ -9,6 +9,7 @@ from typing import Optional
 from collections.abc import Sequence
 import numpy as np
 from scipy.optimize import least_squares
+from localize_psf.fitting_controls import validate_bounds, validate_fixed
 from localize_psf.rotation import euler_mat_inv, euler_mat_inv_derivatives
 
 
@@ -195,22 +196,11 @@ class coordinate_model:
             sd[sd == 0] = np.nanmean(sd[sd != 0])
             sd[np.isnan(sd)] = np.nanmean(sd[sd != 0])
 
-        # default bounds
-        lbs_default, ubs_default = self.estimate_bounds(coordinates)
-
         if bounds is None:
             if guess_bounds:
-                bounds = (lbs_default, ubs_default)
+                bounds = self.estimate_bounds(tuple(c[to_use] for c in np.broadcast_arrays(*coordinates)))
             else:
                 bounds = ((-np.inf,) * self.nparams, (np.inf,) * self.nparams)
-        else:
-            if guess_bounds:
-                lbs = tuple([b if b is not None else lbs_default[ii] for ii, b in enumerate(bounds[0])])
-                ubs = tuple([b if b is not None else ubs_default[ii] for ii, b in enumerate(bounds[1])])
-            else:
-                lbs = tuple([b if b is not None else -np.inf for ii, b in enumerate(bounds[0])])
-                ubs = tuple([b if b is not None else np.inf for ii, b in enumerate(bounds[1])])
-            bounds = (lbs, ubs)
 
         # ###########################
         # handle complex arguments
@@ -1546,26 +1536,13 @@ def fit_least_squares(model_fn,
     # check input parameters
     # ###########################
 
-    # get default fixed parameters
-    if fixed_params is None:
-        fixed_params = [False for _ in init_params]
-
-    # default bounds
-    if bounds is None:
-        bounds = (tuple([-np.inf] * len(init_params)), tuple([np.inf] * len(init_params)))
-
-    init_params = np.array(init_params, copy=True)
-    # ensure initial parameters within bounds, if not fixed
-    for ii in range(len(init_params)):
-        if (init_params[ii] < bounds[0][ii] or init_params[ii] > bounds[1][ii]) and not fixed_params[ii]:
-            raise ValueError(f"Initial parameter at index {ii:d} had value {init_params[ii]:0.2g},"
-                             f" which was outside of bounds ({bounds[0][ii]:0.2g}, {bounds[1][ii]:0.2g})")
-
-    if np.any(np.isnan(init_params)):
-        raise ValueError("init_params cannot include nans")
-
-    if np.any(np.isnan(bounds)):
-        raise ValueError("bounds cannot include nans")
+    initial_array = np.asarray(init_params, dtype=float)
+    if initial_array.ndim != 1:
+        raise ValueError("init_params must have shape (nparams,)")
+    fixed_params = validate_fixed(fixed_params, len(initial_array))
+    lower, upper, initial = validate_bounds(bounds, initial_array[None, :], fixed_params)
+    init_params = initial[0]
+    bounds = (lower[0], upper[0])
 
     # ###########################
     # if some parameters are fixed, we need to hide them from the fit function to produce correct covariance, etc.

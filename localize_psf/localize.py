@@ -8,14 +8,12 @@ compile this repository and install the python bindings.
 from typing import Union, Optional
 from collections.abc import Sequence, Callable
 from pathlib import Path
+from importlib.util import find_spec
 import time
 from warnings import warn, catch_warnings, filterwarnings
-import zarr
 import numpy as np
 from scipy.signal import fftconvolve
 from scipy.ndimage import maximum_filter
-import dask
-from dask.diagnostics import ProgressBar
 from numba import njit, prange
 import matplotlib.pyplot as plt
 from matplotlib.colors import PowerNorm, LinearSegmentedColormap, Normalize
@@ -23,6 +21,7 @@ from matplotlib import colormaps
 import localize_psf.rois as roi_fns
 from localize_psf.fit import fit_model
 import localize_psf.fit_psf as psf
+from localize_psf.batch_fitting import fit_rois
 
 # for filtering on GPU
 try:
@@ -34,19 +33,16 @@ except ImportError:
     cp = np
     _cupy_available = False
 
-# custom GPUFit for fitting on GPU
-try:
-    import pygpufit.gpufit as gf
-    _gpufit_available = True
-except ImportError:
-    _gpufit_available = False
+# Detect optional installation without loading a native library on CPU import.
+_gpufit_available = find_spec("pygpufit") is not None
 
 array = Union[np.ndarray, cp.ndarray]
 
 
 def get_coords(sizes: Sequence[int],
                drs: Sequence[float],
-               broadcast: bool = False) -> tuple[np.ndarray[float]]:
+               broadcast: bool = False,
+               origin: Sequence[float] | None = None) -> tuple[np.ndarray, ...]:
     """
     Regularly spaced coordinates which can be broadcast to full size.
 
@@ -67,7 +63,10 @@ def get_coords(sizes: Sequence[int],
     :return coords: (coords0, coords1, ..., coordsn)
     """
     ndims = len(drs)
-    coords = [np.expand_dims(np.arange(sz, dtype=float) * dr, axis=list(range(ii)) + list(range(ii + 1, ndims)))
+    origin = np.zeros(ndims) if origin is None else np.asarray(origin, dtype=float)
+    if origin.shape != (ndims,) or not np.all(np.isfinite(origin)):
+        raise ValueError("origin must be finite and match coordinate dimensions")
+    coords = [np.expand_dims(origin[ii] + np.arange(sz, dtype=float) * dr, axis=list(range(ii)) + list(range(ii + 1, ndims)))
               for ii, (sz, dr) in enumerate(zip(sizes, drs))]
 
     if broadcast:
@@ -657,190 +656,6 @@ def localize3d(img: np.ndarray,
 
 
 # @profile
-def fit_rois(img_rois: np.ndarray,
-             coords_rois: Sequence[np.ndarray, np.ndarray, np.ndarray],
-             roi_sizes: np.ndarray[int],
-             init_params: np.ndarray,
-             max_number_iterations: int = 100,
-             tolerance: Optional[float] = None,
-             estimator: str = "LSE",
-             fixed_params: Optional[np.ndarray] = None,
-             guess_bounds: bool = False,
-             use_gpu: bool = _gpufit_available,
-             debug: bool = False,
-             verbose: bool = False,
-             model: psf.pixelated_psf_model = psf.gaussian3d_psf_model()) -> dict:
-    """
-    Fit rois to different model functions. Can use either CPU parallelization with dask or GPU parallelization
-    using gpufit.
-
-    For help cutting ROI's from an image and converting them to the correct format, use the helper function
-    prepare_rois()
-
-    :param img_rois: array of image rois of size nroi x nmax_roi_size. Each ROI should be flattened, padded
-     with NaN's, and inserted along the 0th dimension.
-    :param coords_rois: (z_rois, y_rois, ....) the coordinate arrays z_rois should have the same shape as img_rois
-    :param roi_sizes: array giving size of each ROI
-    :param init_params: initial parameters for fits, size nfits x model.nparams
-    :param max_number_iterations: maximum number of iterations to be used for each fit
-    :param tolerance: only for GPUFIT. Default is 1e-4.
-    :param estimator: "LSE" or "MLE", only for GPUFIT
-    :param model: "gaussian", "rotated-gaussian", "gaussian-lorentzian"
-    :param fixed_params: For entries which are True, the fit function will force that parameter to be identical
-      to the value in init_params. For entries which are False, the fit function will determine the optimal value.
-      only supports fixing/unfixing each parameter for all fits
-    :param guess_bounds: ((lower_bounds), (upper_bounds)) where lower_bounds and upper_bounds are each
-      lists/tuples/arrays of length nparams
-    :param use_gpu: whether to perform fitting on the GPU. If true, then GPUfit must be installed
-    :param debug:
-    :param verbose:
-    :param model: model to use for PSF fitting. If doing this on the CPU, use implementations in fit_psf.py, otherwise
-      model must have a corresponding version in GPU fit.
-    :return fit_results: dictionary of fit results
-    """
-
-    if guess_bounds and use_gpu:
-        warn("use_gpu selected for fitting, but unsupported option guess_bounds selected."
-                      "guess_bounds will be ignored")
-
-    zrois, yrois, xrois = coords_rois
-
-    if not use_gpu:
-        tstart = time.perf_counter()
-
-        if debug:
-            results = []
-            for ii in range(len(img_rois)):
-                results.append(model.fit(img_rois[ii],
-                                         (zrois[ii], yrois[ii], xrois[ii]),
-                                         init_params[ii],
-                                         fixed_params=fixed_params,
-                                         guess_bounds=guess_bounds,
-                                         max_nfev=max_number_iterations)
-                               )
-
-        else:
-            # forced to switch to dask form joblib because joblib use pickling to exchange info between process
-            # and functions (which are arguments to fit_gauss_roi) are not pickle-able
-            delayed = []
-            for ii in range(len(img_rois)):
-                delayed.append(dask.delayed(model.fit)(img_rois[ii],
-                                                       (zrois[ii], yrois[ii], xrois[ii]),
-                                                       init_params=init_params[ii],
-                                                       fixed_params=fixed_params,
-                                                       guess_bounds=guess_bounds,
-                                                       max_nfev=max_number_iterations)
-                               )
-
-            if verbose:
-                with ProgressBar():
-                    results = dask.compute(*delayed)
-            else:
-                results = dask.compute(*delayed)
-
-        fit_t = (time.perf_counter() - tstart)
-        fit_params = np.asarray([r["fit_params"] for r in results])
-        chi_sqrs = np.asarray([r["chi_squared"] for r in results])
-        fit_states = np.asarray([r["status"] for r in results])
-        niters = np.asarray([r["nfev"] for r in results])
-        fit_states_key = results[0]["status_codes"]
-
-    else:
-        if model.sf != 1:
-            raise NotImplementedError("sampling factors other than 1 are not implemented for GPU fitting")
-
-        # resolve GPUfit model
-        models_mapping = {psf.gaussian3d_psf_model: gf.ModelID.GAUSS_3D_ARB}
-        try:
-            models_mapping[psf.gaussian_lorentzian_psf_model] = gf.ModelID.GAUSS_LOR_3D_ARB
-            models_mapping[psf.gaussian3d_asymmetric_rotated_pixelated] = gf.ModelID.GAUSS_3D_ROT_ARB
-            models_mapping[psf.gaussian3d_asymmetric_pixelated] = gf.ModelID.GAUSS_3D_ASYM_ARB
-        except AttributeError:
-            pass
-
-        if type(model) in models_mapping.keys():
-            model_id = models_mapping[type(model)]
-        else:
-            raise NotImplementedError(f"model of type {type(model)} has not been implemented in the "
-                                      f"installed version of gpufit."
-                                      f"The models which have been implemented are {[a for a in models_mapping.keys()]}")
-
-        # build GPUfit data
-        data = img_rois.astype(np.float32)
-        nfits, n_pts_per_fit = data.shape
-
-        # build user data
-        coords = np.stack((xrois, yrois, zrois), axis=1).ravel()
-        user_info = np.concatenate((coords.astype(np.float32),
-                                    roi_sizes.astype(np.float32)))
-
-        # some models have extra non-fit parameters appended at end of user_info
-        if model_id == gf.ModelID.GAUSS_3D_ARB or \
-           model_id == gf.ModelID.GAUSS_3D_ROT_ARB or \
-           model_id == gf.ModelID.GAUSS_3D_ASYM_ARB:
-
-            user_info = np.concatenate((user_info,
-                                        np.array(model.minimum_sigmas).astype(np.float32)))
-
-        # initial parameters
-        init_params = init_params.astype(np.float32)
-
-        nparams = model.nparams
-
-        # check arguments
-        if data.ndim != 2:
-            raise ValueError(f"data.ndim should = 2 but was {data.ndim:d}")
-        if init_params.ndim != 2 or init_params.shape != (nfits, nparams):
-            raise ValueError(f"init_params should have shape ({nfits:d}, {nparams:d}), but had shape {init_params.shape}")
-        # todo: this now depends on the model
-        # if user_info.ndim != 1 or user_info.size != (3 * nfits * n_pts_per_fit + nfits):
-        #     raise ValueError(f"user_info should have size ({3 * nfits * n_pts_per_fit + nfits:d}), but had size {user_info.size:d}")
-
-        if estimator == "MLE":
-            est_id = gf.EstimatorID.MLE
-        elif estimator == "LSE":
-            est_id = gf.EstimatorID.LSE
-        else:
-            raise ValueError(f"'estimator' must be 'MLE' or 'LSE' but was '{estimator:s}'")
-
-        # set which parameters to fit/fix
-        if fixed_params is None:
-            fixed_params = np.zeros(nparams, dtype=bool)
-
-        params_to_fit = np.logical_not(np.array(fixed_params)).astype(np.int32)
-
-        # do fitting
-        fit_params, fit_states, chi_sqrs, niters, fit_t = gf.fit(data,
-                                                                 None,
-                                                                 model_id,
-                                                                 init_params,
-                                                                 tolerance=tolerance,
-                                                                 max_number_iterations=max_number_iterations,
-                                                                 estimator_id=est_id,
-                                                                 parameters_to_fit=params_to_fit,
-                                                                 user_info=user_info)
-
-        # defined in Gpufit/constants.h
-        fit_states_key = {"converged": 0,
-                          "max_iteration": 1,
-                          "singular_hessian": 2,
-                          "neg_curvature_mle": 3,
-                          "gpu_not_ready": 4}
-
-    # ensure e.g. Gaussian sigmas are > 0
-    fit_params = model.normalize_parameters(fit_params)
-
-    # collect results
-    fit_results = {"fit_params": fit_params,
-                   "init_params": init_params,
-                   "fit_states": fit_states,
-                   "fit_states_key": fit_states_key,
-                   "chi_sqrs": chi_sqrs,
-                   "niters": niters,
-                   "fit_time": fit_t,
-                   "model": repr(model)}
-
-    return fit_results
 
 
 def plot_fit_roi(fit_params: Sequence[float],
@@ -1523,8 +1338,8 @@ def localize_beads_generic(imgs: np.ndarray,
                            average_duplicates_before_fit: bool = True,
                            max_nfit_iterations: int = 100,
                            fit_filtered_images: bool = False,
-                           use_gpu_fit: bool = _gpufit_available,
-                           use_gpu_filter: bool = _cupy_available,
+                           use_gpu_fit: bool = False,
+                           use_gpu_filter: bool = False,
                            verbose: bool = True,
                            model: psf.pixelated_psf_model = psf.gaussian3d_psf_model(),
                            guess_bounds: bool = False,
@@ -1532,6 +1347,11 @@ def localize_beads_generic(imgs: np.ndarray,
                            return_filtered_images: bool = False,
                            model_zsize_index: int = 5,
                            model_zposition_index: int = 3,
+                           bounds: tuple | None = None,
+                           estimator: str = "LSE",
+                           fixed_params: np.ndarray | None = None,
+                           weights: np.ndarray | None = None,
+                           origin: Sequence[float] = (0., 0., 0.),
                            **kwargs) -> tuple[tuple, dict, np.ndarray]:
     """
     Given an image consisting of diffraction limited features and background, identify the diffraction limited features
@@ -1613,7 +1433,10 @@ def localize_beads_generic(imgs: np.ndarray,
             filter_sigma_small[0] = 0
 
     # unpack arguments
-    z, y, x = get_coords(imgs.shape, (dz, dy, dx))
+    origin = np.asarray(origin, dtype=float)
+    z, y, x = get_coords(imgs.shape, (dz, dy, dx), origin=origin)
+    if use_gpu_filter and not _cupy_available:
+        raise RuntimeError("GPU filtering requested but CuPy is unavailable")
     dz_min_sep, dxy_min_sep = min_spot_sep
     roi_size_pix = roi_fns.get_roi_size(roi_size, [dz, dy, dx], ensure_odd=True)
 
@@ -1690,11 +1513,11 @@ def localize_beads_generic(imgs: np.ndarray,
             tstart = time.perf_counter()
 
             inds = np.ravel_multi_index(centers_guess_inds.transpose(), imgs_filtered.shape)
-            weights = imgs_filtered.ravel()[inds]
+            peak_weights = imgs_filtered.ravel()[inds]
             centers_guess, inds_comb = filter_nearby_peaks(centers_guess,
                                                            dxy_min_sep,
                                                            dz_min_sep,
-                                                           weights=weights,
+                                                           weights=peak_weights,
                                                            mode="average",
                                                            nmax=np.inf)
 
@@ -1713,9 +1536,17 @@ def localize_beads_generic(imgs: np.ndarray,
         else:
             imgs_fit = imgs
 
-        roi_centers = get_nearest_pixel(centers_guess, (dz, dy, dx))
+        roi_centers = get_nearest_pixel(centers_guess - origin, (dz, dy, dx))
         rois = roi_fns.get_centered_rois(roi_centers, roi_size_pix, [0, 0, 0], imgs_fit.shape)
         img_rois, roi_coords, roi_sizes = prepare_rois(imgs_fit, (z, y, x), rois)
+        roi_weights = None
+        if weights is not None:
+            weights = np.asarray(weights)
+            if data_is_2d and weights.ndim == 2:
+                weights = weights[None, ...]
+            if weights.shape != imgs_fit.shape:
+                raise ValueError("weights must have the input image shape")
+            roi_weights, _, _ = prepare_rois(weights, (z, y, x), rois)
 
         # ###################################################
         # determine initial guess values for fits
@@ -1737,7 +1568,8 @@ def localize_beads_generic(imgs: np.ndarray,
         tstart = time.perf_counter()
 
         # fix some parameters if desired
-        fixed_params = [False] * model.nparams
+        from localize_psf.fitting_controls import validate_fixed
+        fixed_params = validate_fixed(fixed_params, model.nparams)
         # if 2D, don't want to fit cz or sz
         if data_is_2d:
             if model.parameter_names[model_zsize_index] != "sz":
@@ -1759,7 +1591,9 @@ def localize_beads_generic(imgs: np.ndarray,
                                roi_sizes,
                                init_params,
                                max_number_iterations=max_nfit_iterations,
-                               estimator="LSE",
+                               estimator=estimator,
+                               bounds=bounds,
+                               weights=roi_weights,
                                fixed_params=fixed_params,
                                model=model,
                                guess_bounds=guess_bounds,
@@ -1811,7 +1645,13 @@ def localize_beads_generic(imgs: np.ndarray,
             print(f"Identified {np.sum(to_keep):d} likely candidates in {time.perf_counter() - tstart_filter:.3f}s")
 
     else:
-        fit_results = None
+        fit_results = fit_rois(np.empty((0, 0)), tuple(np.empty((0, 0)) for _ in range(3)),
+                               np.empty(0, dtype=int), np.empty((0, model.nparams)),
+                               model=model, use_gpu=use_gpu_fit, estimator=estimator,
+                               fixed_params=fixed_params, bounds=bounds, **kwargs)
+        fit_results.update({"rois": np.empty((0, 6), dtype=int), "to_keep": np.empty(0, bool),
+                            "conditions": np.empty((0, 0), bool), "condition_names": [],
+                            "filter_settings": {}})
 
     if return_filtered_images:
         return (z, y, x), fit_results, imgs_filtered
@@ -2157,6 +1997,7 @@ def autofit_psfs(imgs: np.ndarray,
             else:
                 ind_to_plot = np.arange(len(to_keep), dtype=int)[:num_localizations_to_plot]
 
+            import dask  # Optional legacy calibration plotting only.
             delayed = []
 
             if plot_filtered_image:
@@ -2311,6 +2152,7 @@ def autofit_psfs(imgs: np.ndarray,
             "fit_params_real": fit_params_real}
 
     if saving:
+        import zarr  # Optional legacy calibration-result format.
         z = zarr.open(Path(save_dir) / "localization_results.zarr", "w")
         for k, v in data.items():
             if v is not None:

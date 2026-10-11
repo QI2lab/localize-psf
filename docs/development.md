@@ -47,3 +47,19 @@ regenerate the portable lock and verify it outside the local checkouts.
 
 Existing CPU reference tests pass (28 passed, one pre-existing PSF test skipped).
 Packaging and new fitting interfaces have separate acceptance checks.
+
+The modified fitting path uses existing SciPy/model fits serially on CPU and the
+public QI2lab native APIs on GPU. Dask and zarr-python are optional only for the
+retained legacy PSF calibration plotting/results feature (`legacy-calibration`).
+They are absent from default and local GPU localization installations.
+
+`localize.fit_rois` accepts numeric `bounds=(lower,upper)`, independently broadcast
+from `(nparams,)` or given per fit. Explicit bounds bypass guesses; guessed bounds
+exclude padding. Initial/fixed values must be feasible before and after float32
+conversion. Parameters retain optimizer conventions, preserving fixed values and
+constraints rather than normalizing widths/angles after optimization. `weights`
+are nonnegative LSE objective multipliers; Poisson MLE is explicit and GPU-only.
+The high-level `localize_beads_generic` forwards these controls and accepts a
+physical ZYX `origin`, applied once when building coordinates. Its image-shaped
+weights use the same ROI packing as the data. Empty outputs retain array shapes
+and candidate IDs. Optimizer failures and acceptance-filter decisions are distinct.
