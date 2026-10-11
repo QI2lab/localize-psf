@@ -81,6 +81,18 @@ select another compatible SDK. It uses the existing locked `build/local-gpu`
 profile and never modifies persistent environment variables or installs packages.
 # Localization uncertainty
 
+Acceptance on the RTX 3090/CUDA 12.8 profile: all four native microscopy models
+passed noisy LSE and Poisson MLE comparisons against independent CPU references.
+Eight held-out Gaussian/Poisson coverage cases use 240 noisy CUDA-generated images
+each, two brightnesses, two depths, and anisotropic ZYX sampling. Their predeclared
+binomial coverage and whitened-residual/bias checks passed. Per-case reports are
+written under ignored `build/covariance-validation`; experimental controls remain
+pending because none were supplied.
+
+```powershell
+./scripts/run_gpu.ps1 -CommandArguments @('pytest', '-q', 'tests/test_gpu_uncertainty_validation.py')
+```
+
 `fit_rois(..., use_gpu=True, return_covariance=True)` evaluates the existing PSF
 derivatives and undamped free-parameter information on CUDA in bounded batches
 (default 32 ROIs), using float64 CuPy linear algebra. The full nuisance-parameter
