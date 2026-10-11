@@ -22,6 +22,7 @@ import localize_psf.rois as roi_fns
 from localize_psf.fit import fit_model
 import localize_psf.fit_psf as psf
 from localize_psf.batch_fitting import fit_rois
+from localize_psf.array_backend import get_array_module
 
 # for filtering on GPU
 try:
@@ -42,7 +43,8 @@ array = Union[np.ndarray, cp.ndarray]
 def get_coords(sizes: Sequence[int],
                drs: Sequence[float],
                broadcast: bool = False,
-               origin: Sequence[float] | None = None) -> tuple[np.ndarray, ...]:
+               origin: Sequence[float] | None = None,
+               use_gpu: bool = False) -> tuple[np.ndarray, ...]:
     """
     Regularly spaced coordinates which can be broadcast to full size.
 
@@ -63,15 +65,18 @@ def get_coords(sizes: Sequence[int],
     :return coords: (coords0, coords1, ..., coordsn)
     """
     ndims = len(drs)
+    xp = cp if use_gpu and _cupy_available else np
+    if use_gpu and not _cupy_available:
+        raise RuntimeError("GPU coordinates require CuPy")
     origin = np.zeros(ndims) if origin is None else np.asarray(origin, dtype=float)
     if origin.shape != (ndims,) or not np.all(np.isfinite(origin)):
         raise ValueError("origin must be finite and match coordinate dimensions")
-    coords = [np.expand_dims(origin[ii] + np.arange(sz, dtype=float) * dr, axis=list(range(ii)) + list(range(ii + 1, ndims)))
+    coords = [xp.expand_dims(origin[ii] + xp.arange(sz, dtype=float) * dr, axis=tuple(j for j in range(ndims) if j != ii))
               for ii, (sz, dr) in enumerate(zip(sizes, drs))]
 
     if broadcast:
         # this produces copies of the arrays instead of views
-        coords = [np.array(c, copy=True) for c in np.broadcast_arrays(*coords)]
+        coords = [xp.array(c, copy=True) for c in xp.broadcast_arrays(*coords)]
 
     return tuple(coords)
 
@@ -85,13 +90,61 @@ def get_nearest_pixel(centers: np.ndarray[float],
     :param drs:
     :return indices:
     """
-    drs = np.asarray(drs)
+    xp = get_array_module(centers)
+    drs = xp.asarray(drs)
+    return xp.rint(centers / drs).astype(int)
 
-    return np.rint(centers / drs).astype(int)
+
+def prepare_rois(image: np.ndarray,
+                 coords: tuple[np.ndarray, np.ndarray, np.ndarray],
+                 rois: np.ndarray) -> tuple:
+    """Pack existing ROI sample order on the backend owning the image.
+
+    Parameters
+    ----------
+    image : ndarray
+        Host or CUDA ZYX volume.
+    coords : tuple of ndarray
+        Sparse ZYX physical coordinate vectors broadcastable to the volume.
+    rois : ndarray
+        Start-inclusive, stop-exclusive ZYX bounds shaped (nrois,6).
+
+    Returns
+    -------
+    data, coordinates, sizes : tuple
+        NaN-padded ROI samples, physical ZYX samples, and valid counts, on the
+        input backend. The native GPUfit wrapper later requires a host transfer.
+    """
+    xp = get_array_module(image)
+    if xp is np:
+        return _prepare_rois_cpu(image, coords, rois)
+    rois = xp.asarray(rois, dtype=int)
+    if rois.ndim != 2 or rois.shape[1] != 6:
+        raise ValueError("rois must have shape (nrois,6)")
+    if not len(rois):
+        empty = xp.empty((0, 0))
+        return empty, (empty.copy(), empty.copy(), empty.copy()), xp.empty(0, dtype=int)
+    lengths = rois[:, 1::2] - rois[:, ::2]
+    if xp.any(lengths <= 0) or xp.any(rois[:, ::2] < 0) or xp.any(rois[:, 1::2] > xp.asarray(image.shape)):
+        raise ValueError("rois must contain positive extents inside the image")
+    sizes = xp.prod(lengths, axis=1)
+    # This extends the existing C-order sample packing with GPU index gathering.
+    sample = xp.arange(int(xp.max(sizes)))[None, :]
+    valid = sample < sizes[:, None]
+    iz = rois[:, 0, None] + sample // (lengths[:, 1, None] * lengths[:, 2, None])
+    iy = rois[:, 2, None] + (sample // lengths[:, 2, None]) % lengths[:, 1, None]
+    ix = rois[:, 4, None] + sample % lengths[:, 2, None]
+    indices = tuple(xp.where(valid, index, 0) for index in (iz, iy, ix))
+    packed = xp.where(valid, image[indices], xp.nan)
+    vectors = (xp.asarray(coords[0])[:, 0, 0], xp.asarray(coords[1])[0, :, 0],
+               xp.asarray(coords[2])[0, 0, :])
+    packed_coords = tuple(xp.where(valid, c[index], xp.nan)
+                          for c, index in zip(vectors, indices))
+    return packed, packed_coords, sizes
 
 
 @njit(parallel=True)
-def prepare_rois(image: np.ndarray,
+def _prepare_rois_cpu(image: np.ndarray,
                  coords: tuple[np.ndarray, np.ndarray, np.ndarray],
                  rois: np.ndarray[int]) -> (np.ndarray[float], tuple[np.ndarray[float], np.ndarray[float], np.ndarray[float]], np.ndarray[int]):
     """
@@ -355,14 +408,17 @@ def filter_nearby_peaks(centers: np.ndarray,
       the corresponding element of centers_unique
     """
 
+    xp = get_array_module(centers)
+    if weights is not None:
+        weights = xp.array(weights, copy=True)
     if centers.ndim != 2 or centers.shape[1] != 3:
         raise ValueError("centers should be a nx3 array where columns are cz, cy, cx")
 
-    centers_unique = np.array(centers, copy=True)
-    inds = np.arange(len(centers), dtype=int)
+    centers_unique = xp.array(centers, copy=True)
+    inds = xp.arange(len(centers), dtype=int)
 
     if weights is None:
-        weights = np.ones(len(centers_unique))
+        weights = xp.ones(len(centers_unique))
 
     # only need to act if minimum distances are non-zero and we have any centers to deal with
     if (min_xy_dist > 0 or min_z_dist > 0) and centers_unique.size != 0:
@@ -370,56 +426,56 @@ def filter_nearby_peaks(centers: np.ndarray,
 
         # check and make sure region is large enough (relative to the minimum distances) to be divide
         # limits of data
-        clims = np.stack((np.min(centers, axis=0),
-                          np.max(centers, axis=0)), axis=1)
+        clims = xp.stack((xp.min(centers, axis=0),
+                          xp.max(centers, axis=0)), axis=1)
 
         # find ranges as fraction of min_dist
-        min_dists = np.array([min_z_dist, min_xy_dist, min_xy_dist])
+        min_dists = xp.array([min_z_dist, min_xy_dist, min_xy_dist])
 
         with np.errstate(invalid="ignore"):
             # todo: does this have a problem if min_dists = 0?
             ranges = (clims[:, 1] - clims[:, 0]) / min_dists
 
-        if len(centers_unique) > nmax and not np.all(ranges <= 2):
+        if len(centers_unique) > nmax and not xp.all(ranges <= 2):
             if mode == "average":
-                raise NotImplementedError("mode='average' is not implemented with nmax < np.inf. Set nmax to np.inf")
+                raise NotImplementedError("mode='average' is not implemented with nmax < xp.inf. Set nmax to xp.inf")
 
-            ind_red_dim = np.argmax(ranges)
+            ind_red_dim = xp.argmax(ranges)
 
             # divide into two regions and solve separately
-            in1 = np.logical_and(centers_unique[:, ind_red_dim] >= clims[ind_red_dim, 0],
-                                 centers_unique[:, ind_red_dim] < np.mean(clims[ind_red_dim]))
+            in1 = xp.logical_and(centers_unique[:, ind_red_dim] >= clims[ind_red_dim, 0],
+                                 centers_unique[:, ind_red_dim] < xp.mean(clims[ind_red_dim]))
 
-            in2 = np.logical_and(centers_unique[:, ind_red_dim] >= np.mean(clims[ind_red_dim]),
+            in2 = xp.logical_and(centers_unique[:, ind_red_dim] >= xp.mean(clims[ind_red_dim]),
                                  centers_unique[:, ind_red_dim] <= clims[ind_red_dim, 1])
 
-            if np.any(in1):
+            if xp.any(in1):
                 cu1, i1 = filter_nearby_peaks(centers_unique[in1], min_xy_dist, min_z_dist, mode=mode)
             else:
-                cu1 = np.zeros((0, 3))
-                i1 = np.zeros((0, 3))
+                cu1 = xp.zeros((0, 3))
+                i1 = xp.zeros((0, 3))
 
-            if np.any(in2):
+            if xp.any(in2):
                 cu2, i2 = filter_nearby_peaks(centers_unique[in2], min_xy_dist, min_z_dist, mode=mode)
             else:
-                cu2 = np.zeros((0, 3))
-                i2 = np.zeros((0, 3))
+                cu2 = xp.zeros((0, 3))
+                i2 = xp.zeros((0, 3))
 
-            full_inds = np.arange(len(centers_unique), dtype=int)
-            centers_unique_sectors = np.concatenate((cu1, cu2))
-            inds_sectors = np.concatenate((full_inds[in1][i1], full_inds[in2][i2]))
+            full_inds = xp.arange(len(centers_unique), dtype=int)
+            centers_unique_sectors = xp.concatenate((cu1, cu2))
+            inds_sectors = xp.concatenate((full_inds[in1][i1], full_inds[in2][i2]))
 
             # take care of any non-unique points in the overlap region
-            in_overlap = np.logical_and(centers_unique_sectors[:, ind_red_dim] >= np.mean(clims[ind_red_dim]) - min_dists[ind_red_dim],
-                                        centers_unique_sectors[:, ind_red_dim] <= np.mean(clims[ind_red_dim]) + min_dists[ind_red_dim])
+            in_overlap = xp.logical_and(centers_unique_sectors[:, ind_red_dim] >= xp.mean(clims[ind_red_dim]) - min_dists[ind_red_dim],
+                                        centers_unique_sectors[:, ind_red_dim] <= xp.mean(clims[ind_red_dim]) + min_dists[ind_red_dim])
 
-            if np.any(in_overlap):
+            if xp.any(in_overlap):
                 centers_unique_overlap, i_overlap = filter_nearby_peaks(centers_unique_sectors[in_overlap], min_xy_dist, min_z_dist, mode=mode)
 
                 # get full centers by adding any that were not in the overlap region with the reduced set from the overlap region
-                centers_unique_sectors = np.concatenate((centers_unique_sectors[np.logical_not(in_overlap)],
+                centers_unique_sectors = xp.concatenate((centers_unique_sectors[xp.logical_not(in_overlap)],
                                                          centers_unique_overlap))
-                inds_sectors = np.concatenate((inds_sectors[np.logical_not(in_overlap)],
+                inds_sectors = xp.concatenate((inds_sectors[xp.logical_not(in_overlap)],
                                                full_inds[inds_sectors][in_overlap][i_overlap]))
 
             # full results
@@ -435,16 +491,16 @@ def filter_nearby_peaks(centers: np.ndarray,
             counter = 0
             while counter < len(centers_unique):
                 # compute distances to all other beads
-                z_dists = np.abs(centers_unique[counter][0] - centers_unique[:, 0])
-                xy_dists = np.sqrt((centers_unique[counter][1] - centers_unique[:, 1]) ** 2 +
+                z_dists = xp.abs(centers_unique[counter][0] - centers_unique[:, 0])
+                xy_dists = xp.sqrt((centers_unique[counter][1] - centers_unique[:, 1]) ** 2 +
                                    (centers_unique[counter][2] - centers_unique[:, 2]) ** 2)
 
                 # beads which are close enough we will combine
-                combine = np.logical_and(z_dists <= min_z_dist, xy_dists <= min_xy_dist)
+                combine = xp.logical_and(z_dists <= min_z_dist, xy_dists <= min_xy_dist)
                 if mode == "average":
-                    denom = np.nansum(np.logical_not(np.isnan(np.sum(centers_unique[combine], axis=1))) * weights[combine])
+                    denom = xp.nansum(xp.logical_not(xp.isnan(xp.sum(centers_unique[combine], axis=1))) * weights[combine])
                     # compute new center from average and reset that position in the list
-                    centers_unique[counter] = np.nansum(centers_unique[combine] * weights[combine][:, None], axis=0, dtype=float) / denom
+                    centers_unique[counter] = xp.nansum(centers_unique[combine] * weights[combine][:, None], axis=0, dtype=float) / denom
                     weights[counter] = denom
                     combine[counter] = False
                 elif mode == "keep-one":
@@ -456,9 +512,9 @@ def filter_nearby_peaks(centers: np.ndarray,
                     raise ValueError("mode must be 'average', 'keep-one', or 'remove' but was '%s'" % mode)
 
                 # remove points from lists
-                inds = inds[np.logical_not(combine)]
-                centers_unique = centers_unique[np.logical_not(combine)]
-                weights = weights[np.logical_not(combine)]
+                inds = inds[xp.logical_not(combine)]
+                centers_unique = centers_unique[xp.logical_not(combine)]
+                weights = weights[xp.logical_not(combine)]
 
                 counter += 1
 
@@ -1435,7 +1491,7 @@ def localize_beads_generic(imgs: np.ndarray,
 
     # unpack arguments
     origin = np.asarray(origin, dtype=float)
-    z, y, x = get_coords(imgs.shape, (dz, dy, dx), origin=origin)
+    z, y, x = get_coords(imgs.shape, (dz, dy, dx), origin=origin, use_gpu=use_gpu_filter)
     if use_gpu_filter and not _cupy_available:
         raise RuntimeError("GPU filtering requested but CuPy is unavailable")
     dz_min_sep, dxy_min_sep = min_spot_sep
@@ -1486,13 +1542,9 @@ def localize_beads_generic(imgs: np.ndarray,
     footprint = get_max_filter_footprint((dz_min_sep, dxy_min_sep, dxy_min_sep), (dz, dy, dx))
     centers_guess_inds, _ = find_peak_candidates(imgs_filtered, footprint, threshold, mask=mask)
 
-    if use_gpu_filter and _cupy_available:
-        imgs = imgs.get()
-        imgs_filtered = imgs_filtered.get()
-        centers_guess_inds = centers_guess_inds.get()
 
     # real coordinates
-    centers_guess = np.stack((z[centers_guess_inds[:, 0], 0, 0],
+    centers_guess = xp.stack((z[centers_guess_inds[:, 0], 0, 0],
                               y[0, centers_guess_inds[:, 1], 0],
                               x[0, 0, centers_guess_inds[:, 2]]),
                              axis=1)
@@ -1513,7 +1565,7 @@ def localize_beads_generic(imgs: np.ndarray,
             # ###################################################
             tstart = time.perf_counter()
 
-            inds = np.ravel_multi_index(centers_guess_inds.transpose(), imgs_filtered.shape)
+            inds = xp.ravel_multi_index(centers_guess_inds.transpose(), imgs_filtered.shape)
             peak_weights = imgs_filtered.ravel()[inds]
             centers_guess, inds_comb = filter_nearby_peaks(centers_guess,
                                                            dxy_min_sep,
@@ -1537,12 +1589,12 @@ def localize_beads_generic(imgs: np.ndarray,
         else:
             imgs_fit = imgs
 
-        roi_centers = get_nearest_pixel(centers_guess - origin, (dz, dy, dx))
+        roi_centers = get_nearest_pixel(centers_guess - xp.asarray(origin), (dz, dy, dx))
         rois = roi_fns.get_centered_rois(roi_centers, roi_size_pix, [0, 0, 0], imgs_fit.shape)
         img_rois, roi_coords, roi_sizes = prepare_rois(imgs_fit, (z, y, x), rois)
         roi_weights = None
         if weights is not None:
-            weights = np.asarray(weights)
+            weights = xp.asarray(weights)
             if data_is_2d and weights.ndim == 2:
                 weights = weights[None, ...]
             if weights.shape != imgs_fit.shape:
@@ -1550,7 +1602,7 @@ def localize_beads_generic(imgs: np.ndarray,
             roi_weights, _, _ = prepare_rois(weights, (z, y, x), rois)
         roi_variances = None
         if variances is not None:
-            variances = np.asarray(variances)
+            variances = xp.asarray(variances)
             if data_is_2d and variances.ndim == 2:
                 variances = variances[None, ...]
             if variances.shape != imgs_fit.shape:
@@ -1658,7 +1710,8 @@ def localize_beads_generic(imgs: np.ndarray,
         fit_results = fit_rois(np.empty((0, 0)), tuple(np.empty((0, 0)) for _ in range(3)),
                                np.empty(0, dtype=int), np.empty((0, model.nparams)),
                                model=model, use_gpu=use_gpu_fit, estimator=estimator,
-                               fixed_params=fixed_params, bounds=bounds, **kwargs)
+                               fixed_params=fixed_params, bounds=bounds,
+                               variances=None if variances is None else np.empty((0, 0)), **kwargs)
         fit_results.update({"rois": np.empty((0, 6), dtype=int), "to_keep": np.empty(0, bool),
                             "conditions": np.empty((0, 0), bool), "condition_names": [],
                             "filter_settings": {}})

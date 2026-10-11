@@ -6,6 +6,7 @@ from collections.abc import Sequence
 import numpy as np
 from warnings import warn
 from numba import njit
+from localize_psf.array_backend import get_array_module
 
 
 def roi2global(coords_roi: Union[Sequence[float], Sequence[int]],
@@ -132,45 +133,46 @@ def get_centered_rois(centers: Union[np.ndarray[int], np.ndarray[float], np.ndar
     :return rois: num_rois x 2*ndims
     """
 
-    centers = np.atleast_2d(centers)
-    sizes = np.atleast_2d(sizes)
+    xp = get_array_module(centers)
+    centers = xp.atleast_2d(xp.asarray(centers))
+    sizes = xp.atleast_2d(xp.asarray(sizes))
 
     first_shape = centers.shape[0:-1]
     ndim = centers.shape[-1]
 
     if min_vals is None:
-        if np.issubdtype(centers.dtype, float):
-            min_vals = np.full_like(centers, -np.inf)
-        elif np.issubdtype(centers.dtype, np.integer):
-            min_vals = np.full_like(centers, np.iinfo(centers.dtype).min)
+        if xp.issubdtype(centers.dtype, float):
+            min_vals = xp.full_like(centers, -xp.inf)
+        elif xp.issubdtype(centers.dtype, xp.integer):
+            min_vals = xp.full_like(centers, xp.iinfo(centers.dtype).min)
         else:
             raise ValueError()
 
     if max_vals is None:
-        if np.issubdtype(centers.dtype, float):
-            max_vals = np.full_like(centers, np.inf)
-        elif np.issubdtype(centers.dtype, np.integer):
-            max_vals = np.full_like(centers, np.iinfo(centers.dtype).max)
+        if xp.issubdtype(centers.dtype, float):
+            max_vals = xp.full_like(centers, xp.inf)
+        elif xp.issubdtype(centers.dtype, xp.integer):
+            max_vals = xp.full_like(centers, xp.iinfo(centers.dtype).max)
         else:
             raise ValueError()
 
-    min_vals = np.atleast_2d(min_vals)
-    max_vals = np.atleast_2d(max_vals)
+    min_vals = xp.atleast_2d(xp.asarray(min_vals))
+    max_vals = xp.atleast_2d(xp.asarray(max_vals))
 
     # check which
-    end_test = np.rint(centers + (sizes - 1) / 2) + 1
-    end_err = np.mod(end_test, 1)
-    start_test = np.rint(centers - (sizes - 1) / 2)
-    start_err = np.mod(start_test, 1)
+    end_test = xp.rint(centers + (sizes - 1) / 2) + 1
+    end_err = xp.mod(end_test, 1)
+    start_test = xp.rint(centers - (sizes - 1) / 2)
+    start_err = xp.mod(start_test, 1)
 
     mask = end_err > start_err
-    start = np.where(mask, start_test, end_test - sizes)
+    start = xp.where(mask, start_test, end_test - sizes)
     end = start + sizes
 
-    start = np.maximum(start, min_vals)
-    end = np.minimum(end, max_vals)
+    start = xp.maximum(start, min_vals)
+    end = xp.minimum(end, max_vals)
 
-    rois = np.stack((start, end), axis=-1).astype(int).reshape(first_shape + (2 * ndim,))
+    rois = xp.stack((start, end), axis=-1).astype(int).reshape(first_shape + (2 * ndim,))
 
     return rois
 

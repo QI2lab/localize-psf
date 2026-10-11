@@ -6,8 +6,14 @@ from time import perf_counter
 import numpy as np
 
 from localize_psf import fit_psf as psf
+from localize_psf.array_backend import get_array_module
 from localize_psf.fitting_controls import validate_bounds, validate_fixed
 from localize_psf.uncertainty import add_covariance, validate_uncertainty
+
+
+def _host_array(value, dtype=None):
+    backend = get_array_module(value)
+    return np.asarray(backend.asnumpy(value) if backend is not np else value, dtype=dtype)
 
 
 def fit_rois(
@@ -90,10 +96,14 @@ def fit_rois(
         Parameters retain optimizer conventions so bounds/fixed values are preserved.
     """
     model = psf.gaussian3d_psf_model() if model is None else model
-    data = np.asarray(img_rois, dtype=float)
-    coordinates = tuple(np.asarray(c, dtype=float) for c in coords_rois)
-    sizes = np.asarray(roi_sizes)
-    initial = np.asarray(init_params, dtype=float)
+    # GPUfit's public wrapper requires host buffers. Transfer packed ROIs here,
+    # after GPU detection, packing and parameter estimation, not whole images.
+    data = _host_array(img_rois, dtype=float)
+    coordinates = tuple(_host_array(c, dtype=float) for c in coords_rois)
+    sizes = _host_array(roi_sizes)
+    initial = _host_array(init_params, dtype=float)
+    if variances is not None:
+        variances = _host_array(variances, dtype=float)
     if data.ndim != 2 or len(coordinates) != 3 or any(c.shape != data.shape for c in coordinates):
         raise ValueError("data and three ZYX coordinate arrays must share shape (nfits,npoints)")
     nfits, npoints = data.shape
@@ -119,7 +129,7 @@ def fit_rois(
         raise ValueError("tolerance must be finite and positive")
     objective_weights = None
     if weights is not None:
-        objective_weights = np.asarray(weights, dtype=float)
+        objective_weights = _host_array(weights, dtype=float)
         if (
             objective_weights.shape != data.shape
             or not np.all(np.isfinite(objective_weights[valid]))

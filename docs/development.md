@@ -65,6 +65,13 @@ weights use the same ROI packing as the data. Empty outputs retain array shapes
 and candidate IDs. Optimizer failures and acceptance-filter decisions are distinct.
 # GPU model and uncertainty execution
 
+With `use_gpu_filter=True`, the high-level path keeps images, detected peaks,
+duplicate filtering, coordinate conversion, ROI gathering, variance/weight maps,
+and initial Gaussian parameter estimates on CUDA. `prepare_rois` selects its
+backend from the input image and preserves the existing C-order/NaN-padding
+contract. Only packed arrays are transferred when the public native GPUfit API
+needs its host buffers. Returned filtered images remain CuPy arrays.
+
 The four microscopy models reuse their existing model and derivative code with
 CuPy arrays, including rotated models and batched ROI coordinates. Device arrays
 stay on CUDA through model evaluation; CPU calculations remain available as test

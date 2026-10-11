@@ -1097,6 +1097,7 @@ class gauss3d(coordinate_model):
                             coordinates: Sequence[np.ndarray],
                             num_preserved_dims: int = 0):
 
+        xp = get_array_module(data, *coordinates)
         if self.ndim != len(coordinates):
             raise ValueError("len(coords) != model dimensions")
 
@@ -1106,49 +1107,51 @@ class gauss3d(coordinate_model):
         average_axes = tuple(range(num_preserved_dims, data_ndim))
 
         # subtract smallest value so positive
-        img_temp = data - np.nanmin(data, axis=average_axes, keepdims=True)
-        img_temp[img_temp <= 0] = np.nan
+        img_temp = data - xp.nanmin(data, axis=average_axes, keepdims=True)
+        img_temp[img_temp <= 0] = xp.nan
 
         # compute moments
-        isum = np.nansum(img_temp, axis=average_axes)
-        m1x = np.nansum((img_temp * x), axis=average_axes) / isum
-        m2x = np.nansum((img_temp * x ** 2), axis=average_axes) / isum
-        sx = np.sqrt(m2x - m1x ** 2)
-        m1y = np.nansum((img_temp * y), axis=average_axes) / isum
-        m2y = np.nansum((img_temp * y ** 2), axis=average_axes) / isum
-        sy = np.sqrt(m2y - m1y ** 2)
-        m1z = np.nansum((img_temp * z), axis=average_axes) / isum
-        m2z = np.nansum((img_temp * z ** 2), axis=average_axes) / isum
-        sz = np.sqrt(m2z - m1z ** 2)
+        isum = xp.nansum(img_temp, axis=average_axes)
+        m1x = xp.nansum((img_temp * x), axis=average_axes) / isum
+        m2x = xp.nansum((img_temp * x ** 2), axis=average_axes) / isum
+        sx = xp.sqrt(m2x - m1x ** 2)
+        m1y = xp.nansum((img_temp * y), axis=average_axes) / isum
+        m2y = xp.nansum((img_temp * y ** 2), axis=average_axes) / isum
+        sy = xp.sqrt(m2y - m1y ** 2)
+        m1z = xp.nansum((img_temp * z), axis=average_axes) / isum
+        m2z = xp.nansum((img_temp * z ** 2), axis=average_axes) / isum
+        sz = xp.sqrt(m2z - m1z ** 2)
 
         # if e.g. all img_temp values are the same, sigmas can be zero and to machine precision can get NaN. avoid this
-        # if np.isnan(sz):
-        #     sz = 0.5 * (np.max(z, axis=average_axes) - np.min(z, axis=average_axes))
+        # if xp.isnan(sz):
+        #     sz = 0.5 * (xp.max(z, axis=average_axes) - xp.min(z, axis=average_axes))
 
-        # if np.isnan(sxy):
-        #     sxy = 0.5 * (0.5 * (np.max(x, axis=average_axes) - np.min(x, axis=average_axes)) +
-        #                  0.5 * (np.max(y, axis=average_axes) - np.min(y, axis=average_axes))
+        # if xp.isnan(sxy):
+        #     sxy = 0.5 * (0.5 * (xp.max(x, axis=average_axes) - xp.min(x, axis=average_axes)) +
+        #                  0.5 * (xp.max(y, axis=average_axes) - xp.min(y, axis=average_axes))
         #                  )
 
-        guess_params = np.stack((np.nanmax(data, axis=average_axes) - np.nanmin(data, axis=average_axes),
+        guess_params = xp.stack((xp.nanmax(data, axis=average_axes) - xp.nanmin(data, axis=average_axes),
                                  m1x, m1y, m1z, 0.5 * (sx + sy), sz,
-                                 np.nanmean(data, axis=average_axes)), axis=-1)
+                                 xp.nanmean(data, axis=average_axes)), axis=-1)
 
         return self.normalize_parameters(guess_params)
 
     def estimate_bounds(self,
                         coordinates: Sequence[np.ndarray]):
         z, y, x = coordinates[-3:]
+        xp = get_array_module(z, y, x)
 
-        lbs = (-np.inf, x.min(), y.min(), z.min(), 0, 0, -np.inf)
-        ubs = (np.inf, x.max(), y.max(), z.max(), np.inf, np.inf, np.inf)
+        lbs = (-xp.inf, x.min(), y.min(), z.min(), 0, 0, -xp.inf)
+        ubs = (xp.inf, x.max(), y.max(), z.max(), xp.inf, xp.inf, xp.inf)
         return lbs, ubs
 
     def normalize_parameters(self,
                              params: np.ndarray):
-        norm_params = np.array(params, copy=True)
-        norm_params[..., 4] = np.abs(norm_params[..., 4])
-        norm_params[..., 5] = np.abs(norm_params[..., 5])
+        xp = get_array_module(params)
+        norm_params = xp.array(params, copy=True)
+        norm_params[..., 4] = xp.abs(norm_params[..., 4])
+        norm_params[..., 5] = xp.abs(norm_params[..., 5])
 
         return norm_params
 
