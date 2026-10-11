@@ -135,6 +135,16 @@ independent references: its already-computed covariance is propagated without a
 second fit, and `absolute_sigma=True` disables residual scaling in the lower fitter.
 Production PTV uses CUDA; CPU fitting is a test reference only.
 
+Artifact acceptance also runs in fresh, locked uv projects outside the source
+checkout. It validates the portable wheel, reconstructs a wheel from the sdist,
+checks package/license contents and imports, repeats locked sync, and verifies
+GPUfit ABI 2. The CPU-only wheel passed 45 tests (one existing skip); the GPU
+wheel and sdist-rebuilt GPU wheel each passed 88 tests (one existing skip).
+
+```powershell
+./scripts/run_gpu.ps1 -CommandArguments @('python', 'scripts/check_artifacts.py')
+```
+
 ```powershell
 ./scripts/run_gpu.ps1 -CommandArguments @('pytest', '-q', 'tests/test_localization_covariance.py')
 ```
