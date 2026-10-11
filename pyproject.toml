@@ -18,7 +18,6 @@ classifiers = [
 ]
 dependencies = [
   "numpy>=2", "scipy>=1.14", "numba>=0.61", "matplotlib>=3.9", "joblib>=1.4",
-  "dask>=2024.10", "zarr>=2.18,<3",
 ]
 
 [project.urls]
@@ -28,6 +27,7 @@ Documentation = "https://localize-psf.readthedocs.io"
 [project.optional-dependencies]
 gpu = ["cupy-cuda12x>=13,<15"]
 psfmodels = ["psfmodels>=0.3.3"]
+legacy-calibration = ["dask>=2024.10", "zarr>=2.18,<3"]
 
 [dependency-groups]
 dev = ["pytest==9.1.1", "ruff==0.16.6"]

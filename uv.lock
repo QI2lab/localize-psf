@@ -628,18 +628,20 @@ name = "localize-psf"
 version = "0.2.0"
 source = { editable = "." }
 dependencies = [
-    { name = "dask" },
     { name = "joblib" },
     { name = "matplotlib" },
     { name = "numba" },
     { name = "numpy" },
     { name = "scipy" },
-    { name = "zarr" },
 ]
 
 [package.optional-dependencies]
 gpu = [
     { name = "cupy-cuda12x" },
+]
+legacy-calibration = [
+    { name = "dask" },
+    { name = "zarr" },
 ]
 psfmodels = [
     { name = "psfmodels" },
@@ -658,16 +660,16 @@ docs = [
 [package.metadata]
 requires-dist = [
     { name = "cupy-cuda12x", marker = "extra == 'gpu'", specifier = ">=13,<15" },
-    { name = "dask", specifier = ">=2024.10" },
+    { name = "dask", marker = "extra == 'legacy-calibration'", specifier = ">=2024.10" },
     { name = "joblib", specifier = ">=1.4" },
     { name = "matplotlib", specifier = ">=3.9" },
     { name = "numba", specifier = ">=0.61" },
     { name = "numpy", specifier = ">=2" },
     { name = "psfmodels", marker = "extra == 'psfmodels'", specifier = ">=0.3.3" },
     { name = "scipy", specifier = ">=1.14" },
-    { name = "zarr", specifier = ">=2.18,<3" },
+    { name = "zarr", marker = "extra == 'legacy-calibration'", specifier = ">=2.18,<3" },
 ]
-provides-extras = ["gpu", "psfmodels"]
+provides-extras = ["gpu", "psfmodels", "legacy-calibration"]
 
 [package.metadata.requires-dev]
 dev = [
