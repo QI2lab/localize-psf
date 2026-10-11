@@ -21,7 +21,7 @@ from matplotlib import colormaps
 import localize_psf.rois as roi_fns
 from localize_psf.fit import fit_model
 import localize_psf.fit_psf as psf
-from localize_psf.batch_fitting import fit_rois
+from localize_psf.batch_fitting import fit_rois, _accumulate_fit_batch, _slice_fit_controls
 from localize_psf.array_backend import get_array_module
 
 # for filtering on GPU
@@ -1409,6 +1409,7 @@ def localize_beads_generic(imgs: np.ndarray,
                            weights: np.ndarray | None = None,
                            origin: Sequence[float] = (0., 0., 0.),
                            variances: np.ndarray | None = None,
+                           roi_batch_size: int = 32,
                            **kwargs) -> tuple[tuple, dict, np.ndarray]:
     """
     Given an image consisting of diffraction limited features and background, identify the diffraction limited features
@@ -1452,12 +1453,16 @@ def localize_beads_generic(imgs: np.ndarray,
     :param return_filtered_images:
     :param model_zsize_index: index of model parameter giving z-size information
     :param model_zposition_index: index of model parameter giving z-position information
+    :param roi_batch_size: maximum candidates packed, guessed and fitted at once.
+      Only compact fit evidence is retained between batches; detection still uses the input volume.
     :return coords, fit_results, imgs_filtered: coords = (z, y, x)
     """
 
     # ###################################
     # process/regularize input parameters
     # ###################################
+    if type(roi_batch_size) is not int or roi_batch_size <= 0:
+        raise ValueError("roi_batch_size must be a positive integer")
     # check if is 2D
     data_is_2d = (imgs.ndim == 2)
 
@@ -1591,42 +1596,18 @@ def localize_beads_generic(imgs: np.ndarray,
 
         roi_centers = get_nearest_pixel(centers_guess - xp.asarray(origin), (dz, dy, dx))
         rois = roi_fns.get_centered_rois(roi_centers, roi_size_pix, [0, 0, 0], imgs_fit.shape)
-        img_rois, roi_coords, roi_sizes = prepare_rois(imgs_fit, (z, y, x), rois)
-        roi_weights = None
         if weights is not None:
             weights = xp.asarray(weights)
             if data_is_2d and weights.ndim == 2:
                 weights = weights[None, ...]
             if weights.shape != imgs_fit.shape:
                 raise ValueError("weights must have the input image shape")
-            roi_weights, _, _ = prepare_rois(weights, (z, y, x), rois)
-        roi_variances = None
         if variances is not None:
             variances = xp.asarray(variances)
             if data_is_2d and variances.ndim == 2:
                 variances = variances[None, ...]
             if variances.shape != imgs_fit.shape:
                 raise ValueError("variances must have the input image shape")
-            roi_variances, _, _ = prepare_rois(variances, (z, y, x), rois)
-
-        # ###################################################
-        # determine initial guess values for fits
-        # ###################################################
-        init_params = model.estimate_parameters(img_rois, roi_coords, num_preserved_dims=1)
-
-        if np.any(np.isnan(init_params)):
-            raise ValueError("one or more init_params was NaN")
-
-        if verbose:
-            print(f"Prepared {len(rois):d} rois and estimated initial parameters"
-                  f" in {time.perf_counter() - tstart:.2f}s")
-
-        # ###################################################
-        # perform localization fitting
-        # ###################################################
-        if verbose:
-            print(f"starting fitting for {centers_guess.shape[0]:d} rois")
-        tstart = time.perf_counter()
 
         # fix some parameters if desired
         from localize_psf.fitting_controls import validate_fixed
@@ -1638,32 +1619,46 @@ def localize_beads_generic(imgs: np.ndarray,
                                  f" parameter {model_zsize_index:d} is not 'sz'.")
             # fix sigma-z
             fixed_params[model_zsize_index] = True
-            init_params[:, model_zsize_index] = 1.
 
             if model.parameter_names[model_zposition_index] != "cz":
                 raise ValueError(f"Data was 2D, but model {str(model):s} is not supported because"
                                  f" parameter {model_zposition_index:d} is not 'cz'.")
             # fix cz
             fixed_params[model_zposition_index] = True
-            init_params[:, model_zposition_index] = z[0, 0, 0]
 
-        fit_results = fit_rois(img_rois,
-                               roi_coords,
-                               roi_sizes,
-                               init_params,
-                               max_number_iterations=max_nfit_iterations,
-                               estimator=estimator,
-                               bounds=bounds,
-                               weights=roi_weights,
-                               variances=roi_variances,
-                               fixed_params=fixed_params,
-                               model=model,
-                               guess_bounds=guess_bounds,
-                               use_gpu=use_gpu_fit,
-                               debug=debug,
-                               verbose=verbose,
-                               **kwargs
-                               )
+        nfits = len(rois)
+        fit_results = None
+        quality_flags = kwargs.pop("quality_flags", None)
+        for start in range(0, nfits, roi_batch_size):
+            selected = slice(start, min(start + roi_batch_size, nfits))
+            batch_rois = rois[selected]
+            batch_bounds, batch_flags = _slice_fit_controls(
+                bounds, quality_flags, selected, nfits, model.nparams
+            )
+            img_rois, roi_coords, roi_sizes = prepare_rois(imgs_fit, (z, y, x), batch_rois)
+            roi_weights = None
+            if weights is not None:
+                roi_weights, _, _ = prepare_rois(weights, (z, y, x), batch_rois)
+            roi_variances = None
+            if variances is not None:
+                roi_variances, _, _ = prepare_rois(variances, (z, y, x), batch_rois)
+            init_params = model.estimate_parameters(img_rois, roi_coords, num_preserved_dims=1)
+            if xp.any(xp.isnan(init_params)):
+                raise ValueError("one or more init_params was NaN")
+            if data_is_2d:
+                init_params[:, model_zsize_index] = 1.
+                init_params[:, model_zposition_index] = z[0, 0, 0]
+            batch = fit_rois(
+                img_rois, roi_coords, roi_sizes, init_params,
+                max_number_iterations=max_nfit_iterations,
+                estimator=estimator, bounds=batch_bounds, weights=roi_weights,
+                variances=roi_variances, fixed_params=fixed_params, model=model,
+                guess_bounds=guess_bounds, use_gpu=use_gpu_fit, debug=debug,
+                verbose=verbose, quality_flags=batch_flags, **kwargs,
+            )
+            fit_results = _accumulate_fit_batch(fit_results, batch, start, nfits)
+            del img_rois, roi_coords, roi_sizes, roi_weights, roi_variances, init_params, batch
+        init_params = xp.asarray(fit_results["init_params"])
 
         if verbose:
             print(f"Localization took {time.perf_counter() - tstart:.2f}s")

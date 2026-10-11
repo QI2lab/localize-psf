@@ -39,6 +39,14 @@ with the existing CPU reference fitter or on the GPU using a modified version of
 The module contains a high-level function for localizing diffraction limited objects in a 3D image,
 `localize_beads_generic()`. This function is designed to work with extensible fit `model` and `filter` objects.
 
+`roi_batch_size` (default 32) bounds ROI packing, parameter guesses, native fitting
+and the associated covariance work. Candidate IDs refer to the complete detected
+set and remain stable across batches, including failed or flagged fits. Weights,
+known variances, per-candidate bounds and quality flags retain their alignment.
+Only compact fit results accumulate; full-volume filtering and detection still
+require the input image in memory. GPUfit's public binding transfers packed ROI
+buffers to the host before native CUDA fitting.
+
 It also contains a high-level function for determining an experimental point-spread function and fitting
 an image containing many 3D diffraction limited spots to a PSF model, `autofit_psfs()`.
 

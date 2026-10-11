@@ -16,6 +16,77 @@ def _host_array(value, dtype=None):
     return np.asarray(backend.asnumpy(value) if backend is not np else value, dtype=dtype)
 
 
+def _slice_fit_controls(bounds, quality_flags, selected, nfits, nparams):
+    """Slice candidate controls without interpreting their numerical semantics."""
+    selected_bounds = None
+    if bounds is not None:
+        if not isinstance(bounds, (tuple, list)) or len(bounds) != 2:
+            raise ValueError("bounds must be a numeric (lower, upper) pair")
+        sides = []
+        for side in bounds:
+            values = _host_array(side)
+            if values.shape == (nparams,):
+                sides.append(values)
+            elif values.shape == (nfits, nparams):
+                sides.append(values[selected])
+            else:
+                raise ValueError(
+                    "each numeric bound side must have shape (nparams,) or (nfits,nparams)"
+                )
+        selected_bounds = tuple(sides)
+    selected_flags = None
+    if quality_flags is not None:
+        if not isinstance(quality_flags, dict):
+            raise ValueError("quality_flags must be a dictionary")
+        selected_flags = {}
+        for name, value in quality_flags.items():
+            values = _host_array(value)
+            if values.shape != (nfits,) or values.dtype.kind != "b":
+                raise ValueError("each quality flag must be a boolean array shaped (nfits,)")
+            selected_flags[name] = values[selected]
+    return selected_bounds, selected_flags
+
+
+def _accumulate_fit_batch(complete, batch, start, nfits):
+    """Persist compact fit evidence; never retain packed samples across batches."""
+    selected = slice(start, start + len(batch["fit_params"]))
+    if complete is None:
+        complete = {}
+        for name, value in batch.items():
+            if isinstance(value, np.ndarray):
+                complete[name] = np.empty((nfits, *value.shape[1:]), dtype=value.dtype)
+            elif name == "bounds":
+                complete[name] = tuple(
+                    np.empty((nfits, *v.shape[1:]), dtype=v.dtype) for v in value
+                )
+            elif name == "covariance_flags":
+                complete[name] = {key: np.empty(nfits, dtype=v.dtype) for key, v in value.items()}
+            else:
+                complete[name] = 0.0 if name == "fit_time" else value
+    for name, value in batch.items():
+        if isinstance(value, np.ndarray):
+            complete[name][selected] = value + start if name == "candidate_ids" else value
+        elif name == "bounds":
+            for target, side in zip(complete[name], value):
+                target[selected] = side
+        elif name == "covariance_flags":
+            for key, flag in value.items():
+                complete[name][key][selected] = flag
+        elif name == "fit_time":
+            complete[name] += value
+        elif name == "covariance_method" and value != complete[name]:
+            # Inverse-variance batches are also valid sandwich estimates. Mixed
+            # objective weights require the general convention for the whole run.
+            methods = {value, complete[name]}
+            if methods <= {"calibrated_gaussian_information", "calibrated_gaussian_sandwich"}:
+                complete[name] = "calibrated_gaussian_sandwich"
+            else:
+                raise RuntimeError("inconsistent covariance convention between ROI batches")
+        elif value != complete[name]:
+            raise RuntimeError(f"inconsistent {name} between ROI batches")
+    return complete
+
+
 def fit_rois(
     img_rois: np.ndarray,
     coords_rois: Sequence[np.ndarray],
