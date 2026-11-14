@@ -25,25 +25,62 @@ Repository = "https://github.com/QI2lab/localize-psf"
 Documentation = "https://localize-psf.readthedocs.io"
 
 [project.optional-dependencies]
-gpu = ["cupy-cuda12x>=13,<15"]
+gpu = [
+  "cupy-cuda12x[ctk]>=14.1.1",
+  "pyGpufit @ git+https://github.com/QI2lab/Gpufit.git@opm-ptv",
+]
+example = [
+  "yaozarrs[io,write-tensorstore] @ git+https://github.com/imaging-formats/yaozarrs.git@main",
+  "ufish @ git+https://github.com/QI2lab/U-FISH.git@12081e34dbcb782d92a49dec20820acc8cabd73f",
+  "torch==2.9.0; sys_platform == 'win32'",
+  "torch; sys_platform != 'win32'",
+  "typer>=0.16,<1",
+  "pyarrow>=18",
+  "tifffile>=2024.10",
+]
 psfmodels = ["psfmodels>=0.3.3"]
 legacy-calibration = ["dask>=2024.10", "zarr>=2.18,<3"]
 
 [dependency-groups]
 dev = ["pytest==9.1.1", "ruff==0.16.6"]
+test-cpu = ["yaozarrs[io,write-tensorstore] @ git+https://github.com/imaging-formats/yaozarrs.git@main", "typer>=0.16,<1"]
 docs = ["sphinx>=8,<9", "sphinx-rtd-theme>=3,<4"]
+
+[tool.uv.sources]
+torch = [
+  {index = "pytorch-cu129", extra = "example", marker = "sys_platform == 'linux' or sys_platform == 'win32'"},
+]
+
+[[tool.uv.index]]
+name = "pytorch-cu129"
+url = "https://download.pytorch.org/whl/cu129"
+explicit = true
+
+[[tool.uv.index]]
+name = "nvidia"
+url = "https://pypi.nvidia.com"
 
 [tool.hatch.build.targets.wheel]
 packages = ["localize_psf"]
 
+[tool.hatch.metadata]
+allow-direct-references = true
+
 [tool.hatch.build.targets.sdist]
-include = ["localize_psf", "tests", "docs", "scripts", "README.md", "LICENSE", "pyproject.toml", "uv.lock", ".python-version"]
+include = ["localize_psf", "tests", "docs", "scripts", "examples/localize_ufish_prior.py", "examples/localize_ufish_prior.md", "examples/localize_ufish_prior.json", "README.md", "LICENSE", "pyproject.toml", "uv.lock", ".python-version"]
 exclude = ["docs/_*", "docs/_build"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 python_files = ["test_*.py", "*_unittest.py"]
-markers = ["gpu: requires the tested QI2lab native GPUfit artifact and CUDA device", "monte_carlo: repeated noisy-image uncertainty validation"]
+markers = [
+  "cpu: runs without CUDA",
+  "gpu: requires the tested QI2lab native GPUfit artifact and CUDA device",
+  "unit: exercises a production function in isolation",
+  "integration: exercises production components together",
+  "example: example workflow tests, separate from core wheel checks",
+  "monte_carlo: repeated noisy-image uncertainty validation",
+]
 
 [tool.ruff]
 target-version = "py312"
