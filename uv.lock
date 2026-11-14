@@ -2563,7 +2563,7 @@ wheels = [
 [[package]]
 name = "pygpufit"
 version = "1.2.0"
-source = { git = "https://github.com/QI2lab/Gpufit.git?rev=opm-ptv#30185b039346ab5ae43b08d2bc6032abaa9741a9" }
+source = { git = "https://github.com/QI2lab/Gpufit.git?rev=opm-ptv#407d9b0552134b618e87fb17668c8a803680d621" }
 dependencies = [
     { name = "numpy" },
 ]
