@@ -138,6 +138,7 @@ def localize_ufish_prior(data, metadata: Mapping | None = None,
     With output_dir, completed centroid volumes are saved and reused on reruns.
     """
     metadata = {"batch_axes": True, "psf_diagnostics": False,
+                "intensity_threshold": 0.0,
                 "fit_roi_size_um": (1.75, 0.65, 0.65), "psf_roi_size_px": (11, 21, 21),
                 **(metadata or {})}
     source = None
@@ -192,7 +193,7 @@ def localize_ufish_prior(data, metadata: Mapping | None = None,
         checkpoint = Path(output_dir) / "centroids.parquet"
         checkpoint.parent.mkdir(parents=True, exist_ok=True)
         identity = dict(source=source, shape=list(data.shape), axes=metadata["axes"],
-                        ufish_weights=weights)
+                        ufish_weights=weights, intensity_threshold=metadata["intensity_threshold"])
         schema = pa.schema([("timepoint", pa.int64()), ("channel", pa.int64())] +
                            [(axis + "_px", pa.float64()) for axis in "zyx"])
         if checkpoint.exists():
@@ -200,13 +201,16 @@ def localize_ufish_prior(data, metadata: Mapping | None = None,
             previous = json.loads((saved.schema.metadata or {}).get(b"localize_psf", b"{}"))
             completed = [tuple(key) for key in previous.pop("completed_volumes", [])]
             if previous != identity:
-                raise ValueError("Centroid checkpoint belongs to a different input; "
+                raise ValueError("Centroid checkpoint has different input or U-FISH settings; "
                                  "use a different output directory")
         else:
             saved = schema.empty_table()
     import torch
     from tqdm.auto import tqdm
     from ufish.api import UFish
+    from ufish.utils.log import logger as ufish_logger
+
+    ufish_logger.disable("ufish")
 
     # Infer all selected volumes before fitting. Slices are read only when needed.
     detector = None
@@ -219,7 +223,8 @@ def localize_ufish_prior(data, metadata: Mapping | None = None,
             if detector is None:
                 detector = UFish(device="cuda")
                 detector.load_weights(weights_file=weights)
-            spots = detector.predict(np.asarray(data[key]), axes="zyx", batch_size=256, threshold=0.3)[0]
+            spots = detector.predict(np.asarray(data[key]), axes="zyx", batch_size=256,
+                                      intensity_threshold=metadata["intensity_threshold"])[0]
             points = spots[["axis-0", "axis-1", "axis-2"]].to_numpy(dtype=float)
             if checkpoint is not None:
                 columns = dict(timepoint=np.full(len(points), key[0], int),

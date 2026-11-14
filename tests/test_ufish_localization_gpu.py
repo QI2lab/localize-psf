@@ -1,6 +1,7 @@
 """Integration of real CUDA U-FISH, GPUfit, localization, exports and Typer."""
 
 import json
+from io import StringIO
 
 import numpy as np
 import pytest
@@ -14,6 +15,7 @@ def test_localization_and_cli(localization, tmp_path, monkeypatch):
     import tifffile
     from typer.testing import CliRunner
     from ufish.api import UFish
+    from ufish.utils.log import logger
     from yaozarrs import DimSpec, v05
     from yaozarrs.write.v05 import write_bioformats2raw
 
@@ -59,12 +61,23 @@ def test_localization_and_cli(localization, tmp_path, monkeypatch):
     record(gf, "fit_constrained", "fit")
     record(localization, "fit_rois", "fit")
     settings = dict(
-        optics, voxel_size_zyx_um=spacing, origin_zyx_um=origin, fit_roi_size_um=(1.4, 1, 1)
+        optics,
+        intensity_threshold=0.5,
+        voxel_size_zyx_um=spacing,
+        origin_zyx_um=origin,
+        fit_roi_size_um=(1.4, 1, 1),
     )
     directory = tmp_path / "localizations"
     checkpoint = directory / "centroids.parquet"
-    with pytest.raises(RuntimeError, match="simulated inference crash"):
-        localization.localize_ufish_prior(data, settings, output_dir=directory)
+    logs = StringIO()
+    logger.enable("ufish")
+    sink = logger.add(logs, filter="ufish")
+    try:
+        with pytest.raises(RuntimeError, match="simulated inference crash"):
+            localization.localize_ufish_prior(data, settings, output_dir=directory)
+    finally:
+        logger.remove(sink)
+    assert not logs.getvalue()
     assert checkpoint.is_file()
     partial = pq.read_table(checkpoint)
     assert json.loads(partial.schema.metadata[b"localize_psf"])["completed_volumes"] == [
@@ -128,8 +141,19 @@ def test_localization_and_cli(localization, tmp_path, monkeypatch):
         refit.candidate_centroids_zyx_px, result.candidate_centroids_zyx_px
     )
     assert not np.array_equal(refit.roi_bounds_zyx, result.roi_bounds_zyx)
+    permissive = localization.localize_ufish_prior(
+        data[0, 0], dict(settings, intensity_threshold=0.0)
+    )
+    ids = result.volume_results[(0, 0)]["candidate_ids"]
+    assert set(map(tuple, result.candidate_centroids_zyx_px[ids])) <= set(
+        map(tuple, permissive.candidate_centroids_zyx_px)
+    )
     with pytest.raises(ValueError, match="different input"):
         localization.localize_ufish_prior(data[..., :-1], settings, output_dir=directory)
+    with pytest.raises(ValueError, match="U-FISH settings"):
+        localization.localize_ufish_prior(
+            data, dict(settings, intensity_threshold=0.0), output_dir=directory
+        )
 
     localization.save_localizations(result, directory)
     saved = pq.read_table(tmp_path / "localizations/localizations.parquet")
@@ -160,6 +184,7 @@ def test_localization_and_cli(localization, tmp_path, monkeypatch):
         json.dumps(
             dict(
                 optics,
+                intensity_threshold=0.5,
                 batch_axes=False,
                 channel=1,
                 psf_diagnostics=True,
@@ -195,7 +220,8 @@ def test_localization_and_cli(localization, tmp_path, monkeypatch):
         np.testing.assert_allclose(np.nanmax(psf.asarray()[3]), 1)
 
     empty = localization.localize_ufish_prior(
-        np.zeros(shape), dict(optics, voxel_size_zyx_um=spacing, origin_zyx_um=origin)
+        np.zeros(shape),
+        dict(optics, intensity_threshold=0.5, voxel_size_zyx_um=spacing, origin_zyx_um=origin),
     )
     assert empty.candidate_centroids_zyx_px.shape == (0, 3)
     assert empty.fit_results["fit_params"].shape == (0, 7)

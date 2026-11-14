@@ -81,14 +81,21 @@ compact fit results accumulate across volumes. GPUfit handles native batching
 within each volume, and the production covariance routine handles its own batches.
 `tqdm` progress bars count completed volumes for U-FISH inference and Gaussian
 fitting. Each fitting volume is one ROI batch; cached and empty volumes are included.
+Routine U-FISH logging is suppressed.
+
+`intensity_threshold` controls U-FISH's local-maxima spot caller. The default
+`0.0` keeps every positive local maximum of its Laplacian response. Set the same
+key in JSON or Python metadata to raise the cutoff. `predict` forwards this
+argument to the spot caller as `intensity_threshold`.
 
 # Centroid checkpoint
 
 The CLI updates one `centroids.parquet` file in the output directory after each
 completed volume. Columns are `timepoint`, `channel`, `z_px`, `y_px` and `x_px`.
-File metadata records the input URI, shape, axes, U-FISH weights and completed
-volumes, including volumes with no detections. Each update replaces the file
-atomically, preserving the previous checkpoint if an update is interrupted.
+File metadata records the input URI, shape, axes, U-FISH weights, intensity
+cutoff and completed volumes, including volumes with no detections. Each update
+replaces the file atomically, preserving the previous checkpoint if an update
+is interrupted.
 
 Rerun the same command to infer the remaining volumes, then fit all selected
 centroids. Once inference is complete, reruns skip U-FISH. Change the fitting
@@ -98,6 +105,8 @@ the same behavior with `output_dir`; leaving it unset keeps results in memory.
 Keep one output directory per unchanged input dataset. Input URI, shape and axes
 must match the checkpoint; array inputs have no URI, so reuse their directory
 only with the same data. Remove `centroids.parquet` to repeat detection.
+Changing `intensity_threshold` requires a new centroid checkpoint; fitting
+settings can change while reusing the same centroids.
 
 # Optional PSF diagnostics
 
