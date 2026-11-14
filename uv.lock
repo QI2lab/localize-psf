@@ -1248,6 +1248,7 @@ docs = [
     { name = "sphinx-rtd-theme" },
 ]
 test-cpu = [
+    { name = "pyarrow" },
     { name = "typer" },
     { name = "yaozarrs", extra = ["io", "write-tensorstore"] },
 ]
@@ -1285,6 +1286,7 @@ docs = [
     { name = "sphinx-rtd-theme", specifier = ">=3,<4" },
 ]
 test-cpu = [
+    { name = "pyarrow", specifier = ">=18" },
     { name = "typer", specifier = ">=0.16,<1" },
     { name = "yaozarrs", extras = ["io", "write-tensorstore"], git = "https://github.com/imaging-formats/yaozarrs.git?rev=main" },
 ]
