@@ -79,6 +79,8 @@ ROIs and initial estimates are prepared and fitted one volume at a time, using
 production `prepare_rois`, `fit_rois` and the library's result accumulator. Only
 compact fit results accumulate across volumes. GPUfit handles native batching
 within each volume, and the production covariance routine handles its own batches.
+`tqdm` progress bars count completed volumes for U-FISH inference and Gaussian
+fitting. Each fitting volume is one ROI batch; cached and empty volumes are included.
 
 # Centroid checkpoint
 

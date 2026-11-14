@@ -173,6 +173,7 @@ def test_localization_and_cli(localization, tmp_path, monkeypatch):
     open_figures = localization.plt.get_fignums()
     cli = CliRunner().invoke(localization.app, arguments)
     assert cli.exit_code == 0, (cli.output, cli.exception)
+    assert "U-FISH inference" in cli.output and "Gaussian fitting" in cli.output
     assert localization.plt.get_fignums() == open_figures
     saved = pq.read_table(output / "localizations.parquet")
     assert "covariance" in saved.column_names

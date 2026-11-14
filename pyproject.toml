@@ -37,6 +37,7 @@ example = [
   "typer>=0.16,<1",
   "pyarrow>=18",
   "tifffile>=2024.10",
+  "tqdm",
 ]
 psfmodels = ["psfmodels>=0.3.3"]
 legacy-calibration = ["dask>=2024.10", "zarr>=2.18,<3"]

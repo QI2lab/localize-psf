@@ -18,7 +18,12 @@ import typer
 from localize_psf.batch_fitting import _accumulate_fit_batch
 from localize_psf.fit import fit_model
 from localize_psf.fit_psf import average_exp_psfs, gaussian3d_psf_model, get_psf_coords
-from localize_psf.localize import fit_rois, get_coords, plot_bead_locations, prepare_rois
+from localize_psf.localize import (
+    fit_rois,
+    get_coords,
+    plot_bead_locations,
+    prepare_rois,
+)
 from localize_psf.optical_bounds import gaussian_width_bounds
 from localize_psf.rois import get_centered_rois, get_roi_size
 
@@ -200,12 +205,13 @@ def localize_ufish_prior(data, metadata: Mapping | None = None,
         else:
             saved = schema.empty_table()
     import torch
+    from tqdm.auto import tqdm
     from ufish.api import UFish
 
     # Infer all selected volumes before fitting. Slices are read only when needed.
     detector = None
     candidates, times, channels = [], [], []
-    for key in keys:
+    for key in tqdm(keys, desc="U-FISH inference", unit="volume"):
         if key in completed:
             volume = saved.filter((pc.field("timepoint") == key[0]) & (pc.field("channel") == key[1]))
             points = np.column_stack([volume[axis + "_px"].to_numpy() for axis in "zyx"])
@@ -213,7 +219,7 @@ def localize_ufish_prior(data, metadata: Mapping | None = None,
             if detector is None:
                 detector = UFish(device="cuda")
                 detector.load_weights(weights_file=weights)
-            spots = detector.predict(np.asarray(data[key]), axes="zyx")[0]
+            spots = detector.predict(np.asarray(data[key]), axes="zyx", batch_size=256, threshold=0.3)[0]
             points = spots[["axis-0", "axis-1", "axis-2"]].to_numpy(dtype=float)
             if checkpoint is not None:
                 columns = dict(timepoint=np.full(len(points), key[0], int),
@@ -238,7 +244,8 @@ def localize_ufish_prior(data, metadata: Mapping | None = None,
     centers = origin + candidates * spacing
     rois = get_centered_rois(np.rint(candidates).astype(int), roi_size, [0, 0, 0], data.shape[-3:])
     fits, volumes = None, {}
-    for key, start, stop in zip(keys, offsets[:-1], offsets[1:], strict=True):
+    for key, start, stop in tqdm(zip(keys, offsets[:-1], offsets[1:], strict=True),
+                                 total=len(keys), desc="Gaussian fitting", unit="volume"):
         volumes[key] = dict(candidate_ids=np.arange(start, stop),
                             focus=dict(available=False), average_psf=None)
         if start == stop:
