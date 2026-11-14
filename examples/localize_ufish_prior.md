@@ -8,7 +8,7 @@ an average PSF, focus gradient and field curvature.
 Input is a NumPy array or OME-Zarr path/URL. Values must already be finite,
 nonnegative photon/electron counts. OME-Zarr input uses yaozarrs' `open_group`,
 `ome_metadata` and `to_tensorstore` directly, always selecting the highest
-resolution. TensorStore reads only the current time block.
+resolution. TensorStore slices remain lazy until a ZYX volume is needed.
 
 # Installation
 
@@ -73,14 +73,8 @@ defaults to ZYX for 3D and TCZYX for 5D. Set `axes="tzyx"` or `axes="czyx"` for
 provide a `timepoint` and/or `channel` for every corresponding input axis,
 including singleton axes.
 
-`ufish_time_batch_size` sets the maximum timepoints per channel inferred together
-(default 8). Only the current time block is read into memory. U-FISH's scaling,
-three-direction blending and spot caller are reused; GPU slice batches include
-planes from multiple timepoints. Normalization and spot calling remain per volume.
-Changing GPU batch size can slightly change detections near thresholds or tied maxima.
-
-All inference finishes before fitting starts. The detector and unused PyTorch
-CUDA cache are released before fitting.
+U-FISH infers all selected volumes before fitting starts, using its own inference
+defaults. The detector and unused PyTorch CUDA cache are released before fitting.
 ROIs and initial estimates are prepared and fitted one volume at a time, using
 production `prepare_rois`, `fit_rois` and the library's result accumulator. Only
 compact fit results accumulate across volumes. GPUfit handles native batching

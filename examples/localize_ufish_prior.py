@@ -7,7 +7,7 @@ psf_calibration.py. See localize_ufish_prior.md for metadata and CLI usage.
 import json
 from collections.abc import Mapping
 from dataclasses import dataclass
-from itertools import batched, product
+from itertools import product
 from os import PathLike
 from pathlib import Path
 
@@ -119,7 +119,6 @@ def localize_ufish_prior(data, metadata: Mapping | None = None) -> LocalizationR
     to GPUfit. Results preserve the candidate order, including failed fits.
     """
     metadata = {"batch_axes": True, "psf_diagnostics": False,
-                "ufish_time_batch_size": 8,
                 "fit_roi_size_um": (1.75, 0.65, 0.65), "psf_roi_size_px": (11, 21, 21),
                 **(metadata or {})}
     if isinstance(data, (str, PathLike)):
@@ -163,36 +162,21 @@ def localize_ufish_prior(data, metadata: Mapping | None = None) -> LocalizationR
     roi_size = get_roi_size(metadata["fit_roi_size_um"], spacing, ensure_odd=True)
     import torch
     from ufish.api import UFish
-    from ufish.utils.img import enhance_blend_3d, scale_image
 
-    # Infer all selected volumes before fitting, reading one time block at a time.
+    # Infer all selected volumes before fitting. Slices are read only when needed.
     detector = UFish(device="cuda")
     detector.load_weights(weights_file="finetune_models/v1.0.1-simfish_model.pth")
-
-    def enhance_slices(images, batch_size):
-        # Fold time into U-FISH's plane batches without blending timepoints.
-        ns, ny, nx, nt = images.shape
-        planes = images.transpose(0, 3, 1, 2).reshape(ns * nt, ny, nx)
-        enhanced = detector._enhance_img3d(planes, batch_size=batch_size * nt)
-        return enhanced.reshape(ns, nt, ny, nx).transpose(0, 2, 3, 1)
-
-    candidates = {}
-    for channel in widths:
-        channel_keys = (key for key in keys if key[1] == channel)
-        for batch_keys in batched(channel_keys, metadata["ufish_time_batch_size"]):
-            block = np.asarray(data[[t for t, _ in batch_keys], channel])
-            images = np.stack([scale_image(image, warning=True) for image in block], axis=-1)
-            enhanced = enhance_blend_3d(images, enhance_slices, axes="zyxt")
-            for key, image in zip(batch_keys, np.moveaxis(enhanced, -1, 0), strict=True):
-                spots = detector.call_spots(image)
-                candidates[key] = spots[["axis-0", "axis-1", "axis-2"]].to_numpy(dtype=float)
-            del block, images, enhanced, image
-    detector = None
+    candidates, times, channels = [], [], []
+    for key in keys:
+        spots = detector.predict(np.asarray(data[key]), axes="zyx")[0]
+        points = spots[["axis-0", "axis-1", "axis-2"]].to_numpy(dtype=float)
+        candidates.append(points)
+        times.append(np.full(len(points), key[0], int))
+        channels.append(np.full(len(points), key[1], int))
+    del detector
     torch.cuda.empty_cache()
-    candidates = [candidates[key] for key in keys]
     offsets = np.cumsum([0] + [len(points) for points in candidates])
-    times, channels = (np.repeat(values, np.diff(offsets)) for values in zip(*keys))
-    candidates = np.concatenate(candidates)
+    candidates, times, channels = map(np.concatenate, (candidates, times, channels))
     # Pack and fit one volume at a time; retain only compact fit results.
     model = gaussian3d_psf_model()
     centers = origin + candidates * spacing

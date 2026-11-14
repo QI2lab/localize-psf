@@ -28,10 +28,8 @@ def test_localization_and_cli(localization, tmp_path, monkeypatch):
     for center in centers:
         image += model.model(coords, [100, *center[::-1], 0.14, 0.25, 4]) - 4
     # Simulated bright beads; detection, fitting and diagnostics use production code.
-    data = np.random.default_rng(18).poisson(
-        np.stack([image * i for i in (100, 125, 150, 175, 200, 225)])
-    )
-    data = data.reshape(3, 2, *shape)
+    data = np.random.default_rng(18).poisson(np.stack([image * i for i in (100, 125, 150, 175)]))
+    data = data.reshape(2, 2, *shape)
     data[1, 0] = 0
     optics = dict(
         numerical_aperture=1.3,
@@ -39,7 +37,7 @@ def test_localization_and_cli(localization, tmp_path, monkeypatch):
         refractive_index=1.4,
         relative_sigma_range=(0.5, 2),
     )
-    events, fit_batches, inference_batches = [], [], []
+    events, fit_batches = [], []
 
     def record(target, name, event):
         original = getattr(target, name)
@@ -48,32 +46,20 @@ def test_localization_and_cli(localization, tmp_path, monkeypatch):
             events.append(event)
             if event == "infer":
                 assert next(args[0].model.parameters()).is_cuda
-                if not inference_batches:
-                    assert args[1][0].any() and not args[1][1].any()
-                inference_batches.append(len(args[1]))
             if target is localization:
                 fit_batches.append(len(args[0]))
             return original(*args, **kwargs)
 
         monkeypatch.setattr(target, name, call)
 
-    record(UFish, "infer", "infer")
+    record(UFish, "predict", "infer")
     record(gf, "fit_constrained", "fit")
     record(localization, "fit_rois", "fit")
     result = localization.localize_ufish_prior(
         data,
-        dict(
-            optics,
-            voxel_size_zyx_um=spacing,
-            origin_zyx_um=origin,
-            fit_roi_size_um=(1.4, 1, 1),
-            ufish_time_batch_size=2,
-        ),
+        dict(optics, voxel_size_zyx_um=spacing, origin_zyx_um=origin, fit_roi_size_um=(1.4, 1, 1)),
     )
-    first_fit = events.index("fit")
-    assert set(events[:first_fit]) == {"infer"} and set(events[first_fit:]) == {"fit"}
-    assert max(inference_batches) == 8
-    assert list(result.volume_results) == list(np.ndindex(3, 2))
+    assert events[:4] == ["infer"] * 4 and set(events[4:]) == {"fit"}
     assert fit_batches == [
         len(v["candidate_ids"]) for v in result.volume_results.values() if len(v["candidate_ids"])
     ]
@@ -109,16 +95,6 @@ def test_localization_and_cli(localization, tmp_path, monkeypatch):
             expected = bounds[f"{name}_sigma_zyx_um"][[1, 0]]
             np.testing.assert_allclose(actual[ids, 4:6], np.broadcast_to(expected, (len(ids), 2)))
 
-    detector = UFish(device="cuda")
-    detector.load_weights(weights_file="finetune_models/v1.0.1-simfish_model.pth")
-    for key, volume in result.volume_results.items():
-        expected = detector.predict(data[key], axes="zyx")[0]
-        np.testing.assert_array_equal(
-            result.candidate_centroids_zyx_px[volume["candidate_ids"]],
-            expected[["axis-0", "axis-1", "axis-2"]].to_numpy(),
-        )
-    del detector
-
     localization.save_localizations(result, tmp_path / "localizations")
     saved = pq.read_table(tmp_path / "localizations/localizations.parquet")
     for name in ("fit_params", "covariance", "center_covariance_zyx"):
@@ -126,7 +102,7 @@ def test_localization_and_cli(localization, tmp_path, monkeypatch):
             np.asarray(saved[name].to_pylist()), result.fit_results[name], equal_nan=True
         )
     summary = json.loads(saved.schema.metadata[b"localize_psf"])
-    assert set(summary["volumes"]) == {f"t{t}_c{c}" for t, c in np.ndindex(3, 2)}
+    assert set(summary["volumes"]) == {"t0_c0", "t0_c1", "t1_c0", "t1_c1"}
 
     path, output, metadata = (
         tmp_path / "beads.ome.zarr",
