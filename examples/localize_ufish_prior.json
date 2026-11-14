@@ -1,0 +1,10 @@
+{
+  "numerical_aperture": 1.35,
+  "wavelength_um": 0.515,
+  "refractive_index": 1.4,
+  "relative_sigma_range": [0.5, 2.0],
+  "batch_axes": true,
+  "psf_diagnostics": false,
+  "fit_roi_size_um": [1.75, 0.65, 0.65],
+  "psf_roi_size_px": [11, 21, 21]
+}
