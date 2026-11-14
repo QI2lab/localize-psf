@@ -32,6 +32,16 @@ def batch():
     return model, data, coordinates, np.full(2, data.shape[1]), starts, truth
 
 
+@pytest.mark.cpu
+@pytest.mark.unit
+@pytest.mark.parametrize("value", [-1, np.nan])
+def test_poisson_invalid_counts_are_rejected_before_dispatch(batch, value):
+    model, data, coords, sizes, starts, _ = batch
+    data[0, 0] = value
+    with pytest.raises(ValueError, match="finite|nonnegative"):
+        fit_rois(data, coords, sizes, starts, model=model, use_gpu=True, estimator="MLE")
+
+
 def test_independent_broadcast_and_explicit_overrides_guess(batch, backend):
     model, data, coords, sizes, start, truth = batch
     lower = np.array([0, -2, 2, -3, 0.05, 0.05, 0])

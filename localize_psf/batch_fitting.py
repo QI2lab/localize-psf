@@ -345,40 +345,6 @@ def fit_rois(
     return result
 
 
-def _gpufit_model_id(gf, model):
-    """Resolve the named microscopy model only after validating the native contract."""
-    mapping = {
-        psf.gaussian3d_psf_model: "GAUSS_3D_ARB",
-        psf.gaussian_lorentzian_psf_model: "GAUSS_LOR_3D_ARB",
-        psf.gaussian3d_asymmetric_rotated_pixelated: "GAUSS_3D_ROT_ARB",
-        psf.gaussian3d_asymmetric_pixelated: "GAUSS_3D_ASYM_ARB",
-    }
-    if type(model) not in mapping:
-        raise NotImplementedError(f"No native microscopy model for {type(model)}")
-    requirement = (
-        "GPU fitting requires QI2lab GPUfit 1.2.0 with capability ABI 3 and float32 "
-        "microscopy models; rebuild or reinstall the opm-ptv fork"
-    )
-    name = mapping[type(model)]
-    try:
-        capabilities = gf.get_capabilities()
-        model_id = getattr(gf.ModelID, name)
-    except (AttributeError, RuntimeError) as error:
-        raise RuntimeError(requirement) from error
-    if not isinstance(capabilities, dict):
-        raise RuntimeError(requirement)
-    models = capabilities.get("models")
-    if (
-        capabilities.get("abi_version") != 3
-        or capabilities.get("precision") != "float32"
-        or capabilities.get("constraints_layout") != "fit-major-interleaved-lower-upper"
-        or not isinstance(models, dict)
-        or models.get(name) != {"id": model_id, "parameters": model.nparams}
-    ):
-        raise RuntimeError(requirement)
-    return model_id
-
-
 def _fit_gpu(
     result,
     data,
@@ -399,11 +365,17 @@ def _fit_gpu(
         import pygpufit.gpufit as gf
     except (AttributeError, ImportError, OSError) as error:
         raise RuntimeError(
-            "GPU fitting requires the built QI2lab GPUfit 1.2.0 local profile (capability ABI 3)"
+            "GPU fitting requires QI2lab GPUfit 1.2.0 (capability ABI 3); install the gpu extra"
         ) from error
-    model_id = _gpufit_model_id(gf, model)
-    if not gf.cuda_available():
-        raise RuntimeError(f"CUDA fitting unavailable: {gf.get_last_error()}")
+    mapping = {
+        psf.gaussian3d_psf_model: gf.ModelID.GAUSS_3D_ARB,
+        psf.gaussian_lorentzian_psf_model: gf.ModelID.GAUSS_LOR_3D_ARB,
+        psf.gaussian3d_asymmetric_rotated_pixelated: gf.ModelID.GAUSS_3D_ROT_ARB,
+        psf.gaussian3d_asymmetric_pixelated: gf.ModelID.GAUSS_3D_ASYM_ARB,
+    }
+    if type(model) not in mapping:
+        raise NotImplementedError(f"No native microscopy model for {type(model)}")
+    model_id = mapping[type(model)]
     if model.sf != 1:
         raise NotImplementedError("GPUfit supports sampling factor 1")
     types = np.isfinite(lower).astype(np.int32) + 2 * np.isfinite(upper).astype(np.int32)
@@ -434,12 +406,6 @@ def _fit_gpu(
                 np.where(group_valid, weights[indices, :npoints], 0), dtype=np.float32
             )
         )
-        if (
-            not np.all(np.isfinite(packed_data))
-            or not np.all(np.isfinite(info))
-            or (packed_weights is not None and not np.all(np.isfinite(packed_weights)))
-        ):
-            raise ValueError("float32 conversion overflow in ROI data, coordinates or weights")
         controls = dict(
             tolerance=tolerance,
             max_number_iterations=iterations,
