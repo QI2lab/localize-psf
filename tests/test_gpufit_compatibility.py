@@ -1,5 +1,9 @@
 """GPU integration tests for the production microscopy models and padded ROIs."""
 
+import os
+import subprocess
+import sys
+
 import numpy as np
 import pytest
 
@@ -7,6 +11,34 @@ from localize_psf import batch_fitting
 
 pytest_plugins = ["test_gpu_psf_derivatives"]
 pytestmark = [pytest.mark.gpu, pytest.mark.integration]
+
+
+def test_cuda_component_wheels_without_sdk_environment():
+    environment = os.environ.copy()
+    environment.pop("CUDA_PATH", None)
+    environment.pop("CUDA_HOME", None)
+    code = """
+import warnings
+import localize_psf
+import cupy as cp
+import pygpufit.gpufit as gf
+
+assert cp.arange(10).sum().item() == 45
+assert cp.fft.fft(cp.ones(8))[0].item() == 8
+assert cp.linalg.solve(cp.eye(2), cp.ones(2)).sum().item() == 2
+assert gf.cuda_available()
+try:
+    warnings.warn_explicit('other warning', UserWarning, 'cuda', 1, module='cupy._environment')
+except UserWarning:
+    pass
+else:
+    raise AssertionError('unrelated warnings must remain visible')
+"""
+    subprocess.run(
+        [sys.executable, "-I", "-W", "error::UserWarning", "-c", code],
+        env=environment,
+        check=True,
+    )
 
 
 @pytest.mark.parametrize("bounded", [False, True])

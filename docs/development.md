@@ -97,9 +97,14 @@ needs its host buffers. Returned filtered images remain CuPy arrays.
 The four microscopy models reuse their existing model and derivative code with
 CuPy arrays, including rotated models and batched ROI coordinates. Device arrays
 stay on CUDA through model evaluation; CPU calculations remain available as test
-references. Windows CuPy requires the selected CUDA SDK headers as well as DLLs.
-The local runner sets those paths for its child process and keeps its kernel cache
-inside the ignored build directory:
+references. Package startup uses NVIDIA's `cuda.pathfinder` to preload CUDA
+component libraries before importing CuPy. On Windows, CUDA 12 component wheels
+have no single CUDA root; the corresponding CuPy path warning is filtered only
+after the runtime and NVRTC load and NVRTC is located in that wheel layout.
+Other warnings remain visible. CPU installations import without CUDA components.
+
+The local test runner can select an SDK and keep its kernel cache inside the
+ignored build directory:
 
 ```powershell
 ./scripts/run_gpu.ps1 -CommandArguments @('pytest', '-q', 'tests/test_gpu_psf_derivatives.py')
