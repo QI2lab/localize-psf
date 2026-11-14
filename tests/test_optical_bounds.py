@@ -5,7 +5,9 @@ import pytest
 
 
 @pytest.mark.gpu
-def test_cuda_optical_widths_and_anisotropic_sampling_reference():
+@pytest.mark.unit
+@pytest.mark.parametrize("floor", [0, 0.5])
+def test_cuda_optical_widths_and_anisotropic_sampling_reference(floor):
     cp = pytest.importorskip("cupy")
     from localize_psf.optical_bounds import gaussian_width_bounds
 
@@ -15,7 +17,7 @@ def test_cuda_optical_widths_and_anisotropic_sampling_reference():
         1.4,
         cp.asarray([0.23, 0.115, 0.15]),
         relative_sigma_range=(0.5, 2.0),
-        sampling_floor_pixels=0.5,
+        sampling_floor_pixels=floor,
     )
     expected = np.array(
         [
@@ -28,7 +30,7 @@ def test_cuda_optical_widths_and_anisotropic_sampling_reference():
     np.testing.assert_allclose(result["nominal_sigma_zyx_um"].get(), expected, rtol=1e-13)
     np.testing.assert_allclose(
         result["lower_sigma_zyx_um"].get(),
-        np.maximum(0.5 * expected, [0.115, 0.0575, 0.075]),
+        np.maximum(0.5 * expected, floor * np.array([0.23, 0.115, 0.15])),
     )
     np.testing.assert_allclose(result["upper_sigma_zyx_um"].get(), 2 * expected)
 

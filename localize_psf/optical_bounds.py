@@ -22,8 +22,9 @@ def gaussian_width_bounds(
     Gaussian PSF model. Wavelength and spacings are physical micrometres.
     The bound policy is [max(low_factor*sigma, floor_pixels*spacing),
     high_factor*sigma]. Factors must bracket the nominal width. The sampling
-    floor is an explicit fitting policy, not an inferred pixel blur or measured
-    resolution. Unsupported sampling fails rather than widening the bounds.
+    floor is an explicit fitting policy; zero disables it. It is not an inferred
+    pixel blur or measured resolution. Unsupported sampling fails rather than
+    widening the bounds.
 
     These are ideal optical priors, including for deconvolved data; they do not
     calibrate an OPM PSF, aberrations, interpolation or localization covariance.
@@ -40,8 +41,13 @@ def gaussian_width_bounds(
         [numerical_aperture, wavelength_um, refractive_index, sampling_floor_pixels],
         dtype=xp.float64,
     )
-    if inputs.shape != (4,) or not bool(xp.all(xp.isfinite(inputs) & (inputs > 0))):
-        raise ValueError("optical parameters and sampling floor must be finite and positive")
+    if (
+        inputs.shape != (4,)
+        or not bool(xp.all(xp.isfinite(inputs)))
+        or not bool(xp.all(inputs[:3] > 0))
+        or bool(inputs[3] < 0)
+    ):
+        raise ValueError("optical parameters must be positive and the sampling floor nonnegative")
     na, wavelength, index, floor = inputs
     if bool(na > index):
         raise ValueError("numerical aperture cannot exceed the immersion refractive index")
