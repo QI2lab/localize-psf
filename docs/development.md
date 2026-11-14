@@ -7,8 +7,8 @@ is required. GPL-3.0-only licensing is preserved.
 
 ```powershell
 uv lock
-uv sync --locked
-uv run --locked pytest
+uv sync --locked --group test-cpu
+uv run --locked --group test-cpu pytest -m "not gpu"
 uv build
 ```
 
@@ -22,35 +22,47 @@ with the public constrained API, cuBLAS and float32 capability ABI 3. The
 [upstream merge](https://github.com/QI2lab/Gpufit/commit/30185b039346ab5ae43b08d2bc6032abaa9741a9)
 preserves upstream model IDs 0--14 and moves the microscopy models to 15--18:
 `GAUSS_3D_ARB`, `GAUSS_LOR_3D_ARB`, `GAUSS_3D_ROT_ARB` and `GAUSS_3D_ASYM_ARB`.
-Localization resolves these named constants and checks the native manifest before
-fitting. ABI 2 installations must be rebuilt and reinstalled. Use the separate
-local integration profile:
+Localization uses these named constants; GPUfit validates its native manifest
+when fitting. ABI 2 installations must be rebuilt and reinstalled.
+
+The `gpu` extra installs `cupy-cuda12x[ctk]` and builds GPUfit directly from
+`QI2lab/Gpufit` on `opm-ptv`. CuPy's `ctk` extra installs CUDA libraries, following
+the setup in merfish3d-analysis and opm-processing-v2. Building GPUfit also needs
+a CUDA compiler and a compatible C++ toolchain. No cuCIM dependency is included.
+In an initialized CUDA/compiler environment:
 
 ```powershell
+uv sync --locked --extra gpu
+```
+
+For a separate local integration environment:
+
+```powershell
+git clone --branch opm-ptv https://github.com/QI2lab/Gpufit.git ../Gpufit
 uv run --locked python scripts/create_local_gpu_profile.py
 uv lock --project build/local-gpu
 powershell -File ../Gpufit/scripts/build_windows.ps1 -Action sync -Architectures 86 -ProjectPath build/local-gpu
 uv run --locked --project build/local-gpu --no-sync python -c "import pygpufit.gpufit as gf; print(gf.get_capabilities())"
 ```
 
-Keep sibling checkouts named `Gpufit` and `localize-psf`. The generated project
-and its independent lock use relative editable sources and live under ignored
-`build/local-gpu`. Its dependencies explicitly include `pyGpufit==1.2.0` and
-`localize_psf[gpu]`; repeating locked sync retains these sources. The root `gpu`
-extra supplies CuPy only while the fork has no published artifact. Installing
-that extra alone is insufficient for fitting. Do not manually replace its
-dependency with a stock GPUfit wheel. The native capability check rejects model
-collisions before fitting.
+The generated project and independent lock live under ignored `build/local-gpu`.
+It uses the editable localize-psf checkout and obtains GPUfit through the `gpu`
+extra's fork dependency. Its lock records the resolved upstream commit. The
+sibling GPUfit checkout above supplies the Windows compiler setup script.
 
 When upgrading an existing profile, regenerate it and its lock as above, then
 use the build command with `-Action rebuild` to replace the old native binary.
-After native edits, also use `-Action rebuild`. On Linux,
+On Linux,
 initialize an approved CUDA/compiler environment and run `uv sync --locked
---project build/local-gpu --config-settings-package=pygpufit:cmake.define.USE_CUBLAS=ON
---config-settings-package=pygpufit:cmake.define.DOUBLE_PRECISION=OFF`.
-Linux execution and remote clean installation remain pending. Before release,
-add an exact reachable QI2lab GPUfit revision/artifact to the consumer profile,
-regenerate the portable lock and verify it outside the local checkouts.
+--extra gpu`. GPUfit's build defaults select cuBLAS and float32.
+Linux execution remains pending.
+
+The [U-FISH localization example](../examples/localize_ufish_prior.md) covers
+3D localization, optional PSF averaging and microscope calibration, time/channel
+batching and command line usage. Install its dependencies with the `example`
+extra. The optional uv environments select CUDA PyTorch. Unit and integration
+tests are separate for CPU and GPU. The `test-cpu` group supplies TensorStore
+and Typer for hosted CPU tests.
 
 Existing CPU reference tests pass (28 passed, one pre-existing PSF test skipped).
 Packaging and new fitting interfaces have separate acceptance checks.
@@ -148,8 +160,7 @@ Production PTV uses CUDA; CPU fitting is a test reference only.
 Artifact acceptance also runs in fresh, locked uv projects outside the source
 checkout. It validates the portable wheel, reconstructs a wheel from the sdist,
 checks package/license contents and imports, repeats locked sync, and verifies
-GPUfit ABI 3. The GPU artifact must be built from the 1.2.0 fork; older wheels
-can coexist in `../Gpufit/dist` and are excluded from artifact selection.
+GPUfit ABI 3. GPU artifact checks install the fork through the `gpu` extra.
 
 ```powershell
 ./scripts/run_gpu.ps1 -CommandArguments @('python', 'scripts/check_artifacts.py')

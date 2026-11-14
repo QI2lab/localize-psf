@@ -9,8 +9,8 @@ For a locked editable development environment (Python >=3.12),
 ```powershell
 git clone https://github.com/QI2lab/localize-psf.git
 cd localize-psf
-uv sync --locked
-uv run --locked pytest
+uv sync --locked --group test-cpu
+uv run --locked --group test-cpu pytest -m "not gpu"
 uv build
 ```
 See [development instructions](docs/development.md) for independently locked CPU
@@ -19,6 +19,11 @@ requires the [QI2lab GPUfit `opm-ptv` fork](https://github.com/QI2lab/Gpufit/tre
 `pyGpufit==1.2.0` with capability ABI 3. Rebuild and reinstall older GPU profiles
 using the development instructions.
 
+`uv sync --locked --extra gpu` installs CUDA libraries through CuPy's `ctk`
+extra and builds GPUfit from that fork. Building GPUfit requires a CUDA compiler
+and a compatible C++ toolchain. Add `--extra example` for CUDA PyTorch and the
+U-FISH example dependencies.
+
 # Examples
 Scripts illustrating example usage of localize-psf are available in [examples](examples).
 Associated data necessary to run some of these examples can be downloaded from [Zenodo](https://doi.org/10.5281/zenodo.10022862).
@@ -26,6 +31,12 @@ These scripts assume this data has been placed in a directory called `examples/d
 
 ## [psf_calibration.py](examples/psf_calibration.py)
 Estimate the 3D PSF of a microscope from an image of many diffraction limited beads on a coverslip
+
+## [localize_ufish_prior.py](examples/localize_ufish_prior.py)
+Localize 3D spots using U-FISH centroids and Gaussian Poisson MLE, with optional
+PSF averaging and microscope calibration.
+See the [example instructions](examples/localize_ufish_prior.md) for installation,
+time/channel batching and command line usage.
 
 
 # Contents
