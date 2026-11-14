@@ -40,7 +40,7 @@ metadata = {
     "relative_sigma_range": (0.5, 2.0),
     "fit_roi_size_um": (1.75, 0.65, 0.65),
 }
-result = localize_ufish_prior("spots.ome.zarr", metadata)
+result = localize_ufish_prior("spots.ome.zarr", metadata, output_dir="localizations")
 
 accepted = result.fit_results["success"]
 parameters = result.fit_results["fit_params"][accepted]
@@ -79,6 +79,23 @@ ROIs and initial estimates are prepared and fitted one volume at a time, using
 production `prepare_rois`, `fit_rois` and the library's result accumulator. Only
 compact fit results accumulate across volumes. GPUfit handles native batching
 within each volume, and the production covariance routine handles its own batches.
+
+# Centroid checkpoint
+
+The CLI updates one `centroids.parquet` file in the output directory after each
+completed volume. Columns are `timepoint`, `channel`, `z_px`, `y_px` and `x_px`.
+File metadata records the input URI, shape, axes, U-FISH weights and completed
+volumes, including volumes with no detections. Each update replaces the file
+atomically, preserving the previous checkpoint if an update is interrupted.
+
+Rerun the same command to infer the remaining volumes, then fit all selected
+centroids. Once inference is complete, reruns skip U-FISH. Change the fitting
+parameters in the JSON to refit the saved centroids. The Python function enables
+the same behavior with `output_dir`; leaving it unset keeps results in memory.
+
+Keep one output directory per unchanged input dataset. Input URI, shape and axes
+must match the checkpoint; array inputs have no URI, so reuse their directory
+only with the same data. Remove `centroids.parquet` to repeat detection.
 
 # Optional PSF diagnostics
 
@@ -128,9 +145,10 @@ in pixels/micrometres, source time/channel indices, ROI bounds and the productio
 `volume_results[(timepoint, channel)]` holds candidate IDs and any enabled PSF
 diagnostics, including entries for empty volumes.
 
-The function returns data without writing files. The CLI and `save_localizations`
-write `localizations.parquet`, including vector/matrix columns and embedded
-metadata. Enabled calibration also writes the original ImageJ `psf.tif` and
+The function returns fit data and updates the centroid checkpoint when
+`output_dir` is supplied. The CLI and `save_localizations` write
+`localizations.parquet`, including vector/matrix columns and embedded metadata.
+Enabled calibration also writes the original ImageJ `psf.tif` and
 `focus_gradient_and_field_curvature.png` exports, prefixed by channel when needed.
 
 Tests use production readers, fitting and exports with simulated counts.

@@ -8,7 +8,7 @@ import json
 from collections.abc import Mapping
 from dataclasses import dataclass
 from itertools import product
-from os import PathLike
+from os import PathLike, fsync
 from pathlib import Path
 
 import matplotlib.pyplot as plt
@@ -109,7 +109,20 @@ def _psf_diagnostics(data, result, coords):
             volume["average_psf_coords_zyx_um"] = tuple(get_psf_coords(size, spacing))
 
 
-def localize_ufish_prior(data, metadata: Mapping | None = None) -> LocalizationResult:
+def _write_parquet(table, path):
+    """Publish a closed, flushed Parquet file without exposing partial writes."""
+    import pyarrow.parquet as pq
+
+    temporary = path.with_name("." + path.name + ".tmp")
+    with temporary.open("wb") as stream:
+        pq.write_table(table, stream)
+        stream.flush()
+        fsync(stream.fileno())
+    temporary.replace(path)
+
+
+def localize_ufish_prior(data, metadata: Mapping | None = None,
+                         output_dir: str | PathLike | None = None) -> LocalizationResult:
     """
     Localize a NumPy array or highest-resolution OME-Zarr image using CUDA.
 
@@ -117,10 +130,12 @@ def localize_ufish_prior(data, metadata: Mapping | None = None) -> LocalizationR
     sizes and optional static PSF diagnostics. See localize_ufish_prior.md.
     All inference completes before production fit_rois dispatches Poisson MLE
     to GPUfit. Results preserve the candidate order, including failed fits.
+    With output_dir, completed centroid volumes are saved and reused on reruns.
     """
     metadata = {"batch_axes": True, "psf_diagnostics": False,
                 "fit_roi_size_um": (1.75, 0.65, 0.65), "psf_roi_size_px": (11, 21, 21),
                 **(metadata or {})}
+    source = None
     if isinstance(data, (str, PathLike)):
         from yaozarrs import bioformats2raw_series, convert_version, open_group, v05
 
@@ -133,6 +148,7 @@ def localize_ufish_prior(data, metadata: Mapping | None = None) -> LocalizationR
             group = group[paths[0]]
             image = convert_version(group.ome_metadata(), "0.5")
         multiscale = image.multiscales[0]
+        source = group.store_path
         metadata.update(_spatial_metadata(multiscale))
         for name in ("numerical_aperture", "wavelength_um"):
             if name in group.attrs:
@@ -160,20 +176,60 @@ def localize_ufish_prior(data, metadata: Mapping | None = None) -> LocalizationR
     spacing, origin = metadata["voxel_size_zyx_um"], metadata["origin_zyx_um"]
     coords = get_coords(data.shape[-3:], spacing, origin=origin)
     roi_size = get_roi_size(metadata["fit_roi_size_um"], spacing, ensure_odd=True)
+    weights = "finetune_models/v1.0.1-simfish_model.pth"
+    checkpoint = None
+    completed = []
+    if output_dir is not None:
+        import pyarrow as pa
+        import pyarrow.compute as pc
+        import pyarrow.parquet as pq
+
+        checkpoint = Path(output_dir) / "centroids.parquet"
+        checkpoint.parent.mkdir(parents=True, exist_ok=True)
+        identity = dict(source=source, shape=list(data.shape), axes=metadata["axes"],
+                        ufish_weights=weights)
+        schema = pa.schema([("timepoint", pa.int64()), ("channel", pa.int64())] +
+                           [(axis + "_px", pa.float64()) for axis in "zyx"])
+        if checkpoint.exists():
+            saved = pq.read_table(checkpoint)
+            previous = json.loads((saved.schema.metadata or {}).get(b"localize_psf", b"{}"))
+            completed = [tuple(key) for key in previous.pop("completed_volumes", [])]
+            if previous != identity:
+                raise ValueError("Centroid checkpoint belongs to a different input; "
+                                 "use a different output directory")
+        else:
+            saved = schema.empty_table()
     import torch
     from ufish.api import UFish
 
     # Infer all selected volumes before fitting. Slices are read only when needed.
-    detector = UFish(device="cuda")
-    detector.load_weights(weights_file="finetune_models/v1.0.1-simfish_model.pth")
+    detector = None
     candidates, times, channels = [], [], []
     for key in keys:
-        spots = detector.predict(np.asarray(data[key]), axes="zyx")[0]
-        points = spots[["axis-0", "axis-1", "axis-2"]].to_numpy(dtype=float)
+        if key in completed:
+            volume = saved.filter((pc.field("timepoint") == key[0]) & (pc.field("channel") == key[1]))
+            points = np.column_stack([volume[axis + "_px"].to_numpy() for axis in "zyx"])
+        else:
+            if detector is None:
+                detector = UFish(device="cuda")
+                detector.load_weights(weights_file=weights)
+            spots = detector.predict(np.asarray(data[key]), axes="zyx")[0]
+            points = spots[["axis-0", "axis-1", "axis-2"]].to_numpy(dtype=float)
+            if checkpoint is not None:
+                columns = dict(timepoint=np.full(len(points), key[0], int),
+                               channel=np.full(len(points), key[1], int),
+                               **{axis + "_px": points[:, i] for i, axis in enumerate("zyx")})
+                saved = pa.concat_tables([saved, pa.table(columns, schema=schema)])
+                completed.append(key)
+                status = json.dumps(dict(identity, completed_volumes=completed)).encode("utf-8")
+                saved = saved.replace_schema_metadata({b"localize_psf": status})
+                _write_parquet(saved, checkpoint)
         candidates.append(points)
         times.append(np.full(len(points), key[0], int))
         channels.append(np.full(len(points), key[1], int))
     del detector
+    if checkpoint is not None:
+        del saved
     torch.cuda.empty_cache()
     offsets = np.cumsum([0] + [len(points) for points in candidates])
     candidates, times, channels = map(np.concatenate, (candidates, times, channels))
@@ -298,7 +354,6 @@ def plot_calibration(result: LocalizationResult):
 def save_localizations(result: LocalizationResult, output_dir: str | PathLike):
     """Write Parquet localizations and original ImageJ TIFF/PNG calibration exports."""
     import pyarrow as pa
-    import pyarrow.parquet as pq
     import tifffile
 
     output = Path(output_dir)
@@ -326,7 +381,7 @@ def save_localizations(result: LocalizationResult, output_dir: str | PathLike):
                             for (t, c), v in result.volume_results.items()})
     encoded = json.dumps(summary, default=lambda v: v.tolist() if isinstance(v, np.ndarray) else v.item())
     table = pa.table(columns).replace_schema_metadata({b"localize_psf": encoded.encode("utf-8")})
-    pq.write_table(table, output / "localizations.parquet")
+    _write_parquet(table, output / "localizations.parquet")
     dz, dy, dx = result.metadata["voxel_size_zyx_um"]
     for (_, channel), volume in result.volume_results.items():
         if volume["average_psf"] is None:
@@ -357,7 +412,7 @@ def cli(data: str = typer.Argument(..., help="OME-Zarr store or URL"),
     """Localize 3D spots with optional static PSF calibration."""
     metadata = json.loads(metadata_path.read_text("utf-8"))
     try:
-        result = localize_ufish_prior(data, metadata)
+        result = localize_ufish_prior(data, metadata, output_dir=output_dir)
     except ValueError as error:
         raise typer.BadParameter(str(error)) from error
     save_localizations(result, output_dir)

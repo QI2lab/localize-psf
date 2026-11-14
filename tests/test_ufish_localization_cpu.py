@@ -1,6 +1,7 @@
 """CPU unit and integration tests using the production localization code."""
 
 import json
+from pathlib import Path
 
 import numpy as np
 import pytest
@@ -82,6 +83,29 @@ def test_timelapse_psf_diagnostics_are_rejected(localization, selection):
             np.ones((2, 7, 9, 11)),
             dict(axes="tzyx", voxel_size_zyx_um=(0.3, 0.1, 0.1), psf_diagnostics=True, **selection),
         )
+
+
+@pytest.mark.integration
+def test_parquet_update_is_atomic(localization, tmp_path, monkeypatch):
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+
+    path = tmp_path / "centroids.parquet"
+    initial = pa.table(dict(timepoint=[0], channel=[1], z_px=[2.0], y_px=[3.0], x_px=[4.0]))
+    updated = pa.concat_tables([initial, initial])
+    localization._write_parquet(initial, path)
+
+    def interrupt(*args):
+        raise RuntimeError("simulated crash before replacement")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(Path, "replace", interrupt)
+        with pytest.raises(RuntimeError, match="simulated crash"):
+            localization._write_parquet(updated, path)
+    assert pq.read_table(path).equals(initial)
+    localization._write_parquet(updated, path)
+    assert pq.read_table(path).equals(updated)
+    assert {p.name for p in tmp_path.iterdir()} == {"centroids.parquet"}
 
 
 @pytest.mark.integration

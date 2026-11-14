@@ -38,11 +38,14 @@ def test_localization_and_cli(localization, tmp_path, monkeypatch):
         relative_sigma_range=(0.5, 2),
     )
     events, fit_batches = [], []
+    crash = True
 
     def record(target, name, event):
         original = getattr(target, name)
 
         def call(*args, **kwargs):
+            if event == "infer" and crash and len(events) == 3:
+                raise RuntimeError("simulated inference crash")
             events.append(event)
             if event == "infer":
                 assert next(args[0].model.parameters()).is_cuda
@@ -55,11 +58,24 @@ def test_localization_and_cli(localization, tmp_path, monkeypatch):
     record(UFish, "predict", "infer")
     record(gf, "fit_constrained", "fit")
     record(localization, "fit_rois", "fit")
-    result = localization.localize_ufish_prior(
-        data,
-        dict(optics, voxel_size_zyx_um=spacing, origin_zyx_um=origin, fit_roi_size_um=(1.4, 1, 1)),
+    settings = dict(
+        optics, voxel_size_zyx_um=spacing, origin_zyx_um=origin, fit_roi_size_um=(1.4, 1, 1)
     )
-    assert events[:4] == ["infer"] * 4 and set(events[4:]) == {"fit"}
+    directory = tmp_path / "localizations"
+    checkpoint = directory / "centroids.parquet"
+    with pytest.raises(RuntimeError, match="simulated inference crash"):
+        localization.localize_ufish_prior(data, settings, output_dir=directory)
+    assert checkpoint.is_file()
+    partial = pq.read_table(checkpoint)
+    assert json.loads(partial.schema.metadata[b"localize_psf"])["completed_volumes"] == [
+        [0, 0],
+        [0, 1],
+        [1, 0],
+    ]
+    events.clear()
+    crash = False
+    result = localization.localize_ufish_prior(data, settings, output_dir=directory)
+    assert events[0] == "infer" and set(events[1:]) == {"fit"}
     assert fit_batches == [
         len(v["candidate_ids"]) for v in result.volume_results.values() if len(v["candidate_ids"])
     ]
@@ -95,7 +111,27 @@ def test_localization_and_cli(localization, tmp_path, monkeypatch):
             expected = bounds[f"{name}_sigma_zyx_um"][[1, 0]]
             np.testing.assert_allclose(actual[ids, 4:6], np.broadcast_to(expected, (len(ids), 2)))
 
-    localization.save_localizations(result, tmp_path / "localizations")
+    saved_centroids = pq.read_table(checkpoint)
+    np.testing.assert_array_equal(saved_centroids["timepoint"], result.candidate_timepoints)
+    np.testing.assert_array_equal(saved_centroids["channel"], result.candidate_channels)
+    np.testing.assert_array_equal(
+        np.column_stack([saved_centroids[axis + "_px"] for axis in "zyx"]),
+        result.candidate_centroids_zyx_px,
+    )
+    before = checkpoint.read_bytes()
+    events.clear()
+    refit = localization.localize_ufish_prior(
+        data, dict(settings, fit_roi_size_um=(1.8, 1.2, 1.2)), output_dir=directory
+    )
+    assert "infer" not in events and checkpoint.read_bytes() == before
+    np.testing.assert_array_equal(
+        refit.candidate_centroids_zyx_px, result.candidate_centroids_zyx_px
+    )
+    assert not np.array_equal(refit.roi_bounds_zyx, result.roi_bounds_zyx)
+    with pytest.raises(ValueError, match="different input"):
+        localization.localize_ufish_prior(data[..., :-1], settings, output_dir=directory)
+
+    localization.save_localizations(result, directory)
     saved = pq.read_table(tmp_path / "localizations/localizations.parquet")
     for name in ("fit_params", "covariance", "center_covariance_zyx"):
         np.testing.assert_allclose(
@@ -147,6 +183,7 @@ def test_localization_and_cli(localization, tmp_path, monkeypatch):
     assert summary["metadata"]["psf_roi_size_px"] == [7, 11, 11]
     assert summary["volumes"]["t0_c1"]["focus"]["available"]
     assert {p.name for p in output.iterdir()} == {
+        "centroids.parquet",
         "localizations.parquet",
         "psf.tif",
         "focus_gradient_and_field_curvature.png",
