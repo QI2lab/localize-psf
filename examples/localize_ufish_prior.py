@@ -126,6 +126,22 @@ def _write_parquet(table, path):
     temporary.replace(path)
 
 
+def _prepare_fit_rois(data, coords, rois, times, channels):
+    """Pack a bounded ROI batch spanning timepoints/channels using prepare_rois."""
+    npoints = int(np.max(np.prod(rois[:, 1::2] - rois[:, ::2], axis=1)))
+    values = np.full((len(rois), npoints), np.nan)
+    coordinates = tuple(np.full_like(values, np.nan) for _ in range(3))
+    counts = np.empty(len(rois), int)
+    for key in dict.fromkeys(zip(times, channels, strict=True)):
+        selected = (times == key[0]) & (channels == key[1])
+        packed, packed_coords, sizes = prepare_rois(np.asarray(data[key]), coords, rois[selected])
+        values[selected, :packed.shape[1]] = packed
+        counts[selected] = sizes
+        for target, source in zip(coordinates, packed_coords, strict=True):
+            target[selected, :packed.shape[1]] = source
+    return values, coordinates, counts
+
+
 def localize_ufish_prior(data, metadata: Mapping | None = None,
                          output_dir: str | PathLike | None = None) -> LocalizationResult:
     """
@@ -205,6 +221,7 @@ def localize_ufish_prior(data, metadata: Mapping | None = None,
                                  "use a different output directory")
         else:
             saved = schema.empty_table()
+    import cupy as cp
     import torch
     from tqdm.auto import tqdm
     from ufish.api import UFish
@@ -244,34 +261,43 @@ def localize_ufish_prior(data, metadata: Mapping | None = None,
     torch.cuda.empty_cache()
     offsets = np.cumsum([0] + [len(points) for points in candidates])
     candidates, times, channels = map(np.concatenate, (candidates, times, channels))
-    # Pack and fit one volume at a time; retain only compact fit results.
+    # Pack bounded ROI batches across volumes; retain only compact fit results.
     model = gaussian3d_psf_model()
     centers = origin + candidates * spacing
     rois = get_centered_rois(np.rint(candidates).astype(int), roi_size, [0, 0, 0], data.shape[-3:])
-    fits, volumes = None, {}
-    for key, start, stop in tqdm(zip(keys, offsets[:-1], offsets[1:], strict=True),
-                                 total=len(keys), desc="Gaussian fitting", unit="volume"):
-        volumes[key] = dict(candidate_ids=np.arange(start, stop),
-                            focus=dict(available=False), average_psf=None)
-        if start == stop:
-            continue
+    volumes = {key: dict(candidate_ids=np.arange(start, stop),
+                         focus=dict(available=False), average_psf=None)
+               for key, start, stop in zip(keys, offsets[:-1], offsets[1:], strict=True)}
+    cp.get_default_memory_pool().free_all_blocks()
+    # Budget half of free VRAM for four derivative buffers, twelve sample buffers
+    # and eight small parameter matrices, all float64 in the covariance routine.
+    nparams, npoints = model.nparams, int(np.prod(roi_size))
+    workspace = np.dtype(float).itemsize * (npoints * (4*nparams + 12) + 8*nparams**2)
+    batch_size = max(1, int(cp.cuda.runtime.memGetInfo()[0] // (2 * workspace)))
+    fits = None
+    for start in tqdm(range(0, len(candidates), batch_size), desc="Gaussian fitting", unit="batch"):
+        stop = min(start + batch_size, len(candidates))
         selected = slice(start, stop)
-        values, coordinates, counts = prepare_rois(np.asarray(data[key]), coords, rois[selected])
+        values, coordinates, counts = _prepare_fit_rois(data, coords, rois[selected],
+                                                       times[selected], channels[selected])
         with np.errstate(divide="ignore", invalid="ignore"):
             initial = model.estimate_parameters(values, coordinates, num_preserved_dims=1)
         limits = np.asarray([model.estimate_bounds(tuple(c[i, :count] for c in coordinates))
                              for i, count in enumerate(counts)])
         lower, upper = limits[:, 0], limits[:, 1]
         lower[:, (0, 6)] = 0
-        bounds = widths[key[1]]
         initial[:, 1:4] = centers[selected, ::-1]
-        initial[:, 4:6] = bounds["nominal_sigma_zyx_um"][[1, 0]]
-        lower[:, 4:6] = bounds["lower_sigma_zyx_um"][[1, 0]]
-        upper[:, 4:6] = bounds["upper_sigma_zyx_um"][[1, 0]]
+        for channel, bounds in widths.items():
+            same = channels[selected] == channel
+            initial[same, 4:6] = bounds["nominal_sigma_zyx_um"][[1, 0]]
+            lower[same, 4:6] = bounds["lower_sigma_zyx_um"][[1, 0]]
+            upper[same, 4:6] = bounds["upper_sigma_zyx_um"][[1, 0]]
         truncated = np.any(rois[selected, 1::2] - rois[selected, ::2] != roi_size, axis=1)
         batch = fit_rois(values, coordinates, counts, initial, model=model,
                          use_gpu=True, estimator="MLE", noise_model="poisson", bounds=(lower, upper),
-                         return_covariance=True, quality_flags={"truncated": truncated})
+                         return_covariance=True, quality_flags={"truncated": truncated},
+                         covariance_batch_size=batch_size)
+        cp.get_default_memory_pool().free_all_blocks()
         fits = _accumulate_fit_batch(fits, batch, int(start), len(candidates))
         del values, coordinates, counts, initial, limits, lower, upper, batch
     if fits is None:

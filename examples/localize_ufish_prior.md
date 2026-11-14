@@ -75,12 +75,15 @@ including singleton axes.
 
 U-FISH infers all selected volumes before fitting starts, using its own inference
 defaults. The detector and unused PyTorch CUDA cache are released before fitting.
-ROIs and initial estimates are prepared and fitted one volume at a time, using
-production `prepare_rois`, `fit_rois` and the library's result accumulator. Only
-compact fit results accumulate across volumes. GPUfit handles native batching
-within each volume, and the production covariance routine handles its own batches.
-`tqdm` progress bars count completed volumes for U-FISH inference and Gaussian
-fitting. Each fitting volume is one ROI batch; cached and empty volumes are included.
+ROIs from multiple timepoints and channels are packed into each fitting batch
+using production `prepare_rois` and fitted through `fit_rois`. Per-channel optical
+bounds and candidate order are preserved. Batch size is estimated from half the
+free GPU memory, allowing for float64 covariance derivatives and matrix workspaces.
+The same size is passed to the production covariance routine. Unused CuPy memory
+is released between batches so GPUfit can use it. Only the current batch's packed
+samples and compact accumulated fit results are retained; GPUfit handles its
+native workspace batching.
+`tqdm` counts volumes for U-FISH inference and ROI batches for Gaussian fitting.
 Routine U-FISH logging is suppressed.
 
 `intensity_threshold` controls U-FISH's local-maxima spot caller. The default

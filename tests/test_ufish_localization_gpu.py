@@ -53,6 +53,8 @@ def test_localization_and_cli(localization, tmp_path, monkeypatch):
                 assert next(args[0].model.parameters()).is_cuda
             if target is localization:
                 fit_batches.append(len(args[0]))
+                if len(args[0]):
+                    assert kwargs["covariance_batch_size"] >= len(args[0])
             return original(*args, **kwargs)
 
         monkeypatch.setattr(target, name, call)
@@ -89,9 +91,7 @@ def test_localization_and_cli(localization, tmp_path, monkeypatch):
     crash = False
     result = localization.localize_ufish_prior(data, settings, output_dir=directory)
     assert events[0] == "infer" and set(events[1:]) == {"fit"}
-    assert fit_batches == [
-        len(v["candidate_ids"]) for v in result.volume_results.values() if len(v["candidate_ids"])
-    ]
+    assert fit_batches == [len(result.candidate_channels)]
     np.testing.assert_array_equal(
         result.fit_results["candidate_ids"], np.arange(len(result.candidate_channels))
     )
