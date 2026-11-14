@@ -37,7 +37,7 @@ def test_localization_and_cli(localization, tmp_path, monkeypatch):
         refractive_index=1.4,
         relative_sigma_range=(0.5, 2),
     )
-    events = []
+    events, fit_batches = [], []
 
     def record(target, name, event):
         original = getattr(target, name)
@@ -46,17 +46,23 @@ def test_localization_and_cli(localization, tmp_path, monkeypatch):
             events.append(event)
             if event == "infer":
                 assert next(args[0].model.parameters()).is_cuda
+            if target is localization:
+                fit_batches.append(len(args[0]))
             return original(*args, **kwargs)
 
         monkeypatch.setattr(target, name, call)
 
     record(UFish, "predict", "infer")
     record(gf, "fit_constrained", "fit")
+    record(localization, "fit_rois", "fit")
     result = localization.localize_ufish_prior(
         data,
         dict(optics, voxel_size_zyx_um=spacing, origin_zyx_um=origin, fit_roi_size_um=(1.4, 1, 1)),
     )
     assert events[:4] == ["infer"] * 4 and set(events[4:]) == {"fit"}
+    assert fit_batches == [
+        len(v["candidate_ids"]) for v in result.volume_results.values() if len(v["candidate_ids"])
+    ]
     np.testing.assert_array_equal(
         result.fit_results["candidate_ids"], np.arange(len(result.candidate_channels))
     )

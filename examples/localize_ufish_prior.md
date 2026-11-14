@@ -75,9 +75,10 @@ including singleton axes.
 
 U-FISH infers all selected volumes before fitting starts, using its own inference
 defaults. The detector and unused PyTorch CUDA cache are released before fitting.
-ROIs from all selected volumes are submitted to production `fit_rois` together;
-initial estimates are computed per volume. GPUfit handles native batching and
-memory, and the production covariance routine handles its own batches.
+ROIs and initial estimates are prepared and fitted one volume at a time, using
+production `prepare_rois`, `fit_rois` and the library's result accumulator. Only
+compact fit results accumulate across volumes. GPUfit handles native batching
+within each volume, and the production covariance routine handles its own batches.
 
 # Optional PSF diagnostics
 

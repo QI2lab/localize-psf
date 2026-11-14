@@ -15,6 +15,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import typer
 
+from localize_psf.batch_fitting import _accumulate_fit_batch
 from localize_psf.fit import fit_model
 from localize_psf.fit_psf import average_exp_psfs, gaussian3d_psf_model, get_psf_coords
 from localize_psf.localize import fit_rois, get_coords, plot_bead_locations, prepare_rois
@@ -174,51 +175,42 @@ def localize_ufish_prior(data, metadata: Mapping | None = None) -> LocalizationR
         channels.append(np.full(len(points), key[1], int))
     del detector
     torch.cuda.empty_cache()
+    offsets = np.cumsum([0] + [len(points) for points in candidates])
     candidates, times, channels = map(np.concatenate, (candidates, times, channels))
-    # Prepare ROIs and initial guesses per volume, then submit one fit batch.
+    # Pack and fit one volume at a time; retain only compact fit results.
     model = gaussian3d_psf_model()
     centers = origin + candidates * spacing
     rois = get_centered_rois(np.rint(candidates).astype(int), roi_size, [0, 0, 0], data.shape[-3:])
-    lengths = rois[:, 1::2] - rois[:, ::2]
-    sizes = np.prod(lengths, axis=1)
-    truncated = np.any(lengths != roi_size, axis=1)
-    initial = np.empty((len(candidates), model.nparams))
-    limits = np.empty((len(candidates), 2, model.nparams))
-    # A single volume uses prepare_rois' arrays directly, without copying them.
-    shape = (len(candidates) if len(keys) > 1 else 0, int(np.max(sizes, initial=0)))
-    packed = np.full(shape, np.nan)
-    packed_coords = tuple(np.full_like(packed, np.nan) for _ in range(3))
-    for key in keys:
-        ids = np.flatnonzero((times == key[0]) & (channels == key[1]))
-        if not len(ids):
+    fits, volumes = None, {}
+    for key, start, stop in zip(keys, offsets[:-1], offsets[1:], strict=True):
+        volumes[key] = dict(candidate_ids=np.arange(start, stop),
+                            focus=dict(available=False), average_psf=None)
+        if start == stop:
             continue
-        values, coordinates, counts = prepare_rois(np.asarray(data[key]), coords, rois[ids])
+        selected = slice(start, stop)
+        values, coordinates, counts = prepare_rois(np.asarray(data[key]), coords, rois[selected])
         with np.errstate(divide="ignore", invalid="ignore"):
-            initial[ids] = model.estimate_parameters(values, coordinates, num_preserved_dims=1)
-        limits[ids] = [model.estimate_bounds(tuple(c[i, :count] for c in coordinates))
-                       for i, count in enumerate(counts)]
-        if len(keys) == 1:
-            packed, packed_coords = values, coordinates
-        else:
-            packed[ids, :values.shape[1]] = values
-            for target, coordinate in zip(packed_coords, coordinates, strict=True):
-                target[ids, :values.shape[1]] = coordinate
-        del values, coordinates
-    initial[:, 1:4] = centers[:, ::-1]
-    lower, upper = limits[:, 0], limits[:, 1]
-    lower[:, (0, 6)] = 0
-    for channel, bounds in widths.items():
-        selected = channels == channel
-        initial[selected, 4:6] = bounds["nominal_sigma_zyx_um"][[1, 0]]
-        lower[selected, 4:6] = bounds["lower_sigma_zyx_um"][[1, 0]]
-        upper[selected, 4:6] = bounds["upper_sigma_zyx_um"][[1, 0]]
-    fits = fit_rois(packed, packed_coords, sizes, initial, model=model,
-                    use_gpu=True, estimator="MLE", noise_model="poisson", bounds=(lower, upper),
-                    return_covariance=True,
-                    quality_flags={"truncated": truncated})
-    volumes = {key: dict(candidate_ids=np.flatnonzero((times == key[0]) & (channels == key[1])),
-                         focus=dict(available=False), average_psf=None)
-               for key in keys}
+            initial = model.estimate_parameters(values, coordinates, num_preserved_dims=1)
+        limits = np.asarray([model.estimate_bounds(tuple(c[i, :count] for c in coordinates))
+                             for i, count in enumerate(counts)])
+        lower, upper = limits[:, 0], limits[:, 1]
+        lower[:, (0, 6)] = 0
+        bounds = widths[key[1]]
+        initial[:, 1:4] = centers[selected, ::-1]
+        initial[:, 4:6] = bounds["nominal_sigma_zyx_um"][[1, 0]]
+        lower[:, 4:6] = bounds["lower_sigma_zyx_um"][[1, 0]]
+        upper[:, 4:6] = bounds["upper_sigma_zyx_um"][[1, 0]]
+        truncated = np.any(rois[selected, 1::2] - rois[selected, ::2] != roi_size, axis=1)
+        batch = fit_rois(values, coordinates, counts, initial, model=model,
+                         use_gpu=True, estimator="MLE", noise_model="poisson", bounds=(lower, upper),
+                         return_covariance=True, quality_flags={"truncated": truncated})
+        fits = _accumulate_fit_batch(fits, batch, int(start), len(candidates))
+        del values, coordinates, counts, initial, limits, lower, upper, batch
+    if fits is None:
+        empty = np.empty((0, 0))
+        fits = fit_rois(empty, (empty,) * 3, np.empty(0, int), np.empty((0, model.nparams)),
+                        model=model, use_gpu=True, estimator="MLE", noise_model="poisson",
+                        return_covariance=True, quality_flags={"truncated": np.empty(0, bool)})
     result = LocalizationResult(metadata=metadata,
                                 parameter_names=tuple(model.parameter_names),
                                 candidate_centroids_zyx_px=candidates,
@@ -330,7 +322,7 @@ def save_localizations(result: LocalizationResult, output_dir: str | PathLike):
     summary = dict(metadata=result.metadata,
                    parameter_names=result.parameter_names,
                    fit_states_key=result.fit_results["fit_states_key"],
-                   volumes={f"t{t}_c{c}": dict(candidate_ids=v["candidate_ids"], focus=v["focus"])
+                   volumes={f"t{t}_c{c}": dict(focus=v["focus"])
                             for (t, c), v in result.volume_results.items()})
     encoded = json.dumps(summary, default=lambda v: v.tolist() if isinstance(v, np.ndarray) else v.item())
     table = pa.table(columns).replace_schema_metadata({b"localize_psf": encoded.encode("utf-8")})
