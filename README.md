@@ -15,7 +15,9 @@ uv build
 ```
 See [development instructions](docs/development.md) for independently locked CPU
 and local GPU profiles, build prerequisites and publication checks. GPU fitting
-requires the tested [QI2lab GPUfit fork](https://github.com/QI2lab/Gpufit).
+requires the [QI2lab GPUfit `opm-ptv` fork](https://github.com/QI2lab/Gpufit/tree/opm-ptv),
+`pyGpufit==1.2.0` with capability ABI 3. Rebuild and reinstall older GPU profiles
+using the development instructions.
 
 # Examples
 Scripts illustrating example usage of localize-psf are available in [examples](examples).

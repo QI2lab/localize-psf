@@ -345,6 +345,40 @@ def fit_rois(
     return result
 
 
+def _gpufit_model_id(gf, model):
+    """Resolve the named microscopy model only after validating the native contract."""
+    mapping = {
+        psf.gaussian3d_psf_model: "GAUSS_3D_ARB",
+        psf.gaussian_lorentzian_psf_model: "GAUSS_LOR_3D_ARB",
+        psf.gaussian3d_asymmetric_rotated_pixelated: "GAUSS_3D_ROT_ARB",
+        psf.gaussian3d_asymmetric_pixelated: "GAUSS_3D_ASYM_ARB",
+    }
+    if type(model) not in mapping:
+        raise NotImplementedError(f"No native microscopy model for {type(model)}")
+    requirement = (
+        "GPU fitting requires QI2lab GPUfit 1.2.0 with capability ABI 3 and float32 "
+        "microscopy models; rebuild or reinstall the opm-ptv fork"
+    )
+    name = mapping[type(model)]
+    try:
+        capabilities = gf.get_capabilities()
+        model_id = getattr(gf.ModelID, name)
+    except (AttributeError, RuntimeError) as error:
+        raise RuntimeError(requirement) from error
+    if not isinstance(capabilities, dict):
+        raise RuntimeError(requirement)
+    models = capabilities.get("models")
+    if (
+        capabilities.get("abi_version") != 3
+        or capabilities.get("precision") != "float32"
+        or capabilities.get("constraints_layout") != "fit-major-interleaved-lower-upper"
+        or not isinstance(models, dict)
+        or models.get(name) != {"id": model_id, "parameters": model.nparams}
+    ):
+        raise RuntimeError(requirement)
+    return model_id
+
+
 def _fit_gpu(
     result,
     data,
@@ -363,42 +397,41 @@ def _fit_gpu(
 ):
     try:
         import pygpufit.gpufit as gf
-    except (ImportError, OSError) as error:
-        raise RuntimeError("GPU fitting requires the built QI2lab GPUfit local profile") from error
-    gf.get_capabilities()
+    except (AttributeError, ImportError, OSError) as error:
+        raise RuntimeError(
+            "GPU fitting requires the built QI2lab GPUfit 1.2.0 local profile (capability ABI 3)"
+        ) from error
+    model_id = _gpufit_model_id(gf, model)
     if not gf.cuda_available():
         raise RuntimeError(f"CUDA fitting unavailable: {gf.get_last_error()}")
     if model.sf != 1:
         raise NotImplementedError("GPUfit supports sampling factor 1")
-    mapping = {
-        psf.gaussian3d_psf_model: 13,
-        psf.gaussian_lorentzian_psf_model: 14,
-        psf.gaussian3d_asymmetric_rotated_pixelated: 15,
-        psf.gaussian3d_asymmetric_pixelated: 16,
-    }
-    if type(model) not in mapping:
-        raise NotImplementedError(f"No native microscopy model for {type(model)}")
-    model_id = mapping[type(model)]
     types = np.isfinite(lower).astype(np.int32) + 2 * np.isfinite(upper).astype(np.int32)
-    patterns, grouping = np.unique(types, axis=0, return_inverse=True)
+    # Microscopy padding evaluates to zero. Poisson gradients/Hessians divide by
+    # the model value, so MLE groups must contain only valid samples.
+    group_keys = np.column_stack((types, sizes)) if estimator == "MLE" else types
+    patterns, grouping = np.unique(group_keys, axis=0, return_inverse=True)
     for group, pattern in enumerate(patterns):
         indices = np.flatnonzero(grouping == group)
+        pattern = pattern[: model.nparams]
+        npoints = int(sizes[indices[0]]) if estimator == "MLE" else data.shape[1]
+        group_valid = valid[indices, :npoints]
         packed_data = np.ascontiguousarray(
-            np.where(valid[indices], data[indices], 0), dtype=np.float32
+            np.where(group_valid, data[indices, :npoints], 0), dtype=np.float32
         )
-        packed_coords = [np.where(valid[indices], c[indices], 0) for c in coordinates]
+        packed_coords = [np.where(group_valid, c[indices, :npoints], 0) for c in coordinates]
         info = np.concatenate(
             [
                 np.stack(packed_coords[::-1], axis=1).ravel(),
                 sizes[indices],
-                [] if model_id == 14 else model.minimum_sigmas,
+                [] if model_id == gf.ModelID.GAUSS_LOR_3D_ARB else model.minimum_sigmas,
             ]
         ).astype(np.float32)
         packed_weights = (
             None
             if weights is None
             else np.ascontiguousarray(
-                np.where(valid[indices], weights[indices], 0), dtype=np.float32
+                np.where(group_valid, weights[indices, :npoints], 0), dtype=np.float32
             )
         )
         if (

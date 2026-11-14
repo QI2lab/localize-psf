@@ -17,9 +17,14 @@ editable into `.venv`; wheels and sdists go into ignored `dist`. The development
 lock includes optional resolutions but does not install them unless selected.
 Build isolation pins Hatchling independently of the development lock.
 
-GPU localization requires the QI2lab native fork with the public constrained API,
-cuBLAS, float32 ABI and microscopy model IDs 13--16. Until its tested revisions
-are published, use the separate local integration profile:
+GPU localization requires the QI2lab `opm-ptv` native fork, `pyGpufit==1.2.0`,
+with the public constrained API, cuBLAS and float32 capability ABI 3. The
+[upstream merge](https://github.com/QI2lab/Gpufit/commit/30185b039346ab5ae43b08d2bc6032abaa9741a9)
+preserves upstream model IDs 0--14 and moves the microscopy models to 15--18:
+`GAUSS_3D_ARB`, `GAUSS_LOR_3D_ARB`, `GAUSS_3D_ROT_ARB` and `GAUSS_3D_ASYM_ARB`.
+Localization resolves these named constants and checks the native manifest before
+fitting. ABI 2 installations must be rebuilt and reinstalled. Use the separate
+local integration profile:
 
 ```powershell
 uv run --locked python scripts/create_local_gpu_profile.py
@@ -30,14 +35,16 @@ uv run --locked --project build/local-gpu --no-sync python -c "import pygpufit.g
 
 Keep sibling checkouts named `Gpufit` and `localize-psf`. The generated project
 and its independent lock use relative editable sources and live under ignored
-`build/local-gpu`. Its dependencies explicitly include `pyGpufit==1.1.0` and
+`build/local-gpu`. Its dependencies explicitly include `pyGpufit==1.2.0` and
 `localize_psf[gpu]`; repeating locked sync retains these sources. The root `gpu`
 extra supplies CuPy only while the fork has no published artifact. Installing
 that extra alone is insufficient for fitting. Do not manually replace its
 dependency with a stock GPUfit wheel. The native capability check rejects model
 collisions before fitting.
 
-After native edits, use the same command with `-Action rebuild`. On Linux,
+When upgrading an existing profile, regenerate it and its lock as above, then
+use the build command with `-Action rebuild` to replace the old native binary.
+After native edits, also use `-Action rebuild`. On Linux,
 initialize an approved CUDA/compiler environment and run `uv sync --locked
 --project build/local-gpu --config-settings-package=pygpufit:cmake.define.USE_CUBLAS=ON
 --config-settings-package=pygpufit:cmake.define.DOUBLE_PRECISION=OFF`.
@@ -59,6 +66,9 @@ exclude padding. Initial/fixed values must be feasible before and after float32
 conversion. Parameters retain optimizer conventions, preserving fixed values and
 constraints rather than normalizing widths/angles after optimization. `weights`
 are nonnegative LSE objective multipliers; Poisson MLE is explicit and GPU-only.
+MLE batches are grouped by valid ROI length as well as constraint pattern and
+trimmed before dispatch: zero-valued padding is invalid in GPUfit's Poisson
+gradient and Hessian. Results retain their original candidate order.
 The high-level `localize_beads_generic` forwards these controls and accepts a
 physical ZYX `origin`, applied once when building coordinates. Its image-shaped
 weights use the same ROI packing as the data. Empty outputs retain array shapes
@@ -138,8 +148,8 @@ Production PTV uses CUDA; CPU fitting is a test reference only.
 Artifact acceptance also runs in fresh, locked uv projects outside the source
 checkout. It validates the portable wheel, reconstructs a wheel from the sdist,
 checks package/license contents and imports, repeats locked sync, and verifies
-GPUfit ABI 2. The CPU-only wheel passed 45 tests (one existing skip); the GPU
-wheel and sdist-rebuilt GPU wheel each passed 88 tests (one existing skip).
+GPUfit ABI 3. The GPU artifact must be built from the 1.2.0 fork; older wheels
+can coexist in `../Gpufit/dist` and are excluded from artifact selection.
 
 ```powershell
 ./scripts/run_gpu.ps1 -CommandArguments @('python', 'scripts/check_artifacts.py')

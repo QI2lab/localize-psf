@@ -29,11 +29,11 @@ def verify(wheel, gpu):
         target = Path(directory).resolve()
         assert target.is_relative_to(Path(tempfile.gettempdir()).resolve())
         dependencies = (
-            ["localize_psf[gpu]==0.2.0", "pyGpufit==1.1.0"] if gpu else ["localize_psf==0.2.0"]
+            ["localize_psf[gpu]==0.2.0", "pyGpufit==1.2.0"] if gpu else ["localize_psf==0.2.0"]
         )
         sources = f"localize-psf={{path={json.dumps(wheel.as_posix())}}}\n"
         if gpu:
-            native_wheel = next((ROOT.parent / "Gpufit/dist").glob("*.whl"))
+            native_wheel = next((ROOT.parent / "Gpufit/dist").glob("pygpufit-1.2.0-*.whl"))
             sources += f"pygpufit={{path={json.dumps(native_wheel.as_posix())}}}\n"
         (target / "pyproject.toml").write_text(
             '[project]\nname="localize-artifact-check"\nversion="0.0.0"\n'
@@ -79,7 +79,7 @@ def verify(wheel, gpu):
         if not gpu:
             script += "assert importlib.util.find_spec('cupy') is None; assert importlib.util.find_spec('pygpufit') is None"
         else:
-            script += "import pygpufit.gpufit as gf; assert gf.get_capabilities()['abi_version']==2"
+            script += "import pygpufit.gpufit as gf; assert gf.get_capabilities()['abi_version']==3"
         checked("run", "--locked", "--no-sync", "python", "-c", script, cwd=target)
 
 
