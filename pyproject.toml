@@ -52,9 +52,16 @@ test-cpu = [
 docs = ["sphinx>=8,<9", "sphinx-rtd-theme>=3,<4"]
 
 [tool.uv.sources]
+localize-psf-build-support = {path = "build_support"}
 torch = [
   {index = "pytorch-cu129", extra = "example", marker = "sys_platform == 'linux' or sys_platform == 'win32'"},
 ]
+
+[tool.uv.extra-build-dependencies]
+pygpufit = ["localize-psf-build-support==0.1.0"]
+
+[tool.uv.extra-build-variables]
+pygpufit = {CMAKE_EXECUTABLE = "localize-gpu-cmake", CMAKE_GENERATOR = "Ninja"}
 
 [[tool.uv.index]]
 name = "pytorch-cu129"
@@ -72,11 +79,12 @@ packages = ["localize_psf"]
 allow-direct-references = true
 
 [tool.hatch.build.targets.sdist]
-include = ["localize_psf", "tests", "docs", "scripts", "examples/localize_ufish_prior.py", "examples/localize_ufish_prior.md", "examples/localize_ufish_prior.json", "README.md", "LICENSE", "pyproject.toml", "uv.lock", ".python-version"]
-exclude = ["docs/_*", "docs/_build"]
+include = ["localize_psf", "build_support", "tests", "docs", "scripts", "examples/localize_ufish_prior.py", "examples/localize_ufish_prior.md", "examples/localize_ufish_prior.json", "README.md", "LICENSE", "pyproject.toml", "uv.lock", ".python-version"]
+exclude = ["docs/_*", "docs/_build", "build_support/**/_build_tools/**"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+pythonpath = ["build_support"]
 python_files = ["test_*.py", "*_unittest.py"]
 markers = [
   "cpu: runs without CUDA",
