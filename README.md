@@ -20,9 +20,14 @@ requires the [QI2lab GPUfit `opm-ptv` fork](https://github.com/QI2lab/Gpufit/tre
 using the development instructions.
 
 `uv sync --locked --extra gpu` installs CUDA libraries through CuPy's `ctk`
-extra and builds GPUfit from that fork. Building GPUfit requires a CUDA compiler
-and a compatible C++ toolchain. Add `--extra example` for CUDA PyTorch and the
-U-FISH example dependencies.
+extra and builds GPUfit from that fork. On Linux x86_64, the build dependencies
+declared in `pyproject.toml` automatically supply a pinned CUDA 12.9 SDK and
+GCC/G++ 13 inside the isolated build environment; no system CUDA installation
+or compiler selection is needed. Windows builds require an initialized x64
+MSVC environment and provision CUDA 12.8 from the declared build dependencies.
+Both platforms always use the package-managed SDK. Add `--extra example` for CUDA PyTorch
+and the U-FISH example dependencies. GPU execution requires a working NVIDIA
+driver.
 
 # Examples
 Scripts illustrating example usage of localize-psf are available in [examples](examples).

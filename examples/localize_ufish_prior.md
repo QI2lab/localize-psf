@@ -12,7 +12,8 @@ resolution. TensorStore slices remain lazy until a ZYX volume is needed.
 
 # Installation
 
-In an initialized CUDA/C++ compiler environment:
+On Linux x86_64, run this directly from the checkout. On Windows, initialize
+the x64 MSVC compiler environment first:
 
 ```powershell
 uv sync --locked --extra gpu --extra example
@@ -21,8 +22,10 @@ uv sync --locked --extra gpu --extra example
 The `gpu` extra installs CUDA libraries through `cupy-cuda12x[ctk]` and builds
 QI2lab/Gpufit's `opm-ptv` branch. The `example` extra adds CUDA PyTorch, U-FISH,
 yaozarrs from upstream `main` with TensorStore, Typer, PyArrow and tifffile.
-See the [development instructions](../docs/development.md) for Windows build
-prerequisites.
+On Linux, `pyproject.toml` supplies the CUDA SDK and compatible C++ compiler
+automatically as isolated GPUfit build dependencies. A system CUDA installation
+is unnecessary. See the [development instructions](../docs/development.md) for
+details and Windows build prerequisites.
 
 # Python usage
 

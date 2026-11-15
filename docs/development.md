@@ -26,36 +26,66 @@ Localization uses these named constants; GPUfit validates its native manifest
 when fitting. ABI 2 installations must be rebuilt and reinstalled.
 
 The `gpu` extra installs `cupy-cuda12x[ctk]` and builds GPUfit directly from
-`QI2lab/Gpufit` on `opm-ptv`. CuPy's `ctk` extra installs CUDA libraries, following
-the setup in merfish3d-analysis and opm-processing-v2. Building GPUfit also needs
-a CUDA compiler and a compatible C++ toolchain. No cuCIM dependency is included.
-In an initialized CUDA/compiler environment:
+`QI2lab/Gpufit` on `opm-ptv`. CuPy's `ctk` extra supplies the runtime libraries;
+the CUDA 12 pip compiler component does not contain `nvcc` on Linux.
+No cuCIM dependency is included.
+
+On Linux x86_64, run the following directly from this checkout. Windows builds
+require an initialized x64 MSVC compiler environment:
 
 ```powershell
 uv sync --locked --extra gpu
 ```
 
+Add `--extra example` to install CUDA PyTorch and the U-FISH workflow. Linux
+builds need no system CUDA SDK, Conda installation, GCC version selection or
+manual activation. `tool.uv.extra-build-dependencies` installs the local
+`build_support` package into GPUfit's isolated build environment.
+`tool.uv.extra-build-variables` selects its CMake wrapper. The helper's
+`pyproject.toml` declares exact CUDA 12.9, GCC/G++ 13, binutils and Linux sysroot
+artifacts, including their SHA256 hashes. A pinned, verified micromamba binary
+installs those artifacts inside the build environment without reading existing
+Conda configuration. The wrapper selects only these compilers and SDK for the
+native build, and fixes GPUfit's Linux cuBLAS runtime installation targets.
+The resulting GPUfit wheel includes cuBLAS and cuBLASLt with relative library
+lookup paths.
+
+The first Linux GPU build downloads approximately 800 MB of build dependencies
+in addition to Python dependencies. Subsequent syncs reuse the native wheel
+cached by uv. CPU-only syncs do not install this build toolchain. The NVIDIA
+driver remains a host prerequisite for GPU execution; compiling and importing
+GPUfit do not require a visible GPU. Other Linux architectures are not yet
+covered by the pinned compiler artifacts.
+
+On Windows x86_64, the build helper always provisions the pinned CUDA 12.8
+Update 1 SDK from the Windows artifact declarations in
+`build_support/pyproject.toml`. Existing CUDA installations and inherited CUDA
+path variables are overridden on both platforms. MSVC must
+already be initialized; the tested toolset is MSVC 14.38. CI initializes that
+toolset automatically. The Windows SDK bootstrap stays inside the isolated
+build environment and does not install a system CUDA toolkit.
+
 For a separate local integration environment:
 
 ```powershell
-git clone --branch opm-ptv https://github.com/QI2lab/Gpufit.git ../Gpufit
 uv run --locked python scripts/create_local_gpu_profile.py
 uv lock --project build/local-gpu
-powershell -File ../Gpufit/scripts/build_windows.ps1 -Action sync -Architectures 86 -ProjectPath build/local-gpu
+uv sync --locked --project build/local-gpu
 uv run --locked --project build/local-gpu --no-sync python -c "import pygpufit.gpufit as gf; print(gf.get_capabilities())"
 ```
 
 The generated project and independent lock live under ignored `build/local-gpu`.
 It uses the editable localize-psf checkout and obtains GPUfit through the `gpu`
 extra's fork dependency. Its lock records the resolved upstream commit. The
-sibling GPUfit checkout above supplies the Windows compiler setup script.
+generated profile carries the checkout's build dependencies and variables, so
+it uses the same package-managed CUDA toolchain on both platforms.
 
 When upgrading an existing profile, regenerate it and its lock as above, then
-use the build command with `-Action rebuild` to replace the old native binary.
-On Linux,
-initialize an approved CUDA/compiler environment and run `uv sync --locked
---extra gpu`. GPUfit's build defaults select cuBLAS and float32.
-Linux execution remains pending.
+use `uv sync --locked --project build/local-gpu --reinstall-package pygpufit`
+to replace the old native binary. GPUfit's build defaults select cuBLAS and
+float32. Linux source builds, 64 core GPU unit and integration tests (including
+Monte Carlo simulations), and the U-FISH integration test have been validated
+on Ubuntu 26.04 x86_64 with a TITAN RTX, CUDA 12.9 and GCC 13.4.
 
 The [U-FISH localization example](../examples/localize_ufish_prior.md) covers
 3D localization, optional PSF averaging and microscope calibration, time/channel
@@ -64,8 +94,31 @@ extra. The optional uv environments select CUDA PyTorch. Unit and integration
 tests are separate for CPU and GPU. The `test-cpu` group supplies TensorStore
 and Typer for hosted CPU tests.
 
-Existing CPU reference tests pass (28 passed, one pre-existing PSF test skipped).
-Packaging and new fitting interfaces have separate acceptance checks.
+Tests are unit tests or integration tests and execute production code directly.
+Simulations supply input images, noise and physical parameters. Package modules,
+functions and models are never replaced by mocks, spies or duplicated algorithms.
+The compiled ABI remains a required unit test in the CUDA build jobs.
+
+GitHub Actions runs the existing CPU/distribution checks on Windows and Linux.
+The [CUDA build workflow](../.github/workflows/gpu.yml) also runs on every
+push and pull request with Ubuntu 24.04 and Windows Server 2022, Python 3.12.10
+and uv 0.12.3. Both jobs start with an empty uv cache, run
+`uv sync --locked --extra gpu`, and run production build-support and compiled ABI
+unit tests. The ABI unit tests check the locked native source, precision,
+toolchain and required cuBLAS runtime artifacts. They use the `pyproject.toml`
+toolchains without a system CUDA SDK or GPU. Windows uses MSVC 14.38 with the
+pinned CUDA 12.8 SDK; the workflow installs the MSVC component if the runner
+image no longer includes it. Linux uses CUDA 12.9 and GCC 13. Both jobs verify
+their native library and both cuBLAS runtime libraries (`.dll` on Windows, `.so`
+on Linux). These hosted jobs test the `gpu` extra. CPU example checks remain part of the existing CPU
+workflow.
+
+To automate numerical CUDA tests, register a Linux x86_64 self-hosted runner
+with the `gpu` label and a working NVIDIA driver. In Actions, select **CUDA
+builds**, choose **Run workflow**, and enable **run_gpu_tests**. That
+optional job requires a visible CUDA device and runs the core GPU tests;
+it excludes the U-FISH example and Monte Carlo suite. Pushes and pull requests
+do not schedule jobs on that runner.
 
 The modified fitting path uses existing SciPy/model fits serially on CPU and the
 public QI2lab native APIs on GPU. Dask and zarr-python are optional only for the
@@ -103,20 +156,22 @@ have no single CUDA root; the corresponding CuPy path warning is filtered only
 after the runtime and NVRTC load and NVRTC is located in that wheel layout.
 Other warnings remain visible. CPU installations import without CUDA components.
 
-The local test runner can select an SDK and keep its kernel cache inside the
-ignored build directory:
+The local test runner uses the package CUDA components and keeps its kernel
+cache inside the ignored build directory:
 
 ```powershell
 ./scripts/run_gpu.ps1 -CommandArguments @('pytest', '-q', 'tests/test_gpu_psf_derivatives.py')
 ```
 
-The runner defaults to the tested CUDA 12.8 installation. Supply `-CudaPath` to
-select another compatible SDK. It uses the existing locked `build/local-gpu`
-profile and never modifies persistent environment variables or installs packages.
+The runner clears inherited CUDA path variables for the command and restores
+them afterward. It uses the existing locked `build/local-gpu` profile and never
+modifies persistent environment variables or installs packages.
 # Localization uncertainty
 
-Acceptance on the RTX 3090/CUDA 12.8 profile: all four native microscopy models
-passed noisy LSE and Poisson MLE comparisons against independent CPU references.
+All four native microscopy models are tested with noisy LSE and Poisson MLE
+simulations. LSE fits are compared with the production CPU fitter; Poisson MLE
+fits are checked against simulated centers and the production model's numerical
+Jacobian.
 Eight held-out Gaussian/Poisson coverage cases use 240 noisy CUDA-generated images
 each, two brightnesses, two depths, and anisotropic ZYX sampling. Their predeclared
 binomial coverage and whitened-residual/bias checks passed. Per-case reports are
@@ -164,8 +219,9 @@ Production PTV uses CUDA; CPU fitting is a test reference only.
 
 Artifact acceptance also runs in fresh, locked uv projects outside the source
 checkout. It validates the portable wheel, reconstructs a wheel from the sdist,
-checks package/license contents and imports, repeats locked sync, and verifies
-GPUfit ABI 3. GPU artifact checks install the fork through the `gpu` extra.
+checks package/license contents, and runs production unit and integration tests,
+including GPUfit ABI 3 validation. GPU artifact checks install the fork through
+the `gpu` extra with the same package-managed build toolchain.
 
 ```powershell
 ./scripts/run_gpu.ps1 -CommandArguments @('python', 'scripts/check_artifacts.py')
