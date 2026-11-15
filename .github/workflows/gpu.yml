@@ -1,0 +1,72 @@
+name: CUDA builds
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      run_gpu_tests:
+        description: Run numerical tests on a self-hosted Linux GPU runner
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  cuda-build:
+    name: CUDA source build (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, windows-2022]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    env:
+      # A fresh cache ensures that a previously built GPUfit wheel cannot hide
+      # missing build dependencies or changes to the local build support.
+      UV_CACHE_DIR: ${{ github.workspace }}/.uv-cache
+      CMAKE_BUILD_PARALLEL_LEVEL: '2'
+      CMAKE_GENERATOR: Ninja
+      LOCALIZE_PSF_REQUIRE_NATIVE_ABI: '1'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884
+        with:
+          version: '0.12.3'
+          python-version: '3.12.10'
+          enable-cache: false
+      - name: Initialize the tested Windows MSVC toolset
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: ./.github/scripts/setup_windows_msvc.ps1
+      - run: uv lock --check
+      - name: Build GPUfit with the pyproject toolchain
+        run: uv sync --locked --extra gpu
+      - name: Run production build-support and native ABI unit tests
+        run: >-
+          uv run --locked --extra gpu --no-sync pytest -q
+          -m unit tests/test_gpu_build_support.py tests/test_gpufit_build.py
+
+  gpu-tests:
+    name: CUDA numerical tests
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.run_gpu_tests }}
+    needs: cuda-build
+    runs-on: [self-hosted, linux, x64, gpu]
+    timeout-minutes: 30
+    env:
+      UV_CACHE_DIR: ${{ github.workspace }}/.uv-cache
+      CUPY_CACHE_DIR: ${{ github.workspace }}/build/cupy-cache
+      CMAKE_BUILD_PARALLEL_LEVEL: '2'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884
+        with:
+          version: '0.12.3'
+          python-version: '3.12.10'
+          enable-cache: false
+      - run: uv sync --locked --extra gpu --group test-cpu
+      - name: Run production CUDA unit and integration tests
+        run: >-
+          uv run --locked --no-sync pytest -q
+          -m "(unit or integration) and gpu and not example and not monte_carlo"
