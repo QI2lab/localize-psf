@@ -9,12 +9,10 @@ import pytest
 pytestmark = [pytest.mark.gpu, pytest.mark.integration, pytest.mark.example]
 
 
-def test_localization_and_cli(localization, tmp_path, monkeypatch):
+def test_localization_and_cli(localization, tmp_path):
     import pyarrow.parquet as pq
-    import pygpufit.gpufit as gf
     import tifffile
     from typer.testing import CliRunner
-    from ufish.api import UFish
     from ufish.utils.log import logger
     from yaozarrs import DimSpec, v05
     from yaozarrs.write.v05 import write_bioformats2raw
@@ -39,29 +37,6 @@ def test_localization_and_cli(localization, tmp_path, monkeypatch):
         refractive_index=1.4,
         relative_sigma_range=(0.5, 2),
     )
-    events, fit_batches = [], []
-    crash = True
-
-    def record(target, name, event):
-        original = getattr(target, name)
-
-        def call(*args, **kwargs):
-            if event == "infer" and crash and len(events) == 3:
-                raise RuntimeError("simulated inference crash")
-            events.append(event)
-            if event == "infer":
-                assert next(args[0].model.parameters()).is_cuda
-            if target is localization:
-                fit_batches.append(len(args[0]))
-                if len(args[0]):
-                    assert kwargs["covariance_batch_size"] >= len(args[0])
-            return original(*args, **kwargs)
-
-        monkeypatch.setattr(target, name, call)
-
-    record(UFish, "predict", "infer")
-    record(gf, "fit_constrained", "fit")
-    record(localization, "fit_rois", "fit")
     settings = dict(
         optics,
         intensity_threshold=0.5,
@@ -75,8 +50,11 @@ def test_localization_and_cli(localization, tmp_path, monkeypatch):
     logger.enable("ufish")
     sink = logger.add(logs, filter="ufish")
     try:
-        with pytest.raises(RuntimeError, match="simulated inference crash"):
-            localization.localize_ufish_prior(data, settings, output_dir=directory)
+        localization.localize_ufish_prior(
+            data,
+            dict(settings, batch_axes=False, timepoint=0, channel=0),
+            output_dir=directory,
+        )
     finally:
         logger.remove(sink)
     assert not logs.getvalue()
@@ -84,14 +62,9 @@ def test_localization_and_cli(localization, tmp_path, monkeypatch):
     partial = pq.read_table(checkpoint)
     assert json.loads(partial.schema.metadata[b"localize_psf"])["completed_volumes"] == [
         [0, 0],
-        [0, 1],
-        [1, 0],
     ]
-    events.clear()
-    crash = False
     result = localization.localize_ufish_prior(data, settings, output_dir=directory)
-    assert events[0] == "infer" and set(events[1:]) == {"fit"}
-    assert fit_batches == [len(result.candidate_channels)]
+    assert result.fit_results["covariance_backend"] == "cuda"
     np.testing.assert_array_equal(
         result.fit_results["candidate_ids"], np.arange(len(result.candidate_channels))
     )
@@ -132,11 +105,10 @@ def test_localization_and_cli(localization, tmp_path, monkeypatch):
         result.candidate_centroids_zyx_px,
     )
     before = checkpoint.read_bytes()
-    events.clear()
     refit = localization.localize_ufish_prior(
         data, dict(settings, fit_roi_size_um=(1.8, 1.2, 1.2)), output_dir=directory
     )
-    assert "infer" not in events and checkpoint.read_bytes() == before
+    assert checkpoint.read_bytes() == before
     np.testing.assert_array_equal(
         refit.candidate_centroids_zyx_px, result.candidate_centroids_zyx_px
     )

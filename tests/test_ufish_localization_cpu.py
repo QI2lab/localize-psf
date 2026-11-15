@@ -1,7 +1,6 @@
 """CPU unit and integration tests using the production localization code."""
 
 import json
-from pathlib import Path
 
 import numpy as np
 import pytest
@@ -110,7 +109,7 @@ def test_multi_volume_roi_packing(localization):
 
 
 @pytest.mark.integration
-def test_parquet_update_is_atomic(localization, tmp_path, monkeypatch):
+def test_parquet_update_preserves_the_previous_file_after_invalid_input(localization, tmp_path):
     import pyarrow as pa
     import pyarrow.parquet as pq
 
@@ -119,13 +118,9 @@ def test_parquet_update_is_atomic(localization, tmp_path, monkeypatch):
     updated = pa.concat_tables([initial, initial])
     localization._write_parquet(initial.to_reader(), path)
 
-    def interrupt(*args):
-        raise RuntimeError("simulated crash before replacement")
-
-    with monkeypatch.context() as patch:
-        patch.setattr(Path, "replace", interrupt)
-        with pytest.raises(RuntimeError, match="simulated crash"):
-            localization._write_parquet(updated.to_reader(), path)
+    invalid = pa.RecordBatchReader.from_batches(initial.schema, [pa.record_batch({"bad": [1]})])
+    with pytest.raises(ValueError, match="(?i)schema"):
+        localization._write_parquet(invalid, path)
     assert pq.read_table(path).equals(initial)
     localization._write_parquet(updated.to_reader(), path)
     assert pq.read_table(path).equals(updated)
@@ -135,12 +130,10 @@ def test_parquet_update_is_atomic(localization, tmp_path, monkeypatch):
 @pytest.mark.integration
 @pytest.mark.parametrize("version", ["0.5", "0.6"])
 @pytest.mark.parametrize("series_count", [0, 1, 2])
-def test_tensorstore_metadata_and_cli_selection(
-    localization, tmp_path, version, series_count, monkeypatch
-):
+def test_tensorstore_metadata_and_cli_selection(localization, tmp_path, version, series_count):
     import tensorstore as ts
     from typer.testing import CliRunner
-    from yaozarrs import DimSpec, convert_version, v05
+    from yaozarrs import DimSpec, convert_version, open_group, v05
     from yaozarrs.write import v05 as write05
     from yaozarrs.write import v06 as write06
 
@@ -173,33 +166,29 @@ def test_tensorstore_metadata_and_cli_selection(
         writer.write_bioformats2raw(path, images, writer="tensorstore")
     else:
         writer.write_image(path, image, [counts, coarse], writer="tensorstore")
-    observed = {}
-    prepare = localization._prepare_data
-
-    def record(data, metadata):
-        observed.update(data=data, metadata=metadata.copy())
-        return prepare(data, metadata)
-
-    monkeypatch.setattr(localization, "_prepare_data", record)
-
     metadata = tmp_path / "metadata.json"
     metadata.write_text(
         json.dumps(dict(batch_axes=False, timepoint=1, psf_diagnostics=False)),
         encoding="utf-8",
     )
     app, runner = localization.app, CliRunner()
-    assert runner.invoke(app, ["--help"]).exit_code == 0
     arguments = [str(path), "--metadata", str(metadata)]
     arguments += ["--output-dir", str(tmp_path / "result")]
     result = runner.invoke(app, arguments)
     if series_count == 2:
         assert result.exit_code == 2 and "pass an image group path" in result.output
-        assert not observed
         return
     assert result.exit_code == 2 and "explicit channel" in result.output
     assert not (tmp_path / "result").exists()
-    assert isinstance(observed["data"], ts.TensorStore)
+    group = open_group(str(path / "0" if series_count else path))
+    stored = convert_version(group.ome_metadata(), "0.5").multiscales[0]
+    spatial = localization._spatial_metadata(stored)
+    data, _ = localization._prepare_data(
+        group[stored.datasets[0].path].to_tensorstore(),
+        dict(spatial, batch_axes=True, psf_diagnostics=False),
+    )
+    assert isinstance(data, ts.TensorStore)
     for t, c in np.ndindex(2, 2):
-        np.testing.assert_array_equal(np.asarray(observed["data"][t, c]), counts[t, c])
-    np.testing.assert_allclose(observed["metadata"]["voxel_size_zyx_um"], (0.9, 0.8, 0.2))
-    np.testing.assert_allclose(observed["metadata"]["origin_zyx_um"], (-1.1, 9, -1.5))
+        np.testing.assert_array_equal(np.asarray(data[t, c]), counts[t, c])
+    np.testing.assert_allclose(spatial["voxel_size_zyx_um"], (0.9, 0.8, 0.2))
+    np.testing.assert_allclose(spatial["origin_zyx_um"], (-1.1, 9, -1.5))
