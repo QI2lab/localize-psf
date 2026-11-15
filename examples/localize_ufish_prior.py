@@ -51,6 +51,8 @@ def _spatial_metadata(multiscale):
     axes = multiscale.axes
     names = [axis.name for axis in axes]
     scale, origin = np.ones(len(axes)), np.zeros(len(axes))
+
+    # Compose the dataset and image coordinate transforms.
     for transform in (multiscale.datasets[0].coordinateTransformations +
                       (multiscale.coordinateTransformations or [])):
         if transform.type == "scale":
@@ -58,6 +60,8 @@ def _spatial_metadata(multiscale):
             origin *= transform.scale
         else:
             origin += transform.translation
+
+    # Express the spatial coordinates in micrometres.
     units = {"meter": 1e6, "centimeter": 1e4, "millimeter": 1e3,
              "micrometer": 1, "nanometer": 1e-3, "picometer": 1e-6}
     indices = [names.index(name) for name in "zyx"]
@@ -76,6 +80,8 @@ def _prepare_data(data, metadata):
         or not set("zyx") <= set(axes) or not set(axes) <= set("tczyx")):
         raise ValueError("axes must describe unique t/c/z/y/x dimensions including ZYX")
     metadata["axes"] = axes
+
+    # Select the timepoints and channels to process.
     selections = []
     for axis, label in zip("tc", ("timepoint", "channel"), strict=True):
         selected = metadata.get(label)
@@ -94,6 +100,8 @@ def _prepare_data(data, metadata):
             if selected is None:
                 raise ValueError(f"batch_axes=False requires an explicit {label}")
             selections.append((selected,))
+
+    # Create a lazy TCZYX view.
     for axis in "ct":
         if axis not in axes:
             data, axes = data[None], axis + axes
@@ -108,12 +116,16 @@ def _psf_diagnostics(data, result, coords):
         ids = volume["candidate_ids"]
         ids = ids[result.fit_results["success"][ids]]
         centers = result.fit_results["fit_params"][ids][:, (3, 2, 1)]
+
+        # Fit the focus surface and retain the image projection.
         focus = _focus_diagnostics(centers)
         image = np.asarray(data[key])
         volume.update(focus=focus, image_xy=np.max(image, axis=0))
+
+        # Average the PSFs from successful fits.
         if len(ids):
             volume["average_psf"] = average_exp_psfs(image, coords, centers, size,
-                                                    backgrounds=result.fit_results["fit_params"][ids, 6])
+                                                     backgrounds=result.fit_results["fit_params"][ids, 6])
             volume["average_psf_coords_zyx_um"] = tuple(get_psf_coords(size, spacing))
 
 
@@ -128,6 +140,8 @@ def _write_parquet(reader, path):
                 writer.write_batch(batch)
         stream.flush()
         fsync(stream.fileno())
+
+    # Publish the completed file atomically.
     temporary.replace(path)
 
 
@@ -137,6 +151,8 @@ def _prepare_fit_rois(data, coords, rois, times, channels):
     values = np.full((len(rois), npoints), np.nan)
     coordinates = tuple(np.full_like(values, np.nan) for _ in range(3))
     counts = np.empty(len(rois), int)
+
+    # Pack each source volume into the shared ROI batch.
     for key in dict.fromkeys(zip(times, channels, strict=True)):
         selected = (times == key[0]) & (channels == key[1])
         packed, packed_coords, sizes = prepare_rois(np.asarray(data[key]), coords, rois[selected])
@@ -144,6 +160,7 @@ def _prepare_fit_rois(data, coords, rois, times, channels):
         counts[selected] = sizes
         for target, source in zip(coordinates, packed_coords, strict=True):
             target[selected, :packed.shape[1]] = source
+
     return values, coordinates, counts
 
 
@@ -158,11 +175,14 @@ def localize_ufish_prior(data, metadata: Mapping | None = None,
     to GPUfit. Results preserve the candidate order, including failed fits.
     With output_dir, completed centroid volumes are saved and reused on reruns.
     """
+    # Set defaults for localization and optional PSF diagnostics.
     metadata = {"batch_axes": True, "psf_diagnostics": False,
                 "intensity_threshold": 0.0,
                 "fit_roi_size_um": (1.75, 0.65, 0.65), "psf_roi_size_px": (11, 21, 21),
                 **(metadata or {})}
     source = None
+
+    # Open the highest-resolution image with lazy TensorStore access.
     if isinstance(data, (str, PathLike)):
         from yaozarrs import bioformats2raw_series, convert_version, open_group, v05
 
@@ -174,6 +194,8 @@ def localize_ufish_prior(data, metadata: Mapping | None = None,
                 raise ValueError(f"Collection has {len(paths)} images; pass an image group path")
             group = group[paths[0]]
             image = convert_version(group.ome_metadata(), "0.5")
+
+        # Read the image geometry and stored optical parameters.
         multiscale = image.multiscales[0]
         source = group.store_path
         metadata.update(_spatial_metadata(multiscale))
@@ -181,13 +203,18 @@ def localize_ufish_prior(data, metadata: Mapping | None = None,
             if name in group.attrs:
                 metadata.setdefault(name, group.attrs[name])
         data = group[multiscale.datasets[0].path].to_tensorstore()
+
+    # Select volumes and establish physical coordinates.
     data, keys = _prepare_data(data, metadata)
     metadata["voxel_size_zyx_um"] = np.asarray(metadata["voxel_size_zyx_um"], dtype=float)
     metadata["origin_zyx_um"] = np.asarray(metadata.get("origin_zyx_um", (0, 0, 0)), dtype=float)
-    # Optical bounds and physical coordinates use production library helpers.
+
+    # Require the optical parameters used for the fit bounds.
     for name in ("numerical_aperture", "wavelength_um", "refractive_index", "relative_sigma_range"):
         if metadata.get(name) is None:
             raise ValueError(f"Provide {name} in metadata")
+
+    # Compute optical width bounds for each channel.
     widths = {}
     for channel in {c for _, c in keys}:
         wavelength = metadata["wavelength_um"]
@@ -200,9 +227,13 @@ def localize_ufish_prior(data, metadata: Mapping | None = None,
                                        relative_sigma_range=metadata["relative_sigma_range"],
                                        sampling_floor_pixels=0)
         widths[channel] = {name: value.get() for name, value in bounds.items()}
+
+    # Set the fitting grid and centered ROI dimensions.
     spacing, origin = metadata["voxel_size_zyx_um"], metadata["origin_zyx_um"]
     coords = get_coords(data.shape[-3:], spacing, origin=origin)
     roi_size = get_roi_size(metadata["fit_roi_size_um"], spacing, ensure_odd=True)
+
+    # Load checkpoint state for recovery and refitting.
     weights = "finetune_models/v1.0.1-simfish_model.pth"
     checkpoint = None
     completed = []
@@ -226,6 +257,8 @@ def localize_ufish_prior(data, metadata: Mapping | None = None,
                                  "use a different output directory")
         else:
             saved = schema.empty_table()
+
+    # Configure CUDA inference and suppress routine U-FISH logging.
     import cupy as cp
     import torch
     from tqdm.auto import tqdm
@@ -245,9 +278,13 @@ def localize_ufish_prior(data, metadata: Mapping | None = None,
             if detector is None:
                 detector = UFish(device="cuda")
                 detector.load_weights(weights_file=weights)
+
+            # Predict the candidate centroids for this volume.
             spots = detector.predict(np.asarray(data[key]), axes="zyx", batch_size=256,
-                                      intensity_threshold=metadata["intensity_threshold"])[0]
+                                     intensity_threshold=metadata["intensity_threshold"])[0]
             points = spots[["axis-0", "axis-1", "axis-2"]].to_numpy(dtype=float)
+
+            # Save the completed volume before proceeding.
             if checkpoint is not None:
                 columns = dict(timepoint=np.full(len(points), key[0], int),
                                channel=np.full(len(points), key[1], int),
@@ -257,34 +294,45 @@ def localize_ufish_prior(data, metadata: Mapping | None = None,
                 status = json.dumps(dict(identity, completed_volumes=completed)).encode("utf-8")
                 saved = saved.replace_schema_metadata({b"localize_psf": status})
                 _write_parquet(saved.to_reader(), checkpoint)
+
+        # Preserve candidate order across volumes.
         candidates.append(points)
         times.append(np.full(len(points), key[0], int))
         channels.append(np.full(len(points), key[1], int))
+
+    # Release inference memory before preparing fit batches.
     del detector
     if checkpoint is not None:
         del saved
     torch.cuda.empty_cache()
+
+    # Align candidate arrays and construct the fitting ROIs.
     offsets = np.cumsum([0] + [len(points) for points in candidates])
     candidates, times, channels = map(np.concatenate, (candidates, times, channels))
-    # Pack bounded ROI batches across volumes; retain only compact fit results.
     model = gaussian3d_psf_model()
     centers = origin + candidates * spacing
     rois = get_centered_rois(np.rint(candidates).astype(int), roi_size, [0, 0, 0], data.shape[-3:])
     volumes = {key: dict(candidate_ids=np.arange(start, stop),
                          focus=dict(available=False), average_psf=None)
                for key, start, stop in zip(keys, offsets[:-1], offsets[1:], strict=True)}
+
+    # Size the fitting and covariance batches from free GPU memory.
     cp.get_default_memory_pool().free_all_blocks()
     # Budget half of free VRAM for four derivative buffers, twelve sample buffers
     # and eight small parameter matrices, all float64 in the covariance routine.
     nparams, npoints = model.nparams, int(np.prod(roi_size))
     workspace = np.dtype(float).itemsize * (npoints * (4*nparams + 12) + 8*nparams**2)
     batch_size = max(1, int(cp.cuda.runtime.memGetInfo()[0] // (2 * workspace)))
+
+    # Pack and fit bounded batches while retaining only compact results.
     fits = None
     for start in tqdm(range(0, len(candidates), batch_size), desc="Gaussian fitting", unit="batch"):
         stop = min(start + batch_size, len(candidates))
         selected = slice(start, stop)
         values, coordinates, counts = _prepare_fit_rois(data, coords, rois[selected],
-                                                       times[selected], channels[selected])
+                                                        times[selected], channels[selected])
+
+        # Estimate initial parameters and coordinate bounds.
         with np.errstate(divide="ignore", invalid="ignore"):
             initial = model.estimate_parameters(values, coordinates, num_preserved_dims=1)
         limits = np.asarray([model.estimate_bounds(tuple(c[i, :count] for c in coordinates))
@@ -292,24 +340,34 @@ def localize_ufish_prior(data, metadata: Mapping | None = None,
         lower, upper = limits[:, 0], limits[:, 1]
         lower[:, (0, 6)] = 0
         initial[:, 1:4] = centers[selected, ::-1]
+
+        # Apply the optical width bounds for each channel.
         for channel, bounds in widths.items():
             same = channels[selected] == channel
             initial[same, 4:6] = bounds["nominal_sigma_zyx_um"][[1, 0]]
             lower[same, 4:6] = bounds["lower_sigma_zyx_um"][[1, 0]]
             upper[same, 4:6] = bounds["upper_sigma_zyx_um"][[1, 0]]
+
+        # Fit with Poisson MLE and compute position uncertainty.
         truncated = np.any(rois[selected, 1::2] - rois[selected, ::2] != roi_size, axis=1)
         batch = fit_rois(values, coordinates, counts, initial, model=model,
                          use_gpu=True, estimator="MLE", noise_model="poisson", bounds=(lower, upper),
                          return_covariance=True, quality_flags={"truncated": truncated},
                          covariance_batch_size=batch_size)
+
+        # Accumulate the results and release batch workspaces.
         cp.get_default_memory_pool().free_all_blocks()
         fits = _accumulate_fit_batch(fits, batch, int(start), len(candidates))
         del values, coordinates, counts, initial, limits, lower, upper, batch
+
+    # Preserve the result shapes when no candidates were detected.
     if fits is None:
         empty = np.empty((0, 0))
         fits = fit_rois(empty, (empty,) * 3, np.empty(0, int), np.empty((0, model.nparams)),
                         model=model, use_gpu=True, estimator="MLE", noise_model="poisson",
                         return_covariance=True, quality_flags={"truncated": np.empty(0, bool)})
+
+    # Assemble the fit evidence and optional static PSF diagnostics.
     result = LocalizationResult(metadata=metadata,
                                 parameter_names=tuple(model.parameter_names),
                                 candidate_centroids_zyx_px=candidates,
@@ -328,6 +386,8 @@ def _focus_diagnostics(centers):
     output = dict(available=False, reason="At least three noncollinear accepted centers are required")
     if len(centers) < 3:
         return output
+
+    # Fit and remove the focus gradient.
     z, y, x = centers.T
     design = np.column_stack((np.ones(len(z)), x, y))
     plane, _, rank, _ = np.linalg.lstsq(design, z, rcond=None)
@@ -335,6 +395,7 @@ def _focus_diagnostics(centers):
         return output
     residual = z - design @ plane
 
+    # Fit a movable curvature center to the plane residual.
     def curvature_model_fn(p):
         return p[2] * ((p[0] - x)**2 + (p[1] - y)**2)
 
@@ -361,11 +422,15 @@ def plot_calibration(result: LocalizationResult):
         centers = result.fit_results["fit_params"][ids][:, (3, 2, 1)]
         focus = volume["focus"]
         prefix = "" if len(result.volume_results) == 1 else f"c{channel}_"
+
+        # Set up the focus and residual panels with their colorbars.
         width_ratios = [1, 0.05, 0.05] * 3
         figure, axes = plt.subplots(1, len(width_ratios), figsize=(30, 10),
-                                     gridspec_kw={"width_ratios": width_ratios,
-                                                  "wspace": 0.2 / np.mean(width_ratios)})
+                                    gridspec_kw={"width_ratios": width_ratios,
+                                                 "wspace": 0.2 / np.mean(width_ratios)})
         figure.suptitle("Focus gradient and field curvature")
+
+        # Prepare physical coordinates and labels for each surface.
         coords = get_coords(volume["image_xy"].shape,
                             result.metadata["voxel_size_zyx_um"][1:],
                             origin=result.metadata["origin_zyx_um"][1:])
@@ -378,6 +443,8 @@ def plot_calibration(result: LocalizationResult):
             f"center=({curve[0]:.1f}, {curve[1]:.1f}) um",
             "residual shift after removing gradient and curvature",
         ]
+
+        # Plot the fitted focus surface and the two residuals.
         for i, (weights, title) in enumerate(zip(values, titles, strict=True)):
             limits = [[np.percentile(weights, 1), np.percentile(weights, 99)]] if i < 2 else None
             plot_bead_locations(volume["image_xy"],
@@ -391,6 +458,7 @@ def plot_calibration(result: LocalizationResult):
                                 gamma=0.5,
                                 axes=axes[3*i:3*(i+1)])
         figures[prefix + "focus_gradient_and_field_curvature"] = figure
+
     return figures
 
 
@@ -402,10 +470,14 @@ def to_trackpy_dataframe(table):
     metadata = json.loads(table.schema.metadata[b"localize_psf"])["metadata"]
     spacing = np.asarray(metadata["voxel_size_zyx_um"])[::-1]
     origin = np.asarray(metadata["origin_zyx_um"])[::-1]
+
+    # Extract fitted parameters and position errors from the Arrow lists.
     parameters = table["fit_params"].combine_chunks().flatten().to_numpy().reshape(-1, 7)
     covariance = table["center_covariance_zyx"].combine_chunks().flatten().flatten().to_numpy()
     covariance = covariance.reshape(-1, 3, 3)
     errors = np.sqrt(np.diagonal(covariance, axis1=1, axis2=2)[:, ::-1]) / spacing
+
+    # Build Trackpy positions, signals, widths and position errors.
     columns = dict(frame=np.asarray(table["candidate_timepoints"]),
                    channel=np.asarray(table["candidate_channels"]),
                    signal=parameters[:, 0], covariance_valid=np.asarray(table["covariance_valid"]))
@@ -414,6 +486,7 @@ def to_trackpy_dataframe(table):
         columns[axis + "um"] = parameters[:, index + 1]
         columns["size_" + axis] = parameters[:, 4 if index < 2 else 5] / spacing[index]
         columns["ep_" + axis] = errors[:, index]
+
     return pd.DataFrame(columns)
 
 
@@ -426,21 +499,26 @@ def save_trackpy(localizations_path: str | PathLike) -> Path:
     with pq.ParquetFile(localizations_path) as source:
         empty = to_trackpy_dataframe(source.schema_arrow.empty_table())
         schema = pa.Schema.from_pandas(empty, preserve_index=False)
+
+        # Convert and write one Parquet batch at a time.
         batches = (pa.RecordBatch.from_pandas(to_trackpy_dataframe(pa.Table.from_batches([batch])),
                                               schema=schema, preserve_index=False)
                    for batch in source.iter_batches(columns=_TRACKPY_SOURCE_COLUMNS))
         _write_parquet(pa.RecordBatchReader.from_batches(schema, batches), output)
+
     return output
 
 
 def save_localizations(result: LocalizationResult, output_dir: str | PathLike,
-                        export_trackpy: bool = False):
+                       export_trackpy: bool = False):
     """Write Parquet localizations, optional Trackpy data and ImageJ TIFF/PNG exports."""
     import pyarrow as pa
     import tifffile
 
     output = Path(output_dir)
     output.mkdir(parents=True, exist_ok=True)
+
+    # Collect candidate arrays, fit values and covariance flags.
     arrays = {name: value for name, value in result.fit_results.items() if isinstance(value, np.ndarray)}
     arrays.update(candidate_centroids_zyx_px=result.candidate_centroids_zyx_px,
                   candidate_centroids_zyx_um=result.candidate_centroids_zyx_um,
@@ -451,12 +529,16 @@ def save_localizations(result: LocalizationResult, output_dir: str | PathLike,
                   bounds_upper=result.fit_results["bounds"][1])
     for name, flags in result.fit_results.get("covariance_flags", {}).items():
         arrays[f"covariance_flag_{name}"] = flags
+
+    # Preserve vector and matrix columns as Arrow lists.
     columns = {}
     for name, values in arrays.items():
         column = pa.array(values.reshape(-1))
         for size in reversed(values.shape[1:]):
             column = pa.FixedSizeListArray.from_arrays(column, int(size))
         columns[name] = column
+
+    # Save the fit table with its geometry and diagnostic metadata.
     summary = dict(metadata=result.metadata,
                    parameter_names=result.parameter_names,
                    fit_states_key=result.fit_results["fit_states_key"],
@@ -467,6 +549,8 @@ def save_localizations(result: LocalizationResult, output_dir: str | PathLike,
     _write_parquet(table.to_reader(), output / "localizations.parquet")
     if export_trackpy:
         save_trackpy(output / "localizations.parquet")
+
+    # Export the averaged PSFs in the original ImageJ TIFF format.
     dz, dy, dx = result.metadata["voxel_size_zyx_um"]
     for (_, channel), volume in result.volume_results.items():
         if volume["average_psf"] is None:
@@ -482,6 +566,8 @@ def save_localizations(result: LocalizationResult, output_dir: str | PathLike,
                          resolution=(1/dx, 1/dy),
                          metadata={"Info": f"PSF, wavelength={wavelength:.03f} um",
                                    "unit": "um", "min": 0, "max": 1, "spacing": dz})
+
+    # Save the focus-gradient and field-curvature plots.
     for name, figure in plot_calibration(result).items():
         figure.savefig(output / f"{name}.png")
         plt.close(figure)
@@ -497,11 +583,14 @@ def cli(data: str = typer.Argument(..., help="OME-Zarr store or URL"),
         export_trackpy: bool = typer.Option(False, "--export-trackpy",
                                             help="Also write converged fits to trackpy.parquet")):
     """Localize 3D spots with optional static PSF calibration."""
+    # Read the settings and run localization.
     metadata = json.loads(metadata_path.read_text("utf-8"))
     try:
         result = localize_ufish_prior(data, metadata, output_dir=output_dir)
     except ValueError as error:
         raise typer.BadParameter(str(error)) from error
+
+    # Write the requested tables and optional calibration diagnostics.
     save_localizations(result, output_dir, export_trackpy=export_trackpy)
     typer.echo(f"Converged {result.fit_results['success'].sum()} / "
                f"{len(result.candidate_centroids_zyx_px)} candidates; saved {output_dir}")
