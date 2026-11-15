@@ -3,8 +3,11 @@ Test camera binning function
 """
 
 import unittest
+import pytest
 import numpy as np
 from localize_psf import camera
+
+pytestmark = pytest.mark.unit
 
 
 class TestCam(unittest.TestCase):

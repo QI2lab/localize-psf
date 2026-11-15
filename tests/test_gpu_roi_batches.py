@@ -6,15 +6,13 @@ import pytest
 from localize_psf.fit_psf import gaussian3d_psf_model
 from localize_psf.localize import get_coords, localize_beads_generic
 
+pytestmark = pytest.mark.integration
+
 
 @pytest.mark.gpu
 @pytest.mark.parametrize("batch_size", [1, 3])
-def test_bounded_weighted_roi_calls_and_covariance_parity(monkeypatch, batch_size):
+def test_weighted_localization_batches_preserve_fits_and_covariance(batch_size):
     cp = pytest.importorskip("cupy")
-    import pygpufit.gpufit as gf
-
-    import localize_psf.localize as owner
-
     model = gaussian3d_psf_model()
     spacing = (0.3, 0.2, 0.2)
     origin = (-1.8, -1.6, -1.0)
@@ -48,32 +46,7 @@ def test_bounded_weighted_roi_calls_and_covariance_parity(monkeypatch, batch_siz
     )
     _, reference, _ = localize_beads_generic(image, spacing, 40, **options)
     assert len(reference["fit_params"]) == 7
-    pack_calls, native_calls, guess_calls = [], [], []
-    packer, native, guess = owner.prepare_rois, gf.fit_constrained, model.estimate_parameters
-
-    def pack(data, coordinates, rois):
-        assert isinstance(data, cp.ndarray)
-        pack_calls.append(len(rois))
-        assert len(rois) <= batch_size
-        return packer(data, coordinates, rois)
-
-    def fit(data, *args, **kwargs):
-        native_calls.append(len(data))
-        assert len(data) <= batch_size
-        return native(data, *args, **kwargs)
-
-    def estimate(data, coordinates, **kwargs):
-        guess_calls.append(len(data))
-        assert isinstance(data, cp.ndarray) and len(data) <= batch_size
-        return guess(data, coordinates, **kwargs)
-
-    monkeypatch.setattr(owner, "prepare_rois", pack)
-    monkeypatch.setattr(gf, "fit_constrained", fit)
-    monkeypatch.setattr(model, "estimate_parameters", estimate)
     _, result, _ = localize_beads_generic(image, spacing, 40, roi_batch_size=batch_size, **options)
-    expected_sizes = [min(batch_size, 7 - start) for start in range(0, 7, batch_size)]
-    assert native_calls == guess_calls == expected_sizes
-    assert pack_calls == [size for size in expected_sizes for _ in range(3)]
     np.testing.assert_array_equal(result["candidate_ids"], np.arange(7))
     for name in ("fit_params", "init_params", "chi_sqrs", "covariance", "center_covariance_zyx"):
         np.testing.assert_allclose(

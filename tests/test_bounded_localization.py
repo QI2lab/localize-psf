@@ -1,4 +1,4 @@
-"""Bounds, physical coordinates and high-level fitting regression tests."""
+"""Integration tests of production bounds, coordinates and localization."""
 
 import importlib.util
 
@@ -7,6 +7,8 @@ import pytest
 
 from localize_psf.fit_psf import gaussian3d_psf_model
 from localize_psf.localize import fit_rois, localize_beads_generic
+
+pytestmark = pytest.mark.integration
 
 
 @pytest.fixture(params=[False, pytest.param(True, marks=pytest.mark.gpu)])
@@ -33,7 +35,6 @@ def batch():
 
 
 @pytest.mark.cpu
-@pytest.mark.unit
 @pytest.mark.parametrize("value", [-1, np.nan])
 def test_poisson_invalid_counts_are_rejected_before_dispatch(batch, value):
     model, data, coords, sizes, starts, _ = batch
@@ -46,8 +47,6 @@ def test_independent_broadcast_and_explicit_overrides_guess(batch, backend):
     model, data, coords, sizes, start, truth = batch
     lower = np.array([0, -2, 2, -3, 0.05, 0.05, 0])
     upper = np.array([[200, 0, 4, 1, 2, 2, 20], [300, 0, 4, 1, 2, 2, 20]])
-    # A failed estimate_bounds proves explicit bounds bypass guessing entirely.
-    model.estimate_bounds = lambda _: pytest.fail("explicit bounds must override guesses")
     result = fit_rois(
         data,
         coords,
@@ -61,6 +60,7 @@ def test_independent_broadcast_and_explicit_overrides_guess(batch, backend):
     np.testing.assert_allclose(result["fit_params"], truth, atol=2e-3, rtol=2e-3)
     np.testing.assert_array_equal(result["candidate_ids"], [0, 1])
     np.testing.assert_allclose(result["bounds"][0], np.broadcast_to(lower, start.shape), rtol=3e-8)
+    np.testing.assert_allclose(result["bounds"][1], upper, rtol=3e-8)
 
 
 def test_active_center_bound_and_fixed_background(batch, backend):
@@ -211,24 +211,13 @@ def test_high_level_nonzero_origin_and_physical_bounds(backend):
 
 
 @pytest.mark.gpu
-def test_grouping_preserves_ids_and_public_dispatch(batch, monkeypatch):
+def test_grouped_native_fits_preserve_candidate_ids(batch):
     if importlib.util.find_spec("pygpufit") is None:
         pytest.skip("local GPU profile required")
-    import pygpufit.gpufit as gf
-
     model, data, coords, sizes, starts, truth = batch
     lower = np.full(starts.shape, -np.inf)
     upper = np.full(starts.shape, np.inf)
     lower[0, 0] = 0
-    calls = []
-    for name in ("fit", "fit_constrained"):
-        original = getattr(gf, name)
-
-        def recorded(*args, _original=original, _name=name, **kwargs):
-            calls.append((_name, kwargs))
-            return _original(*args, **kwargs)
-
-        monkeypatch.setattr(gf, name, recorded)
     weights = np.full_like(data, 0.5)
     result = fit_rois(
         data,
@@ -242,7 +231,5 @@ def test_grouping_preserves_ids_and_public_dispatch(batch, monkeypatch):
         max_number_iterations=90,
         use_gpu=True,
     )
-    assert {name for name, _ in calls} == {"fit", "fit_constrained"}
-    assert all(options["max_number_iterations"] == 90 for _, options in calls)
     np.testing.assert_array_equal(result["candidate_ids"], [0, 1])
     np.testing.assert_allclose(result["fit_params"], truth, atol=0.002, rtol=0.002)

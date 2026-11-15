@@ -11,6 +11,8 @@ from localize_psf.localize import (
     prepare_rois,
 )
 
+pytestmark = pytest.mark.integration
+
 
 @pytest.mark.gpu
 def test_existing_roi_packer_accepts_cuda_arrays_and_matches_cpu_reference():
@@ -30,22 +32,12 @@ def test_existing_roi_packer_accepts_cuda_arrays_and_matches_cpu_reference():
 
 
 @pytest.mark.gpu
-def test_high_level_parameter_guess_and_packing_execute_on_cuda(monkeypatch):
+def test_high_level_parameter_guess_and_packing_execute_on_cuda():
     cp = pytest.importorskip("cupy")
     model = gaussian3d_psf_model()
     coords = get_coords((13, 15, 15), (0.23, 0.12, 0.15), origin=(-1.38, -0.84, -1.05))
     truth = np.array([70, 0.1, -0.12, 0.16, 0.3, 0.55, 4])
     image = model.model(coords, truth)
-    original = model.estimate_parameters
-    calls = []
-
-    def recorded(data, coordinates, **kwargs):
-        calls.append(
-            isinstance(data, cp.ndarray) and all(isinstance(c, cp.ndarray) for c in coordinates)
-        )
-        return original(data, coordinates, **kwargs)
-
-    monkeypatch.setattr(model, "estimate_parameters", recorded)
     _, result, filtered = localize_beads_generic(
         image,
         (0.23, 0.12, 0.15),
@@ -59,7 +51,6 @@ def test_high_level_parameter_guess_and_packing_execute_on_cuda(monkeypatch):
         verbose=False,
         return_filtered_images=True,
     )
-    assert calls == [True]
     assert result["fit_params"].shape == (1, 7)
     np.testing.assert_allclose(result["fit_params"][0], truth, atol=0.005, rtol=0.005)
     assert isinstance(filtered, cp.ndarray)

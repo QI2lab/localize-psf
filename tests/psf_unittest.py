@@ -1,9 +1,12 @@
 import unittest
+import pytest
 import numpy as np
 from numpy.testing import assert_allclose
 from numpy.fft import fftshift, fftfreq
 from localize_psf import fit_psf
 from localize_psf.camera import bin
+
+pytestmark = pytest.mark.unit
 
 
 class TestPSF(unittest.TestCase):

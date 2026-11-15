@@ -3,8 +3,11 @@ Test Jacobians of fit functions
 """
 
 import unittest
+import pytest
 import numpy as np
 from localize_psf import fit
+
+pytestmark = pytest.mark.unit
 
 
 class TestFit(unittest.TestCase):

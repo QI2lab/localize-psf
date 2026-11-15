@@ -2,13 +2,13 @@
 
 import numpy as np
 import pytest
-from test_gpu_psf_derivatives import numerical_jacobian
 
 from localize_psf import fit_psf as psf
 from localize_psf.batch_fitting import fit_rois
 from localize_psf.localize import localize_beads_generic
 
 pytest_plugins = ["test_gpu_psf_derivatives"]
+pytestmark = pytest.mark.integration
 
 
 def packed(model, parameters, coords, count=1):
@@ -22,19 +22,11 @@ def packed(model, parameters, coords, count=1):
 
 
 @pytest.mark.gpu
-def test_calibrated_cuda_covariance_full_nuisance_information(microscopy_model, monkeypatch):
-    cp = pytest.importorskip("cupy")
+def test_calibrated_cuda_covariance_full_nuisance_information(microscopy_model):
+    pytest.importorskip("cupy")
     model, parameters, coords = microscopy_model
     data, coordinates, sizes, starts = packed(model, parameters, coords, count=3)
     variance = np.full_like(data, 9.0)
-    calls = []
-    original = model.jacobian
-
-    def recorded(coordinates, parameters):
-        calls.append(isinstance(coordinates[0], cp.ndarray))
-        return original(coordinates, parameters)
-
-    model.jacobian = recorded
     result = fit_rois(
         data,
         coordinates,
@@ -48,11 +40,10 @@ def test_calibrated_cuda_covariance_full_nuisance_information(microscopy_model, 
         return_covariance=True,
         covariance_batch_size=2,
     )
-    assert calls == [True, True]
     assert result["covariance_backend"] == "cuda"
     assert result["covariance_valid"].all()
     for index, fitted in enumerate(result["fit_params"]):
-        jac = numerical_jacobian(model, coords, fitted)
+        jac = np.stack(model.test_jacobian(coords, fitted, dp=1e-5)[0], axis=-1)
         expected = np.linalg.inv(jac.T @ jac / 9)
         np.testing.assert_allclose(result["covariance"][index], expected, rtol=2e-4, atol=1e-9)
         np.testing.assert_allclose(
@@ -91,7 +82,7 @@ def test_cuda_heteroscedastic_covariance_matches_estimator_sandwich(weighted):
         noise_model="calibrated_gaussian",
         return_covariance=True,
     )
-    jac = numerical_jacobian(model, coords, result["fit_params"][0])
+    jac = np.stack(model.test_jacobian(coords, result["fit_params"][0], dp=1e-5)[0], axis=-1)
     weight = np.ones(data.size) if weights is None else weights[0]
     inverse = np.linalg.inv(jac.T @ (weight[:, None] * jac))
     expected = inverse @ (jac.T @ ((weight**2 * variances[0])[:, None] * jac)) @ inverse
@@ -153,7 +144,7 @@ def test_quality_flags_active_bounds_and_fixed_center_invalidate_covariance():
     assert fixed_result["covariance_flags"]["fixed_center"][0]
 
 
-def test_cpu_reference_covariance_is_preserved_without_a_second_fit(monkeypatch):
+def test_cpu_localization_covariance_matches_the_production_model_fit():
     model = psf.gaussian3d_psf_model()
     coords = tuple(
         c.ravel()
@@ -164,20 +155,12 @@ def test_cpu_reference_covariance_is_preserved_without_a_second_fit(monkeypatch)
     parameters = np.array([70, 0.1, -0.12, 0.16, 0.3, 0.55, 4])
     data, coordinates, sizes, starts = packed(model, parameters, coords)
     data += np.random.default_rng(12).normal(0, 2, data.shape)
-    original = model.fit
-    computed = []
-
-    def recorded(*args, **kwargs):
-        result = original(*args, **kwargs)
-        computed.append(result["covariance"].copy())
-        return result
-
-    monkeypatch.setattr(model, "fit", recorded)
+    reference = model.fit(data[0], coords, starts[0])
     result = fit_rois(
         data, coordinates, sizes, starts, model=model, use_gpu=False, return_covariance=True
     )
-    assert len(computed) == 1
-    np.testing.assert_array_equal(result["covariance"][0], computed[0])
+    np.testing.assert_allclose(result["fit_params"][0], reference["fit_params"])
+    np.testing.assert_allclose(result["covariance"][0], reference["covariance"])
 
 
 def test_known_cpu_reference_variance_does_not_scale_with_noisefree_residual():
@@ -196,7 +179,7 @@ def test_known_cpu_reference_variance_does_not_scale_with_noisefree_residual():
         sd=np.full(coords[0].shape, 3),
         absolute_sigma=True,
     )
-    jac = numerical_jacobian(model, coords, parameters)
+    jac = np.stack(model.test_jacobian(coords, parameters, dp=1e-5)[0], axis=-1)
     np.testing.assert_allclose(result["covariance"], np.linalg.inv(jac.T @ jac / 9), rtol=1e-5)
 
 

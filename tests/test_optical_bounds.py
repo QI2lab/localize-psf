@@ -39,6 +39,7 @@ def test_cuda_optical_widths_and_anisotropic_sampling_reference(floor):
     "change",
     ["na", "wavelength", "index", "spacing", "range", "floor", "undersampled"],
 )
+@pytest.mark.unit
 def test_invalid_optics_cannot_produce_arbitrary_bounds(change):
     from localize_psf.optical_bounds import gaussian_width_bounds
 
@@ -63,6 +64,7 @@ def test_invalid_optics_cannot_produce_arbitrary_bounds(change):
 
 
 @pytest.mark.gpu
+@pytest.mark.integration
 def test_named_optical_initial_values_reach_actual_bounded_cuda_fit():
     cp = pytest.importorskip("cupy")
     from localize_psf.fit_psf import gaussian3d_psf_model
@@ -110,6 +112,7 @@ def test_named_optical_initial_values_reach_actual_bounded_cuda_fit():
 @pytest.mark.parametrize(
     "values", [{"unknown": 1}, {"sz": np.nan}, {"sz": [1, 2]}, {"sz": True}, [1]]
 )
+@pytest.mark.unit
 def test_invalid_named_initialization_is_rejected_even_for_empty_images(values):
     from localize_psf.localize import localize_beads_generic
 
