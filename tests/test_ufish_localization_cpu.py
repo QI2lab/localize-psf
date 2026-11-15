@@ -117,7 +117,7 @@ def test_parquet_update_is_atomic(localization, tmp_path, monkeypatch):
     path = tmp_path / "centroids.parquet"
     initial = pa.table(dict(timepoint=[0], channel=[1], z_px=[2.0], y_px=[3.0], x_px=[4.0]))
     updated = pa.concat_tables([initial, initial])
-    localization._write_parquet(initial, path)
+    localization._write_parquet(initial.to_reader(), path)
 
     def interrupt(*args):
         raise RuntimeError("simulated crash before replacement")
@@ -125,9 +125,9 @@ def test_parquet_update_is_atomic(localization, tmp_path, monkeypatch):
     with monkeypatch.context() as patch:
         patch.setattr(Path, "replace", interrupt)
         with pytest.raises(RuntimeError, match="simulated crash"):
-            localization._write_parquet(updated, path)
+            localization._write_parquet(updated.to_reader(), path)
     assert pq.read_table(path).equals(initial)
-    localization._write_parquet(updated, path)
+    localization._write_parquet(updated.to_reader(), path)
     assert pq.read_table(path).equals(updated)
     assert {p.name for p in tmp_path.iterdir()} == {"centroids.parquet"}
 

@@ -27,6 +27,9 @@ from localize_psf.localize import (
 from localize_psf.optical_bounds import gaussian_width_bounds
 from localize_psf.rois import get_centered_rois, get_roi_size
 
+_TRACKPY_SOURCE_COLUMNS = ("fit_params", "center_covariance_zyx", "success", "covariance_valid",
+                           "candidate_timepoints", "candidate_channels")
+
 
 @dataclass
 class LocalizationResult:
@@ -114,13 +117,15 @@ def _psf_diagnostics(data, result, coords):
             volume["average_psf_coords_zyx_um"] = tuple(get_psf_coords(size, spacing))
 
 
-def _write_parquet(table, path):
+def _write_parquet(reader, path):
     """Publish a closed, flushed Parquet file without exposing partial writes."""
     import pyarrow.parquet as pq
 
     temporary = path.with_name("." + path.name + ".tmp")
     with temporary.open("wb") as stream:
-        pq.write_table(table, stream)
+        with pq.ParquetWriter(stream, reader.schema) as writer:
+            for batch in reader:
+                writer.write_batch(batch)
         stream.flush()
         fsync(stream.fileno())
     temporary.replace(path)
@@ -251,7 +256,7 @@ def localize_ufish_prior(data, metadata: Mapping | None = None,
                 completed.append(key)
                 status = json.dumps(dict(identity, completed_volumes=completed)).encode("utf-8")
                 saved = saved.replace_schema_metadata({b"localize_psf": status})
-                _write_parquet(saved, checkpoint)
+                _write_parquet(saved.to_reader(), checkpoint)
         candidates.append(points)
         times.append(np.full(len(points), key[0], int))
         channels.append(np.full(len(points), key[1], int))
@@ -389,8 +394,48 @@ def plot_calibration(result: LocalizationResult):
     return figures
 
 
-def save_localizations(result: LocalizationResult, output_dir: str | PathLike):
-    """Write Parquet localizations and original ImageJ TIFF/PNG calibration exports."""
+def to_trackpy_dataframe(table):
+    """Convert a localization Arrow table to Trackpy columns for converged fits."""
+    import pandas as pd
+
+    table = table.select(_TRACKPY_SOURCE_COLUMNS).filter(table["success"])
+    metadata = json.loads(table.schema.metadata[b"localize_psf"])["metadata"]
+    spacing = np.asarray(metadata["voxel_size_zyx_um"])[::-1]
+    origin = np.asarray(metadata["origin_zyx_um"])[::-1]
+    parameters = table["fit_params"].combine_chunks().flatten().to_numpy().reshape(-1, 7)
+    covariance = table["center_covariance_zyx"].combine_chunks().flatten().flatten().to_numpy()
+    covariance = covariance.reshape(-1, 3, 3)
+    errors = np.sqrt(np.diagonal(covariance, axis1=1, axis2=2)[:, ::-1]) / spacing
+    columns = dict(frame=np.asarray(table["candidate_timepoints"]),
+                   channel=np.asarray(table["candidate_channels"]),
+                   signal=parameters[:, 0], covariance_valid=np.asarray(table["covariance_valid"]))
+    for index, axis in enumerate("xyz"):
+        columns[axis] = (parameters[:, index + 1] - origin[index]) / spacing[index]
+        columns[axis + "um"] = parameters[:, index + 1]
+        columns["size_" + axis] = parameters[:, 4 if index < 2 else 5] / spacing[index]
+        columns["ep_" + axis] = errors[:, index]
+    return pd.DataFrame(columns)
+
+
+def save_trackpy(localizations_path: str | PathLike) -> Path:
+    """Stream saved Gaussian localizations to an additional trackpy.parquet."""
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+
+    output = Path(localizations_path).with_name("trackpy.parquet")
+    with pq.ParquetFile(localizations_path) as source:
+        empty = to_trackpy_dataframe(source.schema_arrow.empty_table())
+        schema = pa.Schema.from_pandas(empty, preserve_index=False)
+        batches = (pa.RecordBatch.from_pandas(to_trackpy_dataframe(pa.Table.from_batches([batch])),
+                                              schema=schema, preserve_index=False)
+                   for batch in source.iter_batches(columns=_TRACKPY_SOURCE_COLUMNS))
+        _write_parquet(pa.RecordBatchReader.from_batches(schema, batches), output)
+    return output
+
+
+def save_localizations(result: LocalizationResult, output_dir: str | PathLike,
+                        export_trackpy: bool = False):
+    """Write Parquet localizations, optional Trackpy data and ImageJ TIFF/PNG exports."""
     import pyarrow as pa
     import tifffile
 
@@ -419,7 +464,9 @@ def save_localizations(result: LocalizationResult, output_dir: str | PathLike):
                             for (t, c), v in result.volume_results.items()})
     encoded = json.dumps(summary, default=lambda v: v.tolist() if isinstance(v, np.ndarray) else v.item())
     table = pa.table(columns).replace_schema_metadata({b"localize_psf": encoded.encode("utf-8")})
-    _write_parquet(table, output / "localizations.parquet")
+    _write_parquet(table.to_reader(), output / "localizations.parquet")
+    if export_trackpy:
+        save_trackpy(output / "localizations.parquet")
     dz, dy, dx = result.metadata["voxel_size_zyx_um"]
     for (_, channel), volume in result.volume_results.items():
         if volume["average_psf"] is None:
@@ -446,14 +493,16 @@ app = typer.Typer(add_completion=False, no_args_is_help=True)
 @app.command()
 def cli(data: str = typer.Argument(..., help="OME-Zarr store or URL"),
         output_dir: Path = typer.Option(..., "--output-dir"),
-        metadata_path: Path = typer.Option(..., "--metadata", exists=True, dir_okay=False)):
+        metadata_path: Path = typer.Option(..., "--metadata", exists=True, dir_okay=False),
+        export_trackpy: bool = typer.Option(False, "--export-trackpy",
+                                            help="Also write converged fits to trackpy.parquet")):
     """Localize 3D spots with optional static PSF calibration."""
     metadata = json.loads(metadata_path.read_text("utf-8"))
     try:
         result = localize_ufish_prior(data, metadata, output_dir=output_dir)
     except ValueError as error:
         raise typer.BadParameter(str(error)) from error
-    save_localizations(result, output_dir)
+    save_localizations(result, output_dir, export_trackpy=export_trackpy)
     typer.echo(f"Converged {result.fit_results['success'].sum()} / "
                f"{len(result.candidate_centroids_zyx_px)} candidates; saved {output_dir}")
 

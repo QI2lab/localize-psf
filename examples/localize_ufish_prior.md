@@ -146,9 +146,42 @@ sigma factors `[0.5, 2.0]` and default batching, diagnostics and ROI settings.
 Image geometry is read from OME-Zarr.
 
 ```powershell
-uv run --locked --extra gpu --extra example python examples/localize_ufish_prior.py spots.ome.zarr --metadata examples/localize_ufish_prior.json --output-dir localizations
+uv run --locked --extra gpu --extra example python examples/localize_ufish_prior.py spots.ome.zarr --metadata examples/localize_ufish_prior.json --output-dir localizations --export-trackpy
 uv run --locked --extra gpu --extra example python examples/localize_ufish_prior.py --help
 ```
+
+# Trackpy export
+
+`--export-trackpy` writes an additional `trackpy.parquet` containing all converged
+fits. It retains `covariance_valid`; unavailable position uncertainties remain
+NaN. Positions, widths and amplitude come from the Gaussian fit.
+
+| Columns | Values |
+| --- | --- |
+| `x`, `y`, `z` | Fitted pixel coordinates, relative to the image origin |
+| `xum`, `yum`, `zum` | Fitted positions in micrometres, including the image origin |
+| `frame`, `channel` | Original integer timepoint and channel indices |
+| `signal` | Gaussian amplitude |
+| `size_x`, `size_y`, `size_z` | Gaussian sigma in pixels along each axis |
+| `ep_x`, `ep_y`, `ep_z` | Position standard errors in pixels along each axis |
+| `covariance_valid` | Whether position covariance passed the production checks |
+
+Mass and raw-intensity columns are omitted. For 3D linking, use
+`pos_columns=['xum', 'yum', 'zum']` as in the
+[Trackpy tutorial](https://soft-matter.github.io/trackpy/dev/tutorial/tracking-3d.html),
+and process channels independently. Trackpy itself is only needed for linking.
+
+Existing fit files can be exported without refitting:
+
+```python
+from examples.localize_ufish_prior import save_trackpy
+
+save_trackpy("localizations/localizations.parquet")
+```
+
+`save_trackpy` streams the required columns and writes the additional file
+atomically. `to_trackpy_dataframe` converts an Arrow table to a pandas DataFrame.
+For programmatic exports, set `export_trackpy=True` in `save_localizations`.
 
 # Results and tests
 

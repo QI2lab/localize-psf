@@ -194,7 +194,14 @@ def test_localization_and_cli(localization, tmp_path, monkeypatch):
         ),
         encoding="utf-8",
     )
-    arguments = [str(path), "--metadata", str(metadata), "--output-dir", str(output)]
+    arguments = [
+        str(path),
+        "--metadata",
+        str(metadata),
+        "--output-dir",
+        str(output),
+        "--export-trackpy",
+    ]
     open_figures = localization.plt.get_fignums()
     cli = CliRunner().invoke(localization.app, arguments)
     assert cli.exit_code == 0, (cli.output, cli.exception)
@@ -208,9 +215,16 @@ def test_localization_and_cli(localization, tmp_path, monkeypatch):
     assert summary["metadata"]["fit_roi_size_um"] == [1.4, 1, 1]
     assert summary["metadata"]["psf_roi_size_px"] == [7, 11, 11]
     assert summary["volumes"]["t0_c1"]["focus"]["available"]
+    trackpy = pq.read_table(output / "trackpy.parquet").to_pandas()
+    success = np.asarray(saved["success"])
+    parameters = np.asarray(saved["fit_params"].to_pylist())[success]
+    assert len(trackpy) == int(success.sum())
+    np.testing.assert_allclose(trackpy[["xum", "yum", "zum"]], parameters[:, 1:4])
+    np.testing.assert_allclose(trackpy["signal"], parameters[:, 0])
     assert {p.name for p in output.iterdir()} == {
         "centroids.parquet",
         "localizations.parquet",
+        "trackpy.parquet",
         "psf.tif",
         "focus_gradient_and_field_curvature.png",
     }
