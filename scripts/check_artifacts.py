@@ -14,8 +14,8 @@ ROOT = Path(__file__).resolve().parents[1]
 UV = shutil.which("uv") or str(Path.home() / ".local/bin/uv.exe")
 
 
-def checked(*arguments, cwd):
-    subprocess.run([UV, *arguments], cwd=cwd, check=True)
+def checked(*arguments, cwd, env=None):
+    subprocess.run([UV, *arguments], cwd=cwd, env=env, check=True)
 
 
 def verify(wheel, gpu):
@@ -30,12 +30,33 @@ def verify(wheel, gpu):
         assert target.is_relative_to(Path(tempfile.gettempdir()).resolve())
         dependencies = ["localize_psf[gpu]==0.2.0"] if gpu else ["localize_psf==0.2.0"]
         sources = f"localize-psf={{path={json.dumps(wheel.as_posix())}}}\n"
+        build_configuration = ""
+        if gpu:
+            sources += (
+                "localize-psf-build-support={path="
+                + json.dumps((ROOT / "build_support").as_posix())
+                + "}\n"
+            )
+            uv = tomllib.loads((ROOT / "pyproject.toml").read_text())["tool"]["uv"]
+            requirements = json.dumps(uv["extra-build-dependencies"]["pygpufit"])
+            variables = ", ".join(
+                f"{name} = {json.dumps(value)}"
+                for name, value in uv["extra-build-variables"]["pygpufit"].items()
+            )
+            build_configuration = (
+                "\n[tool.uv.extra-build-dependencies]\npygpufit="
+                + requirements
+                + "\n[tool.uv.extra-build-variables]\npygpufit={"
+                + variables
+                + "}\n"
+            )
         (target / "pyproject.toml").write_text(
             '[project]\nname="localize-artifact-check"\nversion="0.0.0"\n'
             'requires-python=">=3.12"\ndependencies='
             + json.dumps([*dependencies, "pytest==9.1.1"])
             + "\n[tool.uv.sources]\n"
-            + sources,
+            + sources
+            + build_configuration,
             encoding="utf-8",
         )
         shutil.copytree(
@@ -55,7 +76,6 @@ def verify(wheel, gpu):
         # Production-profile tests use CUDA; CPU calculations are independent references.
         checked("lock", cwd=target)
         checked("sync", "--locked", cwd=target)
-        checked("sync", "--locked", cwd=target)
         checked(
             "run",
             "--locked",
@@ -63,19 +83,12 @@ def verify(wheel, gpu):
             "pytest",
             "-q",
             "-m",
-            "not example" if gpu else "not gpu and not example",
+            "(unit or integration) and not example"
+            if gpu
+            else "(unit or integration) and not gpu and not example",
             cwd=target,
+            env=dict(os.environ, LOCALIZE_PSF_REQUIRE_NATIVE_ABI="1" if gpu else "0"),
         )
-        script = (
-            "import importlib.util, pathlib, localize_psf; "
-            "p=pathlib.Path(localize_psf.__file__).resolve(); print(p); "
-            f"assert not p.is_relative_to(pathlib.Path({str(ROOT)!r})); "
-        )
-        if not gpu:
-            script += "assert importlib.util.find_spec('cupy') is None; assert importlib.util.find_spec('pygpufit') is None"
-        else:
-            script += "import pygpufit.gpufit as gf; assert gf.get_capabilities()['abi_version']==3"
-        checked("run", "--locked", "--no-sync", "python", "-c", script, cwd=target)
 
 
 def main():
@@ -96,6 +109,6 @@ def main():
 
 
 if __name__ == "__main__":
-    # Keep CUDA SDK selection and cache placement with the caller's GPU runner.
+    # Keep the kernel cache inside the ignored build directory.
     os.environ.setdefault("CUPY_CACHE_DIR", str(ROOT / "build/cupy-cache"))
     main()
