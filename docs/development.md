@@ -175,9 +175,9 @@ Centroid checkpoints include source geometry, weights, dimensional mode, blend,
 threshold, inference batch size and preprocessing policy. Changing detection
 settings requires another output directory; fit-only changes reuse centroids.
 
-`LocalizationConfig.save_batch_file` saves current JSON and a quoted `.sh` or
-`.ps1` file using the caller's interpreter. It returns the filename and terminal
-command, and never launches a process. The example script retains its CLI and
+Interactive callers save current JSON with `LocalizationConfig.save` and
+copy a quoted terminal command using their own installed interpreter. They do
+not launch or manage a batch process. The example script retains its CLI and
 exports through the packaged workflow. Upstream tests call the production
 adapters directly; plugin UI tests stay in the plugin repository.
 

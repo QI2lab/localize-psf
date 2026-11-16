@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import shlex
-import sys
 from pathlib import Path
 from typing import Annotated, Literal, Self
 
@@ -155,61 +153,3 @@ class LocalizationConfig(BaseModel):
         Validated version 1 settings; invalid fields raise pydantic.ValidationError.
         """
         return cls.model_validate_json(Path(path).read_text(encoding="utf-8"))
-
-    def save_batch_file(
-        self, path: str | Path, output_dir: str | Path, *, interpreter: str = sys.executable
-    ) -> tuple[Path, str]:
-        """Save current JSON and a runnable terminal file without starting a process.
-
-        Parameters
-        ----------
-        path : str or pathlib.Path
-            JSON destination; a sibling ``<stem>.batch.sh`` or ``.batch.ps1`` is written.
-        output_dir : str or pathlib.Path
-            Future result directory; it is not created by this method.
-        interpreter : str, optional
-            Python executable from the caller's installed uv CUDA environment.
-
-        Returns
-        -------
-        script : pathlib.Path
-            Absolute batch filename. POSIX scripts are executable by their owner.
-        command : str
-            Shell/PowerShell command with quoted paths, also suitable for a clipboard.
-
-        Notes
-        -----
-        Relative paths resolve against the caller's current working directory.
-        The command uses this configuration's input URI and never manages a subprocess.
-        """
-        if not self.input_uri:
-            raise ValueError("A batch file requires an input URI")
-        path = Path(path).resolve()
-        self.save(path)
-        source = self.input_uri if "://" in self.input_uri else str(Path(self.input_uri).resolve())
-        arguments = [
-            interpreter,
-            "-m",
-            "localize_psf.batch",
-            source,
-            "--metadata",
-            str(path),
-            "--output-dir",
-            str(Path(output_dir).resolve()),
-        ]
-        windows = sys.platform == "win32"
-        command = (
-            "& " + " ".join("'" + argument.replace("'", "''") + "'" for argument in arguments)
-            if windows
-            else shlex.join(arguments)
-        )
-        script = path.with_name(path.stem + ".batch" + (".ps1" if windows else ".sh"))
-        script.write_text(
-            (command + "\nexit $LASTEXITCODE\n")
-            if windows
-            else "#!/bin/sh\nexec " + command + "\n",
-            encoding="utf-8-sig" if windows else "utf-8",
-        )
-        if not windows:
-            script.chmod(script.stat().st_mode | 0o100)
-        return script, command

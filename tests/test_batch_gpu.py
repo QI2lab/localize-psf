@@ -195,7 +195,7 @@ def test_empty_cancelled_and_infeasible_shared_fits(localization, scene, tmp_pat
             fit_spots(volume, invalid, config)
 
 
-def test_saved_batch_file_runs_in_installed_environment_with_explicit_calibration(scene, tmp_path):
+def test_exported_configuration_runs_batch_with_explicit_calibration(scene, tmp_path):
     import pyarrow.parquet as pq
     import tifffile
 
@@ -210,12 +210,18 @@ def test_saved_batch_file_runs_in_installed_environment_with_explicit_calibratio
     )
     config = config.model_copy(update={"input_uri": str(path)})
     output = tmp_path / "output's fits"
-    script, _ = config.save_batch_file(
-        tmp_path / "settings.json", output, interpreter=sys.executable
-    )
-    command = (
-        ["pwsh", "-NoProfile", "-File", str(script)] if sys.platform == "win32" else [str(script)]
-    )
+    settings = tmp_path / "settings.json"
+    config.save(settings)
+    command = [
+        sys.executable,
+        "-m",
+        "localize_psf.batch",
+        str(path),
+        "--metadata",
+        str(settings),
+        "--output-dir",
+        str(output),
+    ]
     completed = subprocess.run(command, cwd=tmp_path, capture_output=True, text=True, timeout=120)
     assert completed.returncode == 0, completed.stderr + completed.stdout
     table = pq.read_table(output / "localizations.parquet")

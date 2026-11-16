@@ -102,33 +102,12 @@ def test_version_one_json_rejects_coercion_and_unsupported_settings(values):
 
 
 @pytest.mark.example
-def test_exported_example_roundtrip_and_batch_file(tmp_path):
-    import os
-    import shlex
-    import sys
+def test_exported_example_roundtrip(tmp_path):
     from pathlib import Path
 
     supplied = Path(__file__).parents[1] / "examples/localization.json"
     config = LocalizationConfig.load(supplied)
     config = config.model_copy(update={"input_uri": str(tmp_path / "a's image.ome.tif")})
     destination = tmp_path / "a's current settings.json"
-    output = tmp_path / "a's results"
-    script, command = config.save_batch_file(destination, output)
+    config.save(destination)
     assert LocalizationConfig.load(destination) == config
-    assert not output.exists()
-    assert script.is_file()
-    if sys.platform == "win32":
-        assert command.startswith("& '") and "a''s image.ome.tif" in command
-        assert "exit $LASTEXITCODE" in script.read_text()
-    else:
-        assert os.access(script, os.X_OK)
-        assert shlex.split(command) == [
-            sys.executable,
-            "-m",
-            "localize_psf.batch",
-            config.input_uri,
-            "--metadata",
-            str(destination),
-            "--output-dir",
-            str(output),
-        ]
