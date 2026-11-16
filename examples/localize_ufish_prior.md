@@ -51,8 +51,8 @@ metadata = {
 }
 result = localize_ufish_prior("spots.ome.zarr", metadata, output_dir="localizations")
 
-accepted = result.fit_results["success"]
-parameters = result.fit_results["fit_params"][accepted]
+accepted = result["fit_results"]["success"]
+parameters = result["fit_results"]["fit_params"][accepted]
 centers_zyx_um = parameters[:, (3, 2, 1)]
 ```
 
@@ -62,6 +62,24 @@ width bounds use the production `gaussian_width_bounds` helper with no sampling
 floor. Amplitude/background are nonnegative and centers stay within their ROI.
 All candidates keep their result rows. Convergence, active bounds, truncation
 and Poisson covariance are reported by production `fit_rois`.
+
+Interactive callers use the same settings and fit policy. Given a source array
+`data` and a `LocalizationConfig` named `config`, preview preparation returns
+the image and its physical crop origin directly:
+
+```python
+from localize_psf.processing import Detector, fit_spots, prepare_volume
+
+image, origin = prepare_volume(data, config)
+detector = Detector()
+points, enhanced = detector.detect(image, config)
+detector.release()
+fits = fit_spots(image, points, config, origin_zyx_um=origin)
+```
+
+Keep the detector alive while tuning thresholds to reuse enhancement, then
+release it before fitting. Spacing comes from `config`; a crop's returned origin
+is passed explicitly. Batch and preview results are ordinary dictionaries.
 
 # Metadata and batching
 
@@ -130,7 +148,7 @@ selected. Static channels are calibrated independently.
 ```python
 metadata.update(psf_diagnostics=True, psf_roi_size_px=(11, 21, 21))
 result = localize_ufish_prior("beads.ome.zarr", metadata)
-volume = result.volume_results[(0, 0)]
+volume = result["volume_results"][(0, 0)]
 average_psf = volume["average_psf"]
 focus = volume["focus"]
 ```
@@ -194,7 +212,8 @@ For programmatic exports, set `export_trackpy=True` in `save_localizations`.
 
 # Results and tests
 
-`LocalizationResult` contains metadata, parameter names, candidate coordinates
+The returned dictionary (`LocalizationResult` is a type alias) contains metadata,
+parameter names, candidate coordinates
 in pixels/micrometres, source time/channel indices, ROI bounds and the production
 `fit_rois` result. Poisson deviance is `fit_results["chi_sqrs"]`; truncation is
 `fit_results["covariance_flags"]["truncated"]`.

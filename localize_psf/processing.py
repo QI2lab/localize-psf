@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from concurrent.futures import CancelledError
-from dataclasses import dataclass
 from pathlib import Path
 from threading import Event
 from typing import TYPE_CHECKING, Any
@@ -26,28 +25,17 @@ if TYPE_CHECKING:
 type FitResults = dict[str, Any]
 
 
-@dataclass(frozen=True)
-class Volume:
-    """Original ZYX counts and physical calibration for a volume or XY plane.
-
-    ``image`` has shape (Z,Y,X), without enhancement or rescaling. ``spacing``
-    and ``origin`` are ZYX voxel sizes and first-voxel coordinates in µm.
-    """
-
-    image: np.ndarray
-    spacing: tuple[float, float, float]
-    origin: tuple[float, float, float]
-
-
-def prepare_volume(data: np.ndarray | TensorStore, config: LocalizationConfig) -> Volume:
+def prepare_volume(
+    data: np.ndarray | TensorStore, config: LocalizationConfig
+) -> tuple[np.ndarray, tuple[float, float, float]]:
     """Read the configured preview crop as original float32 ZYX counts.
 
     ``data`` is a NumPy array or lazy TensorStore in ``config.preview.axes``
     order. Preview settings select T/C, crop and, for 2D, one XY plane.
     Only that selection is materialized; no projection is performed.
 
-    Return a Volume with the exported ZYX spacing and the crop-first-voxel
-    origin in µm, applying the crop offset once. Incompatible selections,
+    Return the image and its crop-first-voxel ZYX origin in µm, applying the
+    crop offset once. Spacing remains in config. Incompatible selections,
     geometry or counts raise ValueError; Poisson MLE requires nonnegative counts.
     """
     settings = config.preview
@@ -83,19 +71,7 @@ def prepare_volume(data: np.ndarray | TensorStore, config: LocalizationConfig) -
     if min(image.shape[1:]) < 3:
         raise ValueError("Preview must contain at least three pixels along X and Y")
     origin = np.asarray(config.origin_zyx_um) + crop[:, 0] * config.voxel_size_zyx_um
-    return Volume(image, config.voxel_size_zyx_um, tuple(origin))
-
-
-@dataclass(frozen=True)
-class Detection:
-    """U-FISH enhancement and crop-local ZYX pixel priors.
-
-    ``enhanced`` is float32 ZYX for 3D or YX for 2D. ``points`` is a finite
-    float64 (N,3) array; 2D Z coordinates are zero.
-    """
-
-    enhanced: NDArray[np.float32]
-    points: NDArray[np.float64]
+    return image, tuple(origin)
 
 
 class Detector:
@@ -105,17 +81,18 @@ class Detector:
         self._detector: UFish | None = None
         self._weights: str | None = None
         self._key: tuple[int, bool, int, str, str] | None = None
-        self._preview: Volume | None = None
+        self._image: np.ndarray | None = None
         self._enhanced: NDArray[np.float32] | None = None
 
     def detect(
-        self, preview: Volume, config: LocalizationConfig, *, cache: bool = True
-    ) -> Detection:
+        self, image: np.ndarray, config: LocalizationConfig, *, cache: bool = True
+    ) -> tuple[NDArray[np.float64], NDArray[np.float32]]:
         """Run CUDA U-FISH with the exported weights and inference settings.
 
-        ``preview`` supplies original ZYX counts (singleton Z in 2D). ``config``
+        ``image`` supplies original ZYX counts (singleton Z in 2D). ``config``
         supplies weights, dimensional mode, blending, threshold and batch size.
-        Return the enhancement and crop-local ZYX pixel priors as a Detection.
+        Return (crop-local ZYX pixel priors, enhancement). Priors have shape
+        (N,3), with zero Z in 2D; enhancement is float32 ZYX or YX respectively.
 
         With ``cache=True``, retain the image identity and enhancement so threshold
         changes only recall spots. A new image, weights, dimensional mode, blend
@@ -125,15 +102,17 @@ class Detector:
         from ufish.api import UFish
 
         axes = "yx" if config.fit_model == "2d" else "zyx"
+        if image.ndim != 3 or (axes == "yx" and image.shape[0] != 1):
+            raise ValueError("Detection requires ZYX counts, with a single XY plane in 2D")
         key = (
-            id(preview),
+            id(image),
             config.blend_3d,
             config.inference_batch_size,
             config.ufish_weights,
             axes,
         )
         if not cache or self._key != key:
-            self._enhanced = self._preview = self._key = None
+            self._enhanced = self._image = self._key = None
             if self._detector is None or self._weights != config.ufish_weights:
                 self._weights = None
                 self._detector = UFish(device="cuda")
@@ -143,9 +122,8 @@ class Detector:
                 else:
                     self._detector.load_weights(weights_file=weights)
                 self._weights = weights
-            image = preview.image[0] if axes == "yx" else preview.image
             spots, enhanced = self._detector.predict(
-                image,
+                image[0] if axes == "yx" else image,
                 axes=axes,
                 blend_3d=config.blend_3d,
                 batch_size=config.inference_batch_size,
@@ -153,7 +131,7 @@ class Detector:
             )
             if cache:
                 self._enhanced = enhanced
-                self._preview, self._key = preview, key
+                self._image, self._key = image, key
         else:
             assert self._detector is not None and self._enhanced is not None
             enhanced = self._enhanced
@@ -163,12 +141,12 @@ class Detector:
         points = spots[[f"axis-{i}" for i in range(len(axes))]].to_numpy(dtype=float)
         if axes == "yx":
             points = np.column_stack((np.zeros(len(points)), points))
-        return Detection(enhanced, points)
+        return points, enhanced
 
     def release(self) -> None:
         """Release the inference model before GPUfit; retain no stale cache key."""
         loaded = self._detector is not None
-        self._detector = self._enhanced = self._key = self._preview = None
+        self._detector = self._enhanced = self._key = self._image = None
         self._weights = None
         if loaded:
             import torch
@@ -198,16 +176,19 @@ def optical_parameters(config: LocalizationConfig) -> dict[str, tuple[float, flo
 
 
 def fit_spots(
-    preview: Volume,
+    image: np.ndarray,
     points: NDArray[np.float64],
     config: LocalizationConfig,
     cancelled: Event | None = None,
     progress: Callable[[str], None] | None = None,
+    *,
+    origin_zyx_um: tuple[float, float, float] | None = None,
 ) -> FitResults:
-    """Fit crop-local ZYX pixel priors on a Volume's original counts with GPUfit.
+    """Fit crop-local ZYX pixel priors on original image counts with GPUfit.
 
-    ``points`` is a finite (N,3) array inside ``preview.image``. ``config``
-    supplies ROI dimensions, parameter policies, estimator, solver/batch controls
+    ``image`` contains ZYX counts; ``points`` is a finite (N,3) pixel array
+    inside it. ``config`` supplies spacing in µm, ROI dimensions, parameter
+    policies, estimator, solver/batch controls
     and covariance selection. Center policies are µm offsets from each prior,
     intersected with ROI limits; infeasible starts raise ValueError without clipping.
 
@@ -219,6 +200,10 @@ def fit_spots(
     ``cancelled`` is an optional Event checked between batches; cancellation
     raises CancelledError. ``progress`` optionally receives each batch's status
     string. Invalid priors or geometry raise ValueError.
+
+    ``origin_zyx_um`` is the input image's first-voxel coordinate in µm,
+    defaulting to config's source origin. For a crop, pass prepare_volume's
+    returned origin so its offset is applied exactly once.
     """
     import cupy as cp
 
@@ -230,7 +215,7 @@ def fit_spots(
     points = np.asarray(points, dtype=float)
     if points.ndim != 2 or points.shape[1] != 3 or not np.isfinite(points).all():
         raise ValueError("Candidate coordinates must be finite (N,3) ZYX pixels")
-    if np.any(points < 0) or np.any(points >= np.asarray(preview.image.shape)):
+    if np.any(points < 0) or np.any(points >= np.asarray(image.shape)):
         raise ValueError("Candidate coordinates must lie inside the preview")
     model = gaussian3d_psf_model()
     if not len(points):
@@ -244,14 +229,16 @@ def fit_spots(
             np.empty(0, bool),
             model=model,
         )
-    roi_size = np.asarray(get_roi_size(config.fit_roi_size_um, preview.spacing, ensure_odd=True))
+    spacing = config.voxel_size_zyx_um
+    origin = config.origin_zyx_um if origin_zyx_um is None else origin_zyx_um
+    roi_size = np.asarray(get_roi_size(config.fit_roi_size_um, spacing, ensure_odd=True))
     if config.fit_model == "2d":
-        if preview.image.shape[0] != 1:
+        if image.shape[0] != 1:
             raise ValueError("2D fitting requires a single XY plane")
         roi_size[0] = 1
-    image = cp.asarray(preview.image)
-    coords = get_coords(image.shape, preview.spacing, origin=preview.origin, use_gpu=True)
-    centers = cp.asarray(preview.origin) + cp.asarray(points) * cp.asarray(preview.spacing)
+    image = cp.asarray(image)
+    coords = get_coords(image.shape, spacing, origin=origin, use_gpu=True)
+    centers = cp.asarray(origin) + cp.asarray(points) * cp.asarray(spacing)
     rois = get_centered_rois(
         cp.rint(cp.asarray(points)).astype(int), roi_size, [0, 0, 0], image.shape
     )
