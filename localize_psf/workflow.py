@@ -28,7 +28,7 @@ from localize_psf.localize import (
     prepare_rois,
 )
 from localize_psf.optical_bounds import gaussian_width_bounds
-from localize_psf.processing import Detector, fit_packed_rois
+from localize_psf.processing import Detector, fit_filter_mask, fit_packed_rois, optical_parameters
 from localize_psf.rois import get_centered_rois, get_roi_size
 
 if TYPE_CHECKING:
@@ -649,6 +649,21 @@ def localize_ufish_prior(
                 values, coordinates, counts, centers[selected], config, truncated, model=model
             )
             fits = _accumulate_fit_batch(fits, batch, start, len(candidates))
+        if fits is not None and last > first:
+            # Finish the entire volume/plane before suppressing converged duplicates.
+            selected = slice(first, last)
+            distances = (
+                optical_parameters(config)["collapse_distance_zyx_um"]
+                if config.collapse_close_priors
+                else None
+            )
+            fits["filter_pass"][selected] = fit_filter_mask(
+                fits["fit_params"][selected],
+                fits["success"][selected],
+                fits["covariance_valid"][selected] if "covariance_valid" in fits else None,
+                config.fit_filters,
+                collapse_distance_zyx_um=distances,
+            )
     if fits is None:
         empty = np.empty((0, 0))
         fits = fit_packed_rois(

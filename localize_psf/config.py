@@ -97,7 +97,7 @@ class LocalizationConfig(BaseModel):
     intensity_threshold: float = Field(default=0.2, ge=0)
     collapse_close_priors: bool = Field(
         default=True,
-        description="Keep the strongest enhancement peak within twice the nominal optical Gaussian FWHM along every spatial axis.",
+        description="Collapse both priors and final fitted centers within twice the nominal optical Gaussian FWHM along every spatial axis.",
     )
     exclude_edge_centroids: bool = Field(
         default=False,

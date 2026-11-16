@@ -101,6 +101,13 @@ different timepoints or channels are processed separately. Changing this policy
 or its optical inputs invalidates centroid checkpoints; threshold/optics tuning
 in previews reuses the cached enhancement.
 
+The same physical-distance check also applies to **final fitted centers** after
+all ROI batches for a volume or 2D plane. Separate priors can otherwise converge
+on one emitter. Amplitude/status filters run first; overlapping eligible fits
+prefer convergence, then valid covariance, then higher amplitude. Original fit
+rows and candidate IDs remain available, while `filter_pass` selects accepted
+fits for previews and exports. Timepoints, channels and 2D planes stay independent.
+
 # Metadata and batching
 
 OME-Zarr supplies axes, spatial units and scale/translation metadata. Origins

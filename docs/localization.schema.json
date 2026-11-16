@@ -210,7 +210,7 @@
     },
     "collapse_close_priors": {
       "default": true,
-      "description": "Keep the strongest enhancement peak within twice the nominal optical Gaussian FWHM along every spatial axis.",
+      "description": "Collapse both priors and final fitted centers within twice the nominal optical Gaussian FWHM along every spatial axis.",
       "title": "Collapse Close Priors",
       "type": "boolean"
     },

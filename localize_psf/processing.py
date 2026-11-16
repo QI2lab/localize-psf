@@ -31,6 +31,8 @@ def fit_filter_mask(
     success: NDArray[np.bool_],
     covariance_valid: NDArray[np.bool_] | None,
     filters: FitFilters,
+    *,
+    collapse_distance_zyx_um: tuple[float, float, float] | None = None,
 ) -> NDArray[np.bool_]:
     """Return post-fit acceptance without removing candidates or changing evidence.
 
@@ -38,9 +40,14 @@ def fit_filter_mask(
     column zero is amplitude in original image counts. ``success`` and optional
     ``covariance_valid`` are upstream boolean (N,) flags. All selected conditions
     must pass. Missing covariance raises when either covariance selector is used.
-    Empty inputs return an empty mask; default filters accept every candidate.
+    Empty inputs return an empty mask. Optional ``collapse_distance_zyx_um``
+    applies the shared axis-aligned peak suppression to final fitted centers,
+    after amplitude/status filters. Converged fits have priority, followed by
+    valid covariance, then amplitude; exact ties keep the original candidate.
+    This function operates on one volume or 2D plane, never mixed T/C groups.
+    Distances and fitted centers use µm. No GPU work or refitting is performed.
     """
-    from localize_psf.localize import range_filter
+    from localize_psf.localize import filter_nearby_peaks, range_filter
 
     keep = np.ones(len(parameters), dtype=bool)
     if filters.amplitude_min is not None or filters.amplitude_max is not None:
@@ -62,6 +69,27 @@ def fit_filter_mask(
                 "Covariance diagnostics were not computed. Enable covariance and rerun GPU fits."
             )
         keep &= covariance_valid == (filters.covariance == "pass")
+    if collapse_distance_zyx_um is not None:
+        keep &= np.isfinite(parameters[:, (3, 2, 1)]).all(axis=1) & np.isfinite(parameters[:, 0])
+        candidates = np.flatnonzero(keep)
+        if len(candidates) > 1:
+            covariance = (
+                covariance_valid[candidates].astype(int)
+                if covariance_valid is not None
+                else np.zeros(len(candidates), dtype=int)
+            )
+            order = np.lexsort(
+                (-parameters[candidates, 0], -covariance, -success[candidates].astype(int))
+            )
+            ranked = candidates[order]
+            _, retained = filter_nearby_peaks(
+                parameters[ranked][:, (3, 2, 1)],
+                0,
+                0,
+                min_distance_zyx=collapse_distance_zyx_um,
+            )
+            keep[candidates] = False
+            keep[ranked[retained]] = True
     return keep
 
 
@@ -217,7 +245,7 @@ class Detector:
         if config.collapse_close_priors and len(points) > 1:
             from localize_psf.localize import filter_nearby_peaks
 
-            distances = 2 * np.asarray(optical_parameters(config)["nominal_fwhm_zyx_um"])
+            distances = optical_parameters(config)["collapse_distance_zyx_um"]
             pixels = points.astype(np.intp)[:, 1:] if axes == "yx" else points.astype(np.intp)
             strengths = enhanced[tuple(pixels.T)]
             _, indices = filter_nearby_peaks(
@@ -248,7 +276,8 @@ def optical_parameters(config: LocalizationConfig) -> dict[str, tuple[float, flo
     Uses CUDA ``gaussian_width_bounds`` with the configuration's NA, wavelength,
     refractive index, voxel spacing and relative sigma range. Result keys are
     ``nominal_sigma_zyx_um``, ``lower_sigma_zyx_um``, ``upper_sigma_zyx_um`` and
-    ``nominal_fwhm_zyx_um``. FWHM is 2*sqrt(2*ln(2)) times the nominal sigma.
+    ``nominal_fwhm_zyx_um``. FWHM is 2*sqrt(2*ln(2)) times the nominal sigma;
+    ``collapse_distance_zyx_um`` is twice that FWHM for both priors and fits.
     """
     from localize_psf.optical_bounds import gaussian_width_bounds
 
@@ -262,6 +291,7 @@ def optical_parameters(config: LocalizationConfig) -> dict[str, tuple[float, flo
         use_gpu=True,
     )
     result["nominal_fwhm_zyx_um"] = 2 * np.sqrt(2 * np.log(2)) * result["nominal_sigma_zyx_um"]
+    result["collapse_distance_zyx_um"] = 2 * result["nominal_fwhm_zyx_um"]
     return {name: tuple(value.get().tolist()) for name, value in result.items()}
 
 
@@ -284,6 +314,10 @@ def fit_spots(
 
     Return all candidates in input order with IDs, statuses, active bounds and
     requested uncertainty evidence, plus the post-fit ``filter_pass`` mask.
+    Final fitted positions are collapsed across all ROI batches when
+    ``collapse_close_priors`` is enabled, using the same optical distance as
+    prior suppression. ``collapse_distance_zyx_um`` records that distance for
+    interactive re-filtering; null disables collapse. Raw fit rows are retained.
     Fitted positions and widths use µm. 2D
     requires one XY plane and fixes the native 3D Gaussian's cz to that plane's
     physical Z and sz to 1 µm. CUDA workspaces are reused between fit batches.
@@ -355,6 +389,19 @@ def fit_spots(
         del image, coords
         cp.get_default_memory_pool().free_all_blocks()
     assert complete is not None
+    distances = (
+        optical_parameters(config)["collapse_distance_zyx_um"]
+        if config.collapse_close_priors
+        else None
+    )
+    complete["collapse_distance_zyx_um"] = distances
+    complete["filter_pass"] = fit_filter_mask(
+        complete["fit_params"],
+        complete["success"],
+        complete.get("covariance_valid"),
+        config.fit_filters,
+        collapse_distance_zyx_um=distances,
+    )
     return complete
 
 
@@ -381,6 +428,8 @@ def fit_packed_rois(
     without clipping. 2D fixes cz at the plane and sz at 1 µm. Return FitResults
     for every candidate, including statuses, active bounds, uncertainty flags and
     a ``filter_pass`` mask evaluated using ``config.fit_filters``.
+    Packed batches apply amplitude/status filters; the preview and workflow
+    apply final-center collapse after collecting every ROI batch for a volume.
 
     Estimates use the input backend. Bounds/policies reuse the fitter's required
     host conversion, avoiding per-ROI CUDA reductions and extra buffer transfers.

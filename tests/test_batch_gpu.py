@@ -396,6 +396,93 @@ def test_cropped_caller_applies_physical_origin_once(scene):
     )
 
 
+def test_final_fit_collapse_across_roi_batches(scene):
+    image, config, truth = scene
+    # These distinct priors are outside the initial optical collapse box, but
+    # overlapping ROIs can converge on the same physical emitter.
+    center = (truth[[3, 2, 1]] - config.origin_zyx_um) / config.voxel_size_zyx_um
+    priors = np.repeat(center[None], 2, axis=0)
+    priors[:, 2] += [-2.5, 2.5]
+    fits = fit_spots(image, priors, config)
+    distances = fits["collapse_distance_zyx_um"]
+    assert np.any(np.abs((priors[0] - priors[1]) * config.voxel_size_zyx_um) > distances)
+    assert fits["success"].all()
+    centers = fits["fit_params"][:, (3, 2, 1)]
+    assert np.all(np.abs(centers[0] - centers[1]) <= distances)
+    assert fits["filter_pass"].sum() == 1
+    assert config.roi_batch_size == 1
+    # Live quality filters can select an alternative fit before collapsing.
+    for selector in ("all", "pass", "fail"):
+        mask = fit_filter_mask(
+            fits["fit_params"],
+            fits["success"],
+            fits.get("covariance_valid"),
+            FitFilters(covariance=selector),
+            collapse_distance_zyx_um=distances,
+        )
+        eligible = (
+            np.ones(2, dtype=bool)
+            if selector == "all"
+            else fits["covariance_valid"] == (selector == "pass")
+        )
+        assert mask.sum() == int(eligible.any())
+        assert np.all(eligible[mask])
+    weaker = float(fits["fit_params"][:, 0].min())
+    limited = fit_filter_mask(
+        fits["fit_params"],
+        fits["success"],
+        fits.get("covariance_valid"),
+        FitFilters(amplitude_max=weaker),
+        collapse_distance_zyx_um=distances,
+    )
+    assert limited.sum() == 1 and fits["fit_params"][limited, 0][0] <= weaker
+    unrestricted = fit_spots(
+        image, priors, config.model_copy(update={"collapse_close_priors": False})
+    )
+    assert unrestricted["collapse_distance_zyx_um"] is None
+    assert unrestricted["filter_pass"].all()
+
+
+def test_final_batch_collapse_respects_time_channel_and_plane(localization, scene):
+    image, config, _ = scene
+    # A small optical distance leaves voxel-grid priors distinct; fitted centers
+    # can nevertheless coincide within that distance. Repeated volumes must
+    # remain independent when selecting accepted localizations.
+    config = config.model_copy(
+        update={
+            "wavelength_um": 0.05 if config.fit_model == "3d" else config.wavelength_um,
+            "intensity_threshold": 0.05,
+            "batch_axes": True,
+            "fit_filters": FitFilters(amplitude_min=100, convergence="pass"),
+            "preview": PreviewSettings(axes="tczyx"),
+        }
+    )
+    image = image if config.fit_model == "3d" else np.repeat(image, 2, axis=0)
+    data = np.broadcast_to(image, (2, 2, *image.shape)).copy()
+    result = localization.localize_ufish_prior(data, config)
+    fits = result["fit_results"]
+    keys = np.column_stack((result["candidate_timepoints"], result["candidate_channels"]))
+    if config.fit_model == "2d":
+        keys = np.column_stack((keys, result["candidate_centroids_zyx_px"][:, 0]))
+    distance = optical_parameters(config)["collapse_distance_zyx_um"]
+    for key in np.unique(keys, axis=0):
+        selected = np.all(keys == key, axis=1)
+        expected = fit_filter_mask(
+            fits["fit_params"][selected],
+            fits["success"][selected],
+            fits["covariance_valid"][selected],
+            config.fit_filters,
+            collapse_distance_zyx_um=distance,
+        )
+        assert expected.any()
+        np.testing.assert_array_equal(fits["filter_pass"][selected], expected)
+    if config.fit_model == "3d":
+        quality_only = fit_filter_mask(
+            fits["fit_params"], fits["success"], fits["covariance_valid"], config.fit_filters
+        )
+        assert fits["filter_pass"].sum() < quality_only.sum()
+
+
 def test_optical_prior_collapse_reuses_enhancement(scene):
     from scipy.spatial.distance import cdist, pdist
 
