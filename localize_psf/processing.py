@@ -39,14 +39,10 @@ class FitResults(TypedDict):
 
 @dataclass(frozen=True)
 class Volume:
-    """Original ZYX counts and physical calibration for one volume or XY plane.
+    """Original ZYX counts and physical calibration for a volume or XY plane.
 
-    Attributes
-    ----------
-    image : numpy.ndarray
-        Counts shaped (Z,Y,X), without detector enhancement or rescaling.
-    spacing, origin : tuple of float
-        ZYX voxel sizes and first-voxel coordinates in micrometers.
+    ``image`` has shape (Z,Y,X), without enhancement or rescaling. ``spacing``
+    and ``origin`` are ZYX voxel sizes and first-voxel coordinates in µm.
     """
 
     image: np.ndarray
@@ -55,26 +51,15 @@ class Volume:
 
 
 def prepare_volume(data: np.ndarray | TensorStore, config: LocalizationConfig) -> Volume:
-    """Read the configured preview crop and apply its physical origin once.
+    """Read the configured preview crop as original float32 ZYX counts.
 
-    Parameters
-    ----------
-    data : numpy.ndarray or tensorstore.TensorStore
-        Source counts in ``config.preview.axes`` order. TensorStore slices stay
-        lazy until the selected crop is converted to float32 for inference.
-    config : LocalizationConfig
-        Preview T/C selectors, crop, dimensional mode and source calibration.
+    ``data`` is a NumPy array or lazy TensorStore in ``config.preview.axes``
+    order. Preview settings select T/C, crop and, for 2D, one XY plane.
+    Only that selection is materialized; no projection is performed.
 
-    Returns
-    -------
-    Volume
-        ZYX counts, spacing and crop-first-voxel origin in micrometers. 2D
-        selects one XY plane; it never projects a stack.
-
-    Raises
-    ------
-    ValueError
-        If axes, selectors, crop, dimensional mode or counts are invalid.
+    Return a Volume with the exported ZYX spacing and the crop-first-voxel
+    origin in µm, applying the crop offset once. Incompatible selections,
+    geometry or counts raise ValueError; Poisson MLE requires nonnegative counts.
     """
     settings = config.preview
     if len(settings.axes) != data.ndim:
@@ -114,14 +99,10 @@ def prepare_volume(data: np.ndarray | TensorStore, config: LocalizationConfig) -
 
 @dataclass(frozen=True)
 class Detection:
-    """One U-FISH enhancement and its candidate coordinates.
+    """U-FISH enhancement and crop-local ZYX pixel priors.
 
-    Attributes
-    ----------
-    enhanced : numpy.ndarray
-        ZYX enhancement for 3D, or YX enhancement for a single 2D plane.
-    points : numpy.ndarray
-        Finite crop-local ZYX pixel coordinates shaped (N,3); 2D Z is zero.
+    ``enhanced`` is float32 ZYX for 3D or YX for 2D. ``points`` is a finite
+    float64 (N,3) array; 2D Z coordinates are zero.
     """
 
     enhanced: NDArray[np.float32]
@@ -141,24 +122,16 @@ class Detector:
     def detect(
         self, preview: Volume, config: LocalizationConfig, *, cache: bool = True
     ) -> Detection:
-        """Run CUDA U-FISH with the supplied settings and installed weights.
+        """Run CUDA U-FISH with the exported weights and inference settings.
 
-        Parameters
-        ----------
-        preview : Volume
-            Original counts in ZYX order, with a singleton Z for 2D.
-        config : LocalizationConfig
-            Weights, mode, blending, threshold and inference batch size.
-        cache : bool, optional
-            Retain the enhancement/input identity for threshold-only recalls.
-            False streams independent batch volumes without retaining their images;
-            the loaded detector weights are reused in either mode.
+        ``preview`` supplies original ZYX counts (singleton Z in 2D). ``config``
+        supplies weights, dimensional mode, blending, threshold and batch size.
+        Return the enhancement and crop-local ZYX pixel priors as a Detection.
 
-        Returns
-        -------
-        Detection
-            Enhancement and crop-local ZYX pixel priors. A new image, weights,
-            dimensional mode, blend or batch size invalidates cached enhancement.
+        With ``cache=True``, retain the image identity and enhancement so threshold
+        changes only recall spots. A new image, weights, dimensional mode, blend
+        or batch size invalidates enhancement. ``cache=False`` streams batch
+        volumes without retaining images; loaded weights are reused in both modes.
         """
         from ufish.api import UFish
 
@@ -215,18 +188,11 @@ class Detector:
 
 
 def optical_parameters(config: LocalizationConfig) -> dict[str, tuple[float, float, float]]:
-    """Evaluate the production optical width bounds on CUDA.
+    """Return production nominal/lower/upper optical sigmas as ZYX µm triples.
 
-    Parameters
-    ----------
-    config : LocalizationConfig
-        Numerical aperture, wavelength, refractive index, sampling and sigma range.
-
-    Returns
-    -------
-    dict of tuple
-        ``nominal_sigma_zyx_um``, ``lower_sigma_zyx_um`` and
-        ``upper_sigma_zyx_um`` as ZYX triples in micrometers.
+    Uses CUDA ``gaussian_width_bounds`` with the configuration's NA, wavelength,
+    refractive index, voxel spacing and relative sigma range. Result keys are
+    ``nominal_sigma_zyx_um``, ``lower_sigma_zyx_um`` and ``upper_sigma_zyx_um``.
     """
     from localize_psf.optical_bounds import gaussian_width_bounds
 
@@ -249,39 +215,21 @@ def fit_spots(
     cancelled: Event | None = None,
     progress: Callable[[str], None] | None = None,
 ) -> FitResults:
-    """Fit priors on original counts with the shared native parameter policy.
+    """Fit crop-local ZYX pixel priors on a Volume's original counts with GPUfit.
 
-    Parameters
-    ----------
-    preview : Volume
-        ZYX counts and physical calibration; 2D requires one XY plane.
-    points : numpy.ndarray
-        Finite crop-local ZYX pixel priors shaped (N,3), inside the image.
-    config : LocalizationConfig
-        ROI dimensions, parameter policies, estimator, solver/batch controls
-        and covariance selection. Center policies are µm offsets from each prior.
-    cancelled : threading.Event, optional
-        Cancellation checked between fitting batches.
-    progress : callable, optional
-        Receives a progress string for each batch.
+    ``points`` is a finite (N,3) array inside ``preview.image``. ``config``
+    supplies ROI dimensions, parameter policies, estimator, solver/batch controls
+    and covariance selection. Center policies are µm offsets from each prior,
+    intersected with ROI limits; infeasible starts raise ValueError without clipping.
 
-    Returns
-    -------
-    FitResults
-        All candidates in input order with IDs, statuses, active bounds and any
-        requested uncertainty evidence. Physical fit parameters use micrometers.
+    Return all candidates in input order with IDs, statuses, active bounds and
+    requested uncertainty evidence. Fitted positions and widths use µm. 2D
+    requires one XY plane and fixes the native 3D Gaussian's cz to that plane's
+    physical Z and sz to 1 µm. CUDA workspaces are reused between fit batches.
 
-    Raises
-    ------
-    ValueError
-        If priors, geometry, bounds or starts are invalid. Starts are never clipped.
-    concurrent.futures.CancelledError
-        If cancellation is requested before the next batch.
-
-    Notes
-    -----
-    2D reuses the native 3D Gaussian with cz fixed at the plane's physical Z
-    and sz fixed at 1 µm. CUDA workspaces are reused between bounded batches.
+    ``cancelled`` is an optional Event checked between batches; cancellation
+    raises CancelledError. ``progress`` optionally receives each batch's status
+    string. Invalid priors or geometry raise ValueError.
     """
     import cupy as cp
 
@@ -353,36 +301,21 @@ def fit_packed_rois(
     *,
     model: gaussian3d_psf_model | None = None,
 ) -> FitResults:
-    """Apply the shared prior-relative policy to production packed ROIs.
+    """Apply exported parameter policy and GPUfit to packed original counts.
 
-    Parameters
-    ----------
-    values, coordinates : array and tuple of array
-        Original count samples and physical ZYX coordinates shaped (N,P),
-        NaN padded after valid samples. Arrays share a NumPy or CuPy backend.
-    sizes : array
-        Number of valid samples per ROI, shaped (N,).
-    centers_zyx_um : array
-        Physical prior positions shaped (N,3), in ZYX micrometers.
-    config : LocalizationConfig
-        Parameter policy, native solver controls and covariance selection.
-    truncated : array of bool
-        One flag per ROI indicating clipping at an image boundary.
-    model : gaussian3d_psf_model, optional
-        Reuse the same production model when accumulating multiple batches.
+    ``values`` and the ZYX ``coordinates`` share a NumPy/CuPy backend and shape
+    (N,P), with NaN padding after each ROI's valid ``sizes`` samples. Physical
+    priors ``centers_zyx_um`` have shape (N,3); ``truncated`` is a boolean (N,)
+    boundary-clipping flag. An optional production ``model`` is reused across batches.
 
-    Returns
-    -------
-    FitResults
-        Native fit evidence for every ROI. Bounds intersect ROI limits; null
-        starts keep production estimates. Infeasible starts raise ValueError
-        through the existing bounds validator, without clipping or repair.
+    ``config`` controls parameters, estimator, solver and covariance. Center
+    bounds/starts are prior-relative µm offsets; bounds intersect ROI limits.
+    Null starts retain model estimates, and infeasible starts raise ValueError
+    without clipping. 2D fixes cz at the plane and sz at 1 µm. Return FitResults
+    for every candidate, including statuses, active bounds and uncertainty flags.
 
-    Notes
-    -----
-    Estimates use the input backend. Bounds and policies reuse the fitting
-    layer's required host conversion, avoiding per-ROI CUDA scalar reductions
-    and additional transfers before GPUfit consumes its host buffers.
+    Estimates use the input backend. Bounds/policies reuse the fitter's required
+    host conversion, avoiding per-ROI CUDA reductions and extra buffer transfers.
     """
     from localize_psf.batch_fitting import _host_array, fit_rois
     from localize_psf.fit_psf import gaussian3d_psf_model
