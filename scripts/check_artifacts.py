@@ -11,6 +11,7 @@ from pathlib import Path
 from tarfile import open as open_tar
 
 ROOT = Path(__file__).resolve().parents[1]
+PROJECT = tomllib.loads((ROOT / "pyproject.toml").read_text("utf-8"))
 UV = shutil.which("uv") or str(Path.home() / ".local/bin/uv.exe")
 
 
@@ -28,7 +29,7 @@ def verify(wheel, gpu):
     with tempfile.TemporaryDirectory(prefix="localize-artifact-") as directory:
         target = Path(directory).resolve()
         assert target.is_relative_to(Path(tempfile.gettempdir()).resolve())
-        dependencies = ["localize_psf[gpu]==0.2.0"] if gpu else ["localize_psf==0.2.0"]
+        dependencies = [f"localize_psf{'[gpu]' if gpu else ''}=={PROJECT['project']['version']}"]
         sources = f"localize-psf={{path={json.dumps(wheel.as_posix())}}}\n"
         build_configuration = ""
         if gpu:
@@ -37,7 +38,7 @@ def verify(wheel, gpu):
                 + json.dumps((ROOT / "build_support").as_posix())
                 + "}\n"
             )
-            uv = tomllib.loads((ROOT / "pyproject.toml").read_text())["tool"]["uv"]
+            uv = PROJECT["tool"]["uv"]
             requirements = json.dumps(uv["extra-build-dependencies"]["pygpufit"])
             variables = ", ".join(
                 f"{name} = {json.dumps(value)}"
@@ -62,9 +63,7 @@ def verify(wheel, gpu):
         shutil.copytree(
             ROOT / "tests", target / "tests", ignore=shutil.ignore_patterns("__pycache__")
         )
-        pytest_options = tomllib.loads((ROOT / "pyproject.toml").read_text("utf-8"))["tool"][
-            "pytest"
-        ]["ini_options"]
+        pytest_options = PROJECT["tool"]["pytest"]["ini_options"]
         (target / "pytest.ini").write_text(
             "[pytest]\npython_files = "
             + " ".join(pytest_options["python_files"])
