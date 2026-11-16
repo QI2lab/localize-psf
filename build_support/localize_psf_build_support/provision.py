@@ -4,6 +4,7 @@ import errno
 import hashlib
 import os
 import platform
+import shutil
 import subprocess
 import sys
 import tarfile
@@ -15,11 +16,11 @@ from pathlib import Path
 
 
 def _download(url: str, destination: Path, expected: str) -> None:
+    """Publish a downloaded dependency only after verifying its declared SHA256."""
     temporary = destination.with_suffix(".partial")
     try:
         with urllib.request.urlopen(url, timeout=120) as response, temporary.open("wb") as output:
-            while data := response.read(1024 * 1024):
-                output.write(data)
+            shutil.copyfileobj(response, output, length=1024 * 1024)
         with temporary.open("rb") as downloaded:
             actual = hashlib.file_digest(downloaded, "sha256").hexdigest()
         if actual != expected:
