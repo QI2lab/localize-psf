@@ -95,6 +95,10 @@ class LocalizationConfig(BaseModel):
     fit_model: Literal["2d", "3d"] = "3d"
     blend_3d: bool = True
     intensity_threshold: float = Field(default=0.2, ge=0)
+    collapse_close_priors: bool = Field(
+        default=True,
+        description="Keep the strongest enhancement peak within twice the nominal optical Gaussian FWHM along every spatial axis.",
+    )
     exclude_edge_centroids: bool = Field(
         default=False,
         description="Exclude centroids near array faces and zero-padded data-footprint edges (YX in 2D).",

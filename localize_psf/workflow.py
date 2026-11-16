@@ -537,12 +537,20 @@ def localize_ufish_prior(
         fit_model=mode,
         blend_3d=representative.blend_3d,
         intensity_threshold=representative.intensity_threshold,
+        collapse_close_priors=representative.collapse_close_priors,
+        prior_merge_optics={
+            str(channel): [cfg.numerical_aperture, cfg.wavelength_um, cfg.refractive_index]
+            for channel, cfg in configs.items()
+        }
+        if representative.collapse_close_priors
+        else None,
         exclude_edge_centroids=representative.exclude_edge_centroids,
         edge_margin_px=representative.edge_margin_px
         if representative.exclude_edge_centroids
         else 0,
         inference_batch_size=representative.inference_batch_size,
         preprocessing_policy="ufish.predict-default-v1;fit-original-counts"
+        + (";collapse-optical-fwhm-box-v1" if representative.collapse_close_priors else "")
         + (";edge-projected-footprint-v1" if representative.exclude_edge_centroids else ""),
     )
     inference_keys = (
@@ -566,6 +574,8 @@ def localize_ufish_prior(
             previous = json.loads((saved.schema.metadata or {}).get(b"localize_psf", b"{}"))
             completed = {tuple(key) for key in previous.pop("completed_volumes", [])}
             previous.setdefault("exclude_edge_centroids", False)
+            previous.setdefault("collapse_close_priors", False)
+            previous.setdefault("prior_merge_optics", None)
             previous.setdefault("edge_margin_px", 1 if previous["exclude_edge_centroids"] else 0)
             if previous != identity:
                 raise ValueError(

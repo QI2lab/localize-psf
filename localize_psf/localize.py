@@ -387,12 +387,14 @@ def find_peak_candidates(imgs: array,
     return inds, amps
 
 
-def filter_nearby_peaks(centers: np.ndarray,
+def filter_nearby_peaks(centers: array,
                         min_xy_dist: float,
                         min_z_dist: float,
                         mode: str = "keep-one",
-                        weights: Optional[np.ndarray] = None,
-                        nmax: int = 10000) -> (np.ndarray, np.ndarray):
+                        weights: array | None = None,
+                        nmax: int = 10000,
+                        *,
+                        min_distance_zyx: Sequence[float] | None = None) -> tuple[array, array]:
     """
     Combine multiple center positions into a reduced set, where assume all centers separated by no more than
     min_xy_dist and min_z_dist come from the same feature.
@@ -403,9 +405,16 @@ def filter_nearby_peaks(centers: np.ndarray,
     :param min_xy_dist:
     :param min_z_dist:
     :param mode: "average", "keep-one", or "remove"
-    :param weights: only used in "average" mode. If weights are provided, a weighted average between nearby
-      points is computed
-    :param nmax: maximum number of centers to be processed at once. If the number of centers exceeds this size,
+    :param weights: averaging weights in "average" mode, or peak strengths for
+      axis-aligned "keep-one" suppression (strongest first, stable ties).
+    :param min_distance_zyx: optional positive ZYX distances in the same units as
+      centers. Selects axis-aligned "keep-one" suppression instead of radial XY
+      distances. A peak is suppressed only when its separation from a stronger
+      retained peak is within the inclusive limit in every axis. This is greedy
+      peak suppression, without transitive chaining. Original indices/order are
+      preserved. A SciPy spatial tree avoids an all-pairs distance matrix.
+    :param nmax: radial-mode limit; axis-aligned mode always uses the spatial tree.
+      Maximum number of centers to be processed at once. If the number of centers exceeds this size,
       then the problem will be split in half (recursively) and solved on the subregions. Then the overlap zone
       between these two regions will be checked and the results will be combined
     :return centers_unique: array of unique center coordinates
@@ -420,6 +429,32 @@ def filter_nearby_peaks(centers: np.ndarray,
         weights = xp.array(weights, copy=True)
     if centers.ndim != 2 or centers.shape[1] != 3:
         raise ValueError("centers should be a nx3 array where columns are cz, cy, cx")
+
+    if min_distance_zyx is not None:
+        from scipy.spatial import cKDTree
+
+        distances = np.asarray(min_distance_zyx, dtype=float)
+        if distances.shape != (3,) or not np.all(np.isfinite(distances) & (distances > 0)):
+            raise ValueError("min_distance_zyx must contain three finite positive distances")
+        if mode != "keep-one":
+            raise ValueError("axis-aligned distances require mode='keep-one'")
+        host = np.asarray(centers) if xp is np else xp.asnumpy(centers)
+        strengths = np.ones(len(host)) if weights is None else (
+            np.asarray(weights) if xp is np else xp.asnumpy(weights)
+        )
+        strengths = np.asarray(strengths, dtype=float)
+        if strengths.shape != (len(host),) or not np.isfinite(strengths).all():
+            raise ValueError("peak strengths must be finite and match the number of centers")
+        normalized = host / distances
+        tree = cKDTree(normalized)
+        blocked = np.zeros(len(host), dtype=bool)
+        selected = []
+        for index in np.argsort(-strengths, kind="stable"):
+            if not blocked[index]:
+                selected.append(index)
+                blocked[tree.query_ball_point(normalized[index], 1, p=np.inf)] = True
+        indices = xp.asarray(np.sort(np.asarray(selected, dtype=np.intp)))
+        return centers[indices], indices
 
     centers_unique = xp.array(centers, copy=True)
     inds = xp.arange(len(centers), dtype=int)

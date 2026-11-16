@@ -208,6 +208,12 @@
       "title": "Intensity Threshold",
       "type": "number"
     },
+    "collapse_close_priors": {
+      "default": true,
+      "description": "Keep the strongest enhancement peak within twice the nominal optical Gaussian FWHM along every spatial axis.",
+      "title": "Collapse Close Priors",
+      "type": "boolean"
+    },
     "exclude_edge_centroids": {
       "default": false,
       "description": "Exclude centroids near array faces and zero-padded data-footprint edges (YX in 2D).",

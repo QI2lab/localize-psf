@@ -12,7 +12,13 @@ import pytest
 from localize_psf.config import FitFilters, LocalizationConfig, Parameter, PreviewSettings
 from localize_psf.fit_psf import gaussian3d_psf_model
 from localize_psf.localize import get_coords
-from localize_psf.processing import Detector, fit_filter_mask, fit_spots, prepare_volume
+from localize_psf.processing import (
+    Detector,
+    fit_filter_mask,
+    fit_spots,
+    optical_parameters,
+    prepare_volume,
+)
 
 pytestmark = [pytest.mark.integration, pytest.mark.gpu, pytest.mark.example]
 
@@ -217,6 +223,10 @@ def test_checkpoint_identity_and_fit_only_reuse(localization, scene, tmp_path):
     for update in (
         {"blend_3d": True},
         {"intensity_threshold": 0.6},
+        {"collapse_close_priors": False},
+        {"wavelength_um": 0.7},
+        {"numerical_aperture": 1.25},
+        {"refractive_index": 1.5},
         {"exclude_edge_centroids": True},
         {"inference_batch_size": 7},
         {"ufish_weights": "other_weights.pth"},
@@ -235,7 +245,13 @@ def test_checkpoint_identity_and_fit_only_reuse(localization, scene, tmp_path):
     import pyarrow.parquet as pq
 
     identity = json.loads(pq.read_schema(checkpoint).metadata[b"localize_psf"])
-    assert identity["preprocessing_policy"].endswith("fit-original-counts")
+    assert identity["preprocessing_policy"].endswith("collapse-optical-fwhm-box-v1")
+    assert identity["collapse_close_priors"]
+    assert identity["prior_merge_optics"]["0"] == [
+        config.numerical_aperture,
+        config.wavelength_um,
+        config.refractive_index,
+    ]
     assert identity["edge_margin_px"] == 0
 
     enabled = config.model_copy(update={"exclude_edge_centroids": True})
@@ -378,6 +394,51 @@ def test_cropped_caller_applies_physical_origin_once(scene):
         atol=1e-8,
         equal_nan=True,
     )
+
+
+def test_optical_prior_collapse_reuses_enhancement(scene):
+    from scipy.spatial.distance import cdist, pdist
+
+    image, config, truth = scene
+    # Two resolved emitters lie inside the configured optical merge distance.
+    secondary = truth.copy()
+    secondary[0] *= 0.7
+    secondary[1] += 0.66
+    secondary[6] = 0
+    image = image + gaussian3d_psf_model().model(
+        get_coords(image.shape, config.voxel_size_zyx_um, origin=config.origin_zyx_um),
+        secondary,
+    ).astype(np.float32)
+    config = config.model_copy(update={"wavelength_um": 1.2})
+    raw_config = config.model_copy(update={"collapse_close_priors": False})
+    detector = Detector()
+    try:
+        raw, enhanced = detector.detect(image, raw_config)
+        merged, cached = detector.detect(image, config)
+        assert cached is enhanced and 0 < len(merged) < len(raw)
+        distances = 2 * np.asarray(optical_parameters(config)["nominal_fwhm_zyx_um"])
+        scales = np.asarray(config.voxel_size_zyx_um) / distances
+        assert np.all(pdist(merged * scales, metric="chebyshev") > 1)
+        separation = cdist(raw * scales, merged * scales, metric="chebyshev")
+        raw_pixels = raw.astype(int)[:, 1:] if config.fit_model == "2d" else raw.astype(int)
+        merged_pixels = (
+            merged.astype(int)[:, 1:] if config.fit_model == "2d" else merged.astype(int)
+        )
+        raw_strengths = enhanced[tuple(raw_pixels.T)]
+        strengths = enhanced[tuple(merged_pixels.T)]
+        assert np.all(
+            np.any((separation <= 1) & (strengths[None] >= raw_strengths[:, None]), axis=1)
+        )
+        narrower = config.model_copy(update={"wavelength_um": config.wavelength_um / 2})
+        narrower_points, cached = detector.detect(image, narrower)
+        assert cached is enhanced and len(narrower_points) >= len(merged)
+        restored, cached = detector.detect(image, raw_config)
+        assert cached is enhanced
+        np.testing.assert_array_equal(restored, raw)
+        streamed, _ = detector.detect(image, config, cache=False)
+        np.testing.assert_array_equal(streamed, merged)
+    finally:
+        detector.release()
 
 
 def test_edge_filter_reuses_enhancement_and_streaming_policy(scene):

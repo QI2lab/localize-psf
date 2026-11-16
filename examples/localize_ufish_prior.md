@@ -90,6 +90,17 @@ Keep the detector alive while tuning thresholds to reuse enhancement, then
 release it before fitting. Spacing comes from `config`; a crop's returned origin
 is passed explicitly. Batch and preview results are ordinary dictionaries.
 
+`collapse_close_priors=true` (default) collapses U-FISH priors within **2 × the
+nominal optical Gaussian FWHM along every spatial dimension**. FWHM is
+`2*sqrt(2*ln(2))*sigma`, using the existing optical sigma calculation from NA,
+emission wavelength and refractive index. Stored voxel spacing converts priors
+to physical distances. After edge exclusion, the strongest enhancement peak is
+retained; equal strengths keep the first prior. Suppression does not chain
+through rejected peaks. 2D compares Y/X within each plane, and volumes from
+different timepoints or channels are processed separately. Changing this policy
+or its optical inputs invalidates centroid checkpoints; threshold/optics tuning
+in previews reuses the cached enhancement.
+
 # Metadata and batching
 
 OME-Zarr supplies axes, spatial units and scale/translation metadata. Origins

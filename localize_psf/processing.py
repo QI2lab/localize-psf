@@ -141,6 +141,11 @@ class Detector:
         zero counts as holes. 2D uses only YX. Enhancement and footprint distances
         are reused when changing the margin; the same priors drive batch fitting.
 
+        ``collapse_close_priors`` retains the strongest enhancement peak within
+        twice the nominal optical Gaussian FWHM in each Z/Y/X direction (YX in
+        2D), after edge exclusion. Physical distances use stored voxel spacing.
+        Peak suppression uses the shared nearby-peak utility, without chaining.
+
         With ``cache=True``, retain the image identity and enhancement so threshold
         changes only recall spots. A new image, weights, dimensional mode, blend
         or batch size invalidates enhancement. ``cache=False`` streams batch
@@ -209,6 +214,20 @@ class Detector:
             for pair, distance in zip(pairs, distances, strict=True):
                 keep &= distance[tuple(points[:, pair].astype(np.intp).T)] > config.edge_margin_px
             points = points[keep]
+        if config.collapse_close_priors and len(points) > 1:
+            from localize_psf.localize import filter_nearby_peaks
+
+            distances = 2 * np.asarray(optical_parameters(config)["nominal_fwhm_zyx_um"])
+            pixels = points.astype(np.intp)[:, 1:] if axes == "yx" else points.astype(np.intp)
+            strengths = enhanced[tuple(pixels.T)]
+            _, indices = filter_nearby_peaks(
+                points * config.voxel_size_zyx_um,
+                0,
+                0,
+                weights=strengths,
+                min_distance_zyx=distances,
+            )
+            points = points[indices]
         return points, enhanced
 
     def release(self) -> None:
@@ -224,11 +243,12 @@ class Detector:
 
 
 def optical_parameters(config: LocalizationConfig) -> dict[str, tuple[float, float, float]]:
-    """Return production nominal/lower/upper optical sigmas as ZYX µm triples.
+    """Return nominal optical FWHM and nominal/lower/upper sigmas as ZYX µm triples.
 
     Uses CUDA ``gaussian_width_bounds`` with the configuration's NA, wavelength,
     refractive index, voxel spacing and relative sigma range. Result keys are
-    ``nominal_sigma_zyx_um``, ``lower_sigma_zyx_um`` and ``upper_sigma_zyx_um``.
+    ``nominal_sigma_zyx_um``, ``lower_sigma_zyx_um``, ``upper_sigma_zyx_um`` and
+    ``nominal_fwhm_zyx_um``. FWHM is 2*sqrt(2*ln(2)) times the nominal sigma.
     """
     from localize_psf.optical_bounds import gaussian_width_bounds
 
@@ -241,6 +261,7 @@ def optical_parameters(config: LocalizationConfig) -> dict[str, tuple[float, flo
         sampling_floor_pixels=0,
         use_gpu=True,
     )
+    result["nominal_fwhm_zyx_um"] = 2 * np.sqrt(2 * np.log(2)) * result["nominal_sigma_zyx_um"]
     return {name: tuple(value.get().tolist()) for name, value in result.items()}
 
 
