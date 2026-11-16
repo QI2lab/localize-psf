@@ -81,37 +81,7 @@ def get_centered_roi(centers: Union[Sequence[float], Sequence[int], np.ndarray],
 
     warn("get_centered_roi() is deprecated and will be removed soon. Please use get_centered_rois() instead.")
 
-    roi = []
-    # for c, n in zip(centers, sizes):
-    for ii in range(len(centers)):
-        c = centers[ii]
-        n = sizes[ii]
-
-        # get ROI closest to centered
-        end_test = np.round(c + (n - 1) / 2) + 1
-        end_err = np.mod(end_test, 1)
-        start_test = np.round(c - (n - 1) / 2)
-        start_err = np.mod(start_test, 1)
-
-        if end_err > start_err:
-            start = start_test
-            end = start + n
-        else:
-            end = end_test
-            start = end - n
-
-        if min_vals is not None:
-            if start < min_vals[ii]:
-                start = min_vals[ii]
-
-        if max_vals is not None:
-            if end > max_vals[ii]:
-                end = max_vals[ii]
-
-        roi.append(int(start))
-        roi.append(int(end))
-
-    return roi
+    return get_centered_rois(centers, sizes, min_vals, max_vals)[0].tolist()
 
 
 def get_centered_rois(centers: Union[np.ndarray[int], np.ndarray[float], np.ndarray],
@@ -141,7 +111,7 @@ def get_centered_rois(centers: Union[np.ndarray[int], np.ndarray[float], np.ndar
     ndim = centers.shape[-1]
 
     if min_vals is None:
-        if xp.issubdtype(centers.dtype, float):
+        if xp.issubdtype(centers.dtype, xp.floating):
             min_vals = xp.full_like(centers, -xp.inf)
         elif xp.issubdtype(centers.dtype, xp.integer):
             min_vals = xp.full_like(centers, xp.iinfo(centers.dtype).min)
@@ -149,7 +119,7 @@ def get_centered_rois(centers: Union[np.ndarray[int], np.ndarray[float], np.ndar
             raise ValueError()
 
     if max_vals is None:
-        if xp.issubdtype(centers.dtype, float):
+        if xp.issubdtype(centers.dtype, xp.floating):
             max_vals = xp.full_like(centers, xp.inf)
         elif xp.issubdtype(centers.dtype, xp.integer):
             max_vals = xp.full_like(centers, xp.iinfo(centers.dtype).max)
@@ -159,15 +129,9 @@ def get_centered_rois(centers: Union[np.ndarray[int], np.ndarray[float], np.ndar
     min_vals = xp.atleast_2d(xp.asarray(min_vals))
     max_vals = xp.atleast_2d(xp.asarray(max_vals))
 
-    # check which
-    end_test = xp.rint(centers + (sizes - 1) / 2) + 1
-    end_err = xp.mod(end_test, 1)
-    start_test = xp.rint(centers - (sizes - 1) / 2)
-    start_err = xp.mod(start_test, 1)
-
-    mask = end_err > start_err
-    start = xp.where(mask, start_test, end_test - sizes)
-    end = start + sizes
+    # Preserve the existing end-based rounding, including half-pixel ties.
+    end = xp.rint(centers + (sizes - 1) / 2) + 1
+    start = end - sizes
 
     start = xp.maximum(start, min_vals)
     end = xp.minimum(end, max_vals)
