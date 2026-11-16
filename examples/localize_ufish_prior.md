@@ -118,6 +118,11 @@ Routine U-FISH logging is suppressed.
 key in JSON or Python metadata to raise the cutoff. `predict` forwards this
 argument to the spot caller as `intensity_threshold`.
 
+Set `exclude_edge_centroids=true` to discard centroids on the outermost voxel
+planes along Z, Y and X before fitting. For 2D, only Y and X are filtered.
+The default is `false`. Interactive callers can change this setting without
+recomputing enhancement. Changing it requires a new centroid checkpoint.
+
 # Centroid checkpoint
 
 The CLI updates one `centroids.parquet` file in the output directory after each

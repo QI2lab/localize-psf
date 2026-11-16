@@ -165,8 +165,9 @@ Centers use µm offsets from each prior. Explicit bounds intersect the ROI;
 null starts retain production estimates, and infeasible starts are rejected
 without clipping. All candidate rows and fitting/uncertainty evidence are kept.
 Centroid checkpoints include source geometry, weights, dimensional mode, blend,
-threshold, inference batch size and preprocessing policy. Changing detection
-settings requires another output directory; fit-only changes reuse centroids.
+threshold, edge exclusion, inference batch size and preprocessing policy.
+Changing detection settings requires another output directory; fit-only changes
+reuse centroids.
 
 Interactive callers save current JSON with `LocalizationConfig.save` and
 copy a quoted terminal command using their own installed interpreter. They do

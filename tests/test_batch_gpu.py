@@ -53,6 +53,7 @@ def scene(request):
 
 def test_preview_batch_parity_and_original_counts(localization, scene):
     image, config, truth = scene
+    config = config.model_copy(update={"exclude_edge_centroids": True})
     detector = Detector()
     try:
         points, enhanced = detector.detect(image, config)
@@ -160,6 +161,7 @@ def test_checkpoint_identity_and_fit_only_reuse(localization, scene, tmp_path):
     for update in (
         {"blend_3d": True},
         {"intensity_threshold": 0.6},
+        {"exclude_edge_centroids": True},
         {"inference_batch_size": 7},
         {"ufish_weights": "other_weights.pth"},
         {"origin_zyx_um": (-1.0, 3.0, -4.0)},
@@ -303,6 +305,29 @@ def test_cropped_caller_applies_physical_origin_once(scene):
         atol=1e-8,
         equal_nan=True,
     )
+
+
+def test_edge_filter_reuses_enhancement_and_streaming_policy(scene):
+    image, config, _ = scene
+    detector = Detector()
+    try:
+        original, enhanced = detector.detect(image, config)
+        filtered_config = config.model_copy(update={"exclude_edge_centroids": True})
+        filtered, reused = detector.detect(image, filtered_config)
+        assert reused is enhanced and len(filtered)
+        dimensions = range(1 if config.fit_model == "2d" else 0, 3)
+        for axis in dimensions:
+            assert filtered[:, axis].min() >= 1
+            assert filtered[:, axis].max() <= image.shape[axis] - 2
+        if config.fit_model == "2d":
+            np.testing.assert_array_equal(filtered[:, 0], 0)
+        restored, reused = detector.detect(image, config)
+        assert reused is enhanced
+        np.testing.assert_array_equal(restored, original)
+        streamed, _ = detector.detect(image, filtered_config, cache=False)
+        np.testing.assert_array_equal(streamed, filtered)
+    finally:
+        detector.release()
 
 
 def test_streaming_detection_reuses_weights_without_retaining_images(scene):

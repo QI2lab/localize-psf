@@ -72,6 +72,10 @@ class LocalizationConfig(BaseModel):
     fit_model: Literal["2d", "3d"] = "3d"
     blend_3d: bool = True
     intensity_threshold: float = Field(default=0.2, ge=0)
+    exclude_edge_centroids: bool = Field(
+        default=False,
+        description="Exclude centroids on the outermost Z/Y/X voxels (Y/X in 2D).",
+    )
     ufish_weights: str = "finetune_models/v1.0.1-simfish_model.pth"
     inference_batch_size: int = Field(default=32, ge=1)
     fit_roi_size_um: tuple[Positive, Positive, Positive] = (1.75, 0.65, 0.65)

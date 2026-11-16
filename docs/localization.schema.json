@@ -154,6 +154,12 @@
       "title": "Intensity Threshold",
       "type": "number"
     },
+    "exclude_edge_centroids": {
+      "default": false,
+      "description": "Exclude centroids on the outermost Z/Y/X voxels (Y/X in 2D).",
+      "title": "Exclude Edge Centroids",
+      "type": "boolean"
+    },
     "ufish_weights": {
       "default": "finetune_models/v1.0.1-simfish_model.pth",
       "title": "Ufish Weights",
