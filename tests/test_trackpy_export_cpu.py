@@ -64,3 +64,10 @@ def test_trackpy_export(localization, tmp_path):
     localization._write_parquet(table.slice(0, 0).to_reader(), source)
     empty = pd.read_parquet(localization.save_trackpy(source))
     assert empty.empty and empty.columns.equals(features.columns)
+
+    without_covariance = table.drop(["center_covariance_zyx", "covariance_valid"])
+    localization._write_parquet(without_covariance.to_reader(), source)
+    features = pd.read_parquet(localization.save_trackpy(source))
+    assert features["signal"].tolist() == [12, 14, 20]
+    assert not features["covariance_valid"].any()
+    assert features[["ep_x", "ep_y", "ep_z"]].isna().all().all()
