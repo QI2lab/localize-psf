@@ -12,6 +12,7 @@ from localize_psf.uncertainty import add_covariance, parameter_bound_activity, v
 
 
 def _host_array(value, dtype=None):
+    """Return a NumPy buffer, transferring CUDA inputs once and casting if needed."""
     backend = get_array_module(value)
     return np.asarray(backend.asnumpy(value) if backend is not np else value, dtype=dtype)
 
@@ -378,7 +379,10 @@ def _fit_gpu(
     model_id = mapping[type(model)]
     if model.sf != 1:
         raise NotImplementedError("GPUfit supports sampling factor 1")
-    types = np.isfinite(lower).astype(np.int32) + 2 * np.isfinite(upper).astype(np.int32)
+    types = (
+        np.isfinite(lower).astype(np.int32) * gf.ConstraintType.LOWER
+        + np.isfinite(upper).astype(np.int32) * gf.ConstraintType.UPPER
+    )
     # Microscopy padding evaluates to zero. Poisson gradients/Hessians divide by
     # the model value, so MLE groups must contain only valid samples.
     group_keys = np.column_stack((types, sizes)) if estimator == "MLE" else types
@@ -414,21 +418,14 @@ def _fit_gpu(
             user_info=info,
         )
         if np.any(pattern):
-            # Unused endpoints remain IEEE infinities in the localization contract;
-            # the native ABI ignores those endpoints, which are packed as zero.
-            packed = np.stack(
-                [
-                    np.where(np.isfinite(lower[indices]), lower[indices], 0),
-                    np.where(np.isfinite(upper[indices]), upper[indices], 0),
-                ],
-                axis=-1,
-            )
+            # GPUfit ignores inactive endpoints; retain their IEEE infinities.
+            packed = np.stack((lower[indices], upper[indices]), axis=-1).reshape(len(indices), -1)
             output = gf.fit_constrained(
                 packed_data,
                 packed_weights,
                 model_id,
                 initial[indices],
-                np.ascontiguousarray(packed.reshape(len(indices), -1)),
+                packed,
                 pattern.astype(np.int32),
                 **controls,
             )

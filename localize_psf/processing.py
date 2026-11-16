@@ -377,31 +377,38 @@ def fit_packed_rois(
         Native fit evidence for every ROI. Bounds intersect ROI limits; null
         starts keep production estimates. Infeasible starts raise ValueError
         through the existing bounds validator, without clipping or repair.
+
+    Notes
+    -----
+    Estimates use the input backend. Bounds and policies reuse the fitting
+    layer's required host conversion, avoiding per-ROI CUDA scalar reductions
+    and additional transfers before GPUfit consumes its host buffers.
     """
-    from localize_psf.array_backend import get_array_module
-    from localize_psf.batch_fitting import fit_rois
+    from localize_psf.batch_fitting import _host_array, fit_rois
     from localize_psf.fit_psf import gaussian3d_psf_model
 
-    xp = get_array_module(values)
-    host = np.asarray if xp is np else xp.asnumpy
     model = gaussian3d_psf_model() if model is None else model
-    centers = xp.asarray(centers_zyx_um)
+    centers = _host_array(centers_zyx_um)
     fixed = np.zeros(model.nparams, dtype=bool)
     if len(values):
-        initial = model.estimate_parameters(values, coordinates, num_preserved_dims=1)
+        initial = _host_array(
+            model.estimate_parameters(values, coordinates, num_preserved_dims=1), dtype=float
+        )
+        coordinates = tuple(_host_array(c, dtype=float) for c in coordinates)
+        sizes = _host_array(sizes)
         limits = [
             model.estimate_bounds(tuple(c[i, : int(count)] for c in coordinates))
-            for i, count in enumerate(host(sizes))
+            for i, count in enumerate(sizes)
         ]
-        lower = xp.stack([xp.stack([xp.asarray(v) for v in pair[0]]) for pair in limits])
-        upper = xp.stack([xp.stack([xp.asarray(v) for v in pair[1]]) for pair in limits])
+        limits = np.asarray(limits)
+        lower, upper = limits[:, 0], limits[:, 1]
         for i, name in enumerate(model.parameter_names):
             policy = config.fit_parameters[name]
             base = centers[:, 3 - i] if name in {"cx", "cy", "cz"} else 0
             if policy.lower is not None:
-                lower[:, i] = xp.maximum(lower[:, i], base + policy.lower)
+                lower[:, i] = np.maximum(lower[:, i], base + policy.lower)
             if policy.upper is not None:
-                upper[:, i] = xp.minimum(upper[:, i], base + policy.upper)
+                upper[:, i] = np.minimum(upper[:, i], base + policy.upper)
             if policy.initial is not None:
                 initial[:, i] = base + policy.initial
             fixed[i] = policy.fixed
@@ -411,7 +418,7 @@ def fit_packed_rois(
             lower[:, 5] = upper[:, 5] = 1
             fixed[[3, 5]] = True
     else:
-        initial = lower = upper = xp.empty((0, model.nparams))
+        initial = lower = upper = np.empty((0, model.nparams))
     return cast(
         FitResults,
         fit_rois(
@@ -421,14 +428,14 @@ def fit_packed_rois(
             initial,
             model=model,
             use_gpu=True,
-            bounds=(host(lower), host(upper)),
+            bounds=(lower, upper),
             fixed_params=fixed,
             estimator=config.estimator,
             noise_model="poisson" if config.estimator == "MLE" else "estimated_gaussian",
             max_number_iterations=config.max_number_iterations,
             tolerance=config.tolerance,
             return_covariance=config.return_covariance,
-            quality_flags={"truncated": host(truncated)},
+            quality_flags={"truncated": _host_array(truncated)},
             covariance_batch_size=config.roi_batch_size,
         ),
     )

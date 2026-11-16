@@ -218,6 +218,7 @@ def test_grouped_native_fits_preserve_candidate_ids(batch):
     lower = np.full(starts.shape, -np.inf)
     upper = np.full(starts.shape, np.inf)
     lower[0, 0] = 0
+    upper[0, 6] = truth[0, 6] + 1
     weights = np.full_like(data, 0.5)
     result = fit_rois(
         data,
