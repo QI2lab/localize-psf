@@ -63,6 +63,15 @@ floor. Amplitude/background are nonnegative and centers stay within their ROI.
 All candidates keep their result rows. Convergence, active bounds, truncation
 and Poisson covariance are reported by production `fit_rois`.
 
+`fit_filters` applies the same post-fit acceptance in the interactive preview and
+batch export. Its optional `amplitude_min` and `amplitude_max` are inclusive,
+in original image counts. `convergence` and `covariance` each accept `"all"`,
+`"pass"`, or `"fail"`; covariance filtering requires `return_covariance=true`.
+All conditions are combined. The result retains every candidate and a boolean
+`fit_results["filter_pass"]` mask; `localizations.parquet` contains accepted rows
+with their original candidate IDs. Trackpy and static PSF exports also honor the
+mask. Defaults accept every fit, and older JSON settings remain valid.
+
 Interactive callers use the same settings and fit policy. Given a source array
 `data` and a `LocalizationConfig` named `config`, preview preparation returns
 the image and its physical crop origin directly:

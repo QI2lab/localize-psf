@@ -12,7 +12,7 @@ from typing import TYPE_CHECKING, Any
 import numpy as np
 from numpy.typing import NDArray
 
-from .config import LocalizationConfig
+from .config import FitFilters, LocalizationConfig
 
 if TYPE_CHECKING:
     from cupy import ndarray as CudaArray
@@ -24,6 +24,45 @@ if TYPE_CHECKING:
 
 # Preserve the caller's public type name for the production fitter's result dictionary.
 type FitResults = dict[str, Any]
+
+
+def fit_filter_mask(
+    parameters: NDArray[np.float64],
+    success: NDArray[np.bool_],
+    covariance_valid: NDArray[np.bool_] | None,
+    filters: FitFilters,
+) -> NDArray[np.bool_]:
+    """Return post-fit acceptance without removing candidates or changing evidence.
+
+    ``parameters`` has shape (N,7) in the production Gaussian's parameter order;
+    column zero is amplitude in original image counts. ``success`` and optional
+    ``covariance_valid`` are upstream boolean (N,) flags. All selected conditions
+    must pass. Missing covariance raises when either covariance selector is used.
+    Empty inputs return an empty mask; default filters accept every candidate.
+    """
+    from localize_psf.localize import range_filter
+
+    keep = np.ones(len(parameters), dtype=bool)
+    if filters.amplitude_min is not None or filters.amplitude_max is not None:
+        keep &= (
+            range_filter(
+                -np.inf if filters.amplitude_min is None else filters.amplitude_min,
+                np.inf if filters.amplitude_max is None else filters.amplitude_max,
+                0,
+                "amplitude",
+            )
+            .filter(parameters)
+            .all(axis=1)
+        )
+    if filters.convergence != "all":
+        keep &= success == (filters.convergence == "pass")
+    if filters.covariance != "all":
+        if covariance_valid is None:
+            raise ValueError(
+                "Covariance diagnostics were not computed. Enable covariance and rerun GPU fits."
+            )
+        keep &= covariance_valid == (filters.covariance == "pass")
+    return keep
 
 
 def prepare_volume(
@@ -223,7 +262,8 @@ def fit_spots(
     intersected with ROI limits; infeasible starts raise ValueError without clipping.
 
     Return all candidates in input order with IDs, statuses, active bounds and
-    requested uncertainty evidence. Fitted positions and widths use µm. 2D
+    requested uncertainty evidence, plus the post-fit ``filter_pass`` mask.
+    Fitted positions and widths use µm. 2D
     requires one XY plane and fixes the native 3D Gaussian's cz to that plane's
     physical Z and sz to 1 µm. CUDA workspaces are reused between fit batches.
 
@@ -318,7 +358,8 @@ def fit_packed_rois(
     bounds/starts are prior-relative µm offsets; bounds intersect ROI limits.
     Null starts retain model estimates, and infeasible starts raise ValueError
     without clipping. 2D fixes cz at the plane and sz at 1 µm. Return FitResults
-    for every candidate, including statuses, active bounds and uncertainty flags.
+    for every candidate, including statuses, active bounds, uncertainty flags and
+    a ``filter_pass`` mask evaluated using ``config.fit_filters``.
 
     Estimates use the input backend. Bounds/policies reuse the fitter's required
     host conversion, avoiding per-ROI CUDA reductions and extra buffer transfers.
@@ -358,7 +399,7 @@ def fit_packed_rois(
             fixed[[3, 5]] = True
     else:
         initial = lower = upper = np.empty((0, model.nparams))
-    return fit_rois(
+    result = fit_rois(
         values,
         coordinates,
         sizes,
@@ -375,3 +416,7 @@ def fit_packed_rois(
         quality_flags={"truncated": _host_array(truncated)},
         covariance_batch_size=config.roi_batch_size,
     )
+    result["filter_pass"] = fit_filter_mask(
+        result["fit_params"], result["success"], result.get("covariance_valid"), config.fit_filters
+    )
+    return result

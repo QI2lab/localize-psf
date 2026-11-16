@@ -62,6 +62,29 @@ class PreviewSettings(BaseModel):
         return self
 
 
+class FitFilters(BaseModel):
+    """Post-fit acceptance shared by previews and batch exports.
+
+    Amplitude limits are inclusive, in original image counts; null is unbounded.
+    Status selectors accept all fits or require the upstream pass/fail flag.
+    Covariance that was not computed is unavailable, rather than a failed check.
+    """
+
+    model_config = ConfigDict(strict=True, extra="forbid", allow_inf_nan=False, frozen=True)
+    amplitude_min: float | None = Field(default=None, ge=0)
+    amplitude_max: float | None = Field(default=None, ge=0)
+    covariance: Literal["all", "pass", "fail"] = "all"
+    convergence: Literal["all", "pass", "fail"] = "all"
+
+    @model_validator(mode="after")
+    def validate_amplitude_range(self) -> Self:
+        """Require an ordered inclusive interval when both limits are supplied."""
+        if self.amplitude_min is not None and self.amplitude_max is not None:
+            if self.amplitude_min > self.amplitude_max:
+                raise ValueError("Minimum amplitude must not exceed maximum amplitude")
+        return self
+
+
 class LocalizationConfig(BaseModel):
     """Batch metadata plus explicit detector, fitter, provenance, and preview settings."""
 
@@ -87,6 +110,7 @@ class LocalizationConfig(BaseModel):
     tolerance: Positive = 1e-6
     roi_batch_size: int = Field(default=32, ge=1)
     return_covariance: bool = False
+    fit_filters: FitFilters = Field(default_factory=FitFilters)
     numerical_aperture: Positive = 1.35
     wavelength_um: Positive = 0.515
     refractive_index: Positive = 1.4
@@ -131,6 +155,8 @@ class LocalizationConfig(BaseModel):
             raise ValueError("Optical sigma factors must be ordered")
         if self.numerical_aperture > self.refractive_index:
             raise ValueError("NA cannot exceed the immersion refractive index")
+        if self.fit_filters.covariance != "all" and not self.return_covariance:
+            raise ValueError("Covariance filtering requires return_covariance=True")
         return self
 
     def save(self, path: str | Path) -> None:

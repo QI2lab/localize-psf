@@ -9,10 +9,10 @@ from threading import Event
 import numpy as np
 import pytest
 
-from localize_psf.config import LocalizationConfig, Parameter, PreviewSettings
+from localize_psf.config import FitFilters, LocalizationConfig, Parameter, PreviewSettings
 from localize_psf.fit_psf import gaussian3d_psf_model
 from localize_psf.localize import get_coords
-from localize_psf.processing import Detector, fit_spots, prepare_volume
+from localize_psf.processing import Detector, fit_filter_mask, fit_spots, prepare_volume
 
 pytestmark = [pytest.mark.integration, pytest.mark.gpu, pytest.mark.example]
 
@@ -99,6 +99,61 @@ def test_preview_batch_parity_and_original_counts(localization, scene):
             batch["fit_results"]["fit_params"][:, 3], config.origin_zyx_um[0]
         )
         np.testing.assert_array_equal(batch["fit_results"]["fit_params"][:, 5], 1)
+
+
+def test_fit_filters_preview_batch_and_export(localization, scene, tmp_path):
+    import pyarrow.parquet as pq
+
+    image, config, truth = scene
+    filters = FitFilters(
+        amplitude_min=float(truth[0] / 2), amplitude_max=float(truth[0] * 2), convergence="pass"
+    )
+    config = config.model_copy(update={"fit_filters": filters})
+    batch = localization.localize_ufish_prior(image, config)
+    fits = batch["fit_results"]
+    expected = (
+        fits["success"]
+        & (fits["fit_params"][:, 0] >= filters.amplitude_min)
+        & (fits["fit_params"][:, 0] <= filters.amplitude_max)
+    )
+    assert expected.any()
+    np.testing.assert_array_equal(fits["filter_pass"], expected)
+    preview = fit_spots(image, batch["candidate_centroids_zyx_px"], config)
+    np.testing.assert_array_equal(preview["filter_pass"], expected)
+    localization.save_localizations(batch, tmp_path, export_trackpy=True)
+    saved = pq.read_table(tmp_path / "localizations.parquet")
+    assert len(saved) == expected.sum()
+    assert len(pq.read_table(tmp_path / "trackpy.parquet")) == expected.sum()
+    np.testing.assert_array_equal(
+        np.asarray(saved["candidate_ids"]), fits["candidate_ids"][expected]
+    )
+    np.testing.assert_allclose(
+        np.array(saved["fit_params"].to_pylist()), fits["fit_params"][expected]
+    )
+    with pytest.raises(ValueError, match="not computed"):
+        fit_filter_mask(fits["fit_params"], fits["success"], None, FitFilters(covariance="fail"))
+    empty = fit_filter_mask(
+        fits["fit_params"][:0], fits["success"][:0], None, FitFilters(amplitude_min=1)
+    )
+    assert empty.shape == (0,) and empty.dtype == np.bool_
+    for selector in ("pass", "fail"):
+        settings = FitFilters(covariance=selector, convergence=selector)
+        mask = fit_filter_mask(
+            fits["fit_params"], fits["success"], fits["covariance_valid"], settings
+        )
+        np.testing.assert_array_equal(
+            mask,
+            (fits["success"] == (selector == "pass"))
+            & (fits["covariance_valid"] == (selector == "pass")),
+        )
+    fits["filter_pass"] = fit_filter_mask(
+        fits["fit_params"], fits["success"], fits["covariance_valid"], FitFilters(amplitude_max=0)
+    )
+    assert not fits["filter_pass"].any()
+    localization.save_localizations(batch, tmp_path, export_trackpy=True)
+    assert pq.read_table(tmp_path / "localizations.parquet").schema == saved.schema
+    assert len(pq.read_table(tmp_path / "localizations.parquet")) == 0
+    assert len(pq.read_table(tmp_path / "trackpy.parquet")) == 0
 
 
 @pytest.mark.parametrize("all_axes", [False, True])

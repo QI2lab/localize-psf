@@ -42,6 +42,7 @@ _TRACKPY_SOURCE_COLUMNS = (
     "fit_params",
     "center_covariance_zyx",
     "success",
+    "filter_pass",
     "covariance_valid",
     "candidate_timepoints",
     "candidate_channels",
@@ -315,6 +316,8 @@ def _psf_diagnostics(
     for key, volume in result["volume_results"].items():
         ids = volume["candidate_ids"]
         ids = ids[fits["success"][ids]]
+        if "filter_pass" in fits:
+            ids = ids[fits["filter_pass"][ids]]
         centers = fits["fit_params"][ids][:, (3, 2, 1)]
 
         # Fit the focus surface and retain the image projection.
@@ -754,6 +757,8 @@ def plot_calibration(result: LocalizationResult) -> dict[str, Figure]:
         if not volume["focus"]["available"]:
             continue
         ids = volume["candidate_ids"][result["fit_results"]["success"][volume["candidate_ids"]]]
+        if "filter_pass" in result["fit_results"]:
+            ids = ids[result["fit_results"]["filter_pass"][ids]]
         centers = result["fit_results"]["fit_params"][ids][:, (3, 2, 1)]
         focus = volume["focus"]
         prefix = "" if len(result["volume_results"]) == 1 else f"c{channel}_"
@@ -824,7 +829,8 @@ def to_trackpy_dataframe(table: Table) -> DataFrame:
     Returns
     -------
     pandas.DataFrame
-        Converged fits with ``frame``, ``channel``, Gaussian amplitude as
+        Converged fits accepted by any ``filter_pass`` mask, with ``frame``,
+        ``channel``, Gaussian amplitude as
         ``signal`` and ``covariance_valid``. Positions ``x/y/z``, widths
         ``size_*`` and errors ``ep_*`` use pixels; ``xum/yum/zum`` use world
         coordinates in micrometers. Invalid covariance retains NaN errors.
@@ -834,6 +840,8 @@ def to_trackpy_dataframe(table: Table) -> DataFrame:
     table = table.select(
         [name for name in _TRACKPY_SOURCE_COLUMNS if name in table.column_names]
     ).filter(table["success"])
+    if "filter_pass" in table.column_names:
+        table = table.filter(table["filter_pass"])
     metadata = json.loads(table.schema.metadata[b"localize_psf"])["metadata"]
     spacing = np.asarray(metadata["voxel_size_zyx_um"])[::-1]
     origin = np.asarray(metadata["origin_zyx_um"])[::-1]
@@ -916,9 +924,11 @@ def save_localizations(
         Candidate and fit arrays, metadata and any static PSF diagnostics.
     output_dir : str or os.PathLike
         Destination directory, created if needed. Writes
-        ``localizations.parquet`` and available PSF TIFFs and diagnostic PNGs.
+        ``localizations.parquet`` with the fits accepted by ``fit_filters``, and
+        available PSF TIFFs and diagnostic PNGs. All candidate evidence remains
+        in the input result; original candidate IDs are preserved in the export.
     export_trackpy : bool, optional
-        Also write ``trackpy.parquet`` containing all converged fits.
+        Also write ``trackpy.parquet`` containing accepted converged fits.
 
     Returns
     -------
@@ -970,6 +980,8 @@ def save_localizations(
         summary, default=lambda v: v.tolist() if isinstance(v, np.ndarray) else v.item()
     )
     table = pa.table(columns).replace_schema_metadata({b"localize_psf": encoded.encode("utf-8")})
+    if "filter_pass" in table.column_names:
+        table = table.filter(table["filter_pass"])
     _write_parquet(table.to_reader(), output / "localizations.parquet")
     if export_trackpy:
         save_trackpy(output / "localizations.parquet")

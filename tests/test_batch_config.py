@@ -5,14 +5,21 @@ import json
 import pytest
 from pydantic import ValidationError
 
-from localize_psf.config import LocalizationConfig, Parameter, PreviewSettings
+from localize_psf.config import FitFilters, LocalizationConfig, Parameter, PreviewSettings
 
 pytestmark = pytest.mark.unit
 
 
 def test_strict_json_roundtrip(tmp_path):
     config = LocalizationConfig(
-        blend_3d=False, intensity_threshold=0.75, exclude_edge_centroids=True, edge_margin_px=3
+        blend_3d=False,
+        intensity_threshold=0.75,
+        exclude_edge_centroids=True,
+        edge_margin_px=3,
+        return_covariance=True,
+        fit_filters=FitFilters(
+            amplitude_min=100, amplitude_max=1000, covariance="pass", convergence="fail"
+        ),
     )
     path = tmp_path / "settings.json"
     config.save(path)
@@ -23,6 +30,29 @@ def test_strict_json_roundtrip(tmp_path):
     assert not saved["blend_3d"]
     assert saved["exclude_edge_centroids"]
     assert saved["edge_margin_px"] == 3
+    assert saved["fit_filters"] == config.fit_filters.model_dump()
+
+
+@pytest.mark.parametrize(
+    "values",
+    [
+        {"amplitude_min": -1},
+        {"amplitude_max": float("inf")},
+        {"amplitude_min": 2, "amplitude_max": 1},
+        {"covariance": "unknown"},
+        {"convergence": True},
+        {"amplitude_min": "5"},
+    ],
+)
+def test_invalid_fit_filters(values):
+    with pytest.raises(ValidationError):
+        FitFilters(**values)
+
+
+def test_covariance_filter_requires_diagnostics():
+    with pytest.raises(ValidationError, match="return_covariance"):
+        LocalizationConfig(fit_filters=FitFilters(covariance="fail"))
+    assert LocalizationConfig().fit_filters == FitFilters()
 
 
 @pytest.mark.parametrize(
