@@ -93,7 +93,13 @@ def test_ome_zarr_highest_resolution_transforms_and_spatial_axis_order(localizat
 
 
 @pytest.mark.parametrize("axes", ["tczyx", "tcyxz"])
-def test_lazy_roi_reads_skip_unselected_chunks(localization, tmp_path, axes):
+@pytest.mark.parametrize(
+    "timepoint,channel,roi_bounds",
+    [(1, 1, [[4, 6, 0, 2, 0, 3], [4, 7, 0, 3, 0, 4]]), (0, 1, [[0, 2, 4, 6, 0, 2]])],
+)
+def test_lazy_roi_reads_skip_unselected_chunks(
+    localization, tmp_path, axes, timepoint, channel, roi_bounds
+):
     import tensorstore as ts
     from yaozarrs import DimSpec, open_group, v05
     from yaozarrs.write.v05 import write_image
@@ -122,14 +128,15 @@ def test_lazy_roi_reads_skip_unselected_chunks(localization, tmp_path, axes):
         data, dict(metadata, batch_axes=True, psf_diagnostics=False)
     )
     assert isinstance(data, ts.TensorStore)
-    rois = np.array([[4, 6, 0, 2, 0, 3], [4, 7, 0, 3, 0, 4], [0, 2, 4, 6, 0, 2]])
-    times, channels = np.array([1, 1, 0]), np.array([1, 1, 1])
+    rois = np.array(roi_bounds)
     coords = localization.get_coords(shape[-3:], (0.2, 0.1, 0.15), origin=(-4, 2, -3))
-    values, coordinates, sizes = localization._prepare_fit_rois(data, coords, rois, times, channels)
+    values, coordinates, sizes = localization.prepare_rois(data[timepoint, channel], coords, rois)
     expected = counts.transpose(tuple(axes.index(a) for a in "tczyx"))
-    for i, (roi, t, c) in enumerate(zip(rois, times, channels, strict=True)):
+    for i, roi in enumerate(rois):
         region = tuple(slice(int(start), int(stop)) for start, stop in roi.reshape(3, 2))
-        np.testing.assert_array_equal(values[i, : sizes[i]], expected[t, c][region].ravel())
+        np.testing.assert_array_equal(
+            values[i, : sizes[i]], expected[timepoint, channel][region].ravel()
+        )
         assert np.isnan(values[i, sizes[i] :]).all()
         for actual, vector in zip(coordinates, coords, strict=True):
             np.testing.assert_array_equal(

@@ -85,18 +85,14 @@ def test_timelapse_psf_diagnostics_are_rejected(localization, selection):
 
 
 @pytest.mark.integration
-def test_multi_volume_roi_packing(localization):
+@pytest.mark.parametrize("timepoint", [0, 1])
+@pytest.mark.parametrize("channel", [0, 1])
+def test_selected_volume_roi_packing(localization, timepoint, channel):
     data = np.arange(2 * 2 * 7 * 9 * 11, dtype=np.uint16).reshape(2, 2, 7, 9, 11)
     coords = localization.get_coords(data.shape[-3:], (0.3, 0.2, 0.1), origin=(-4, 2, -3))
-    rois = np.array(
-        [[1, 4, 2, 6, 3, 8], [0, 2, 0, 3, 0, 4], [2, 7, 4, 9, 6, 11], [1, 3, 2, 6, 3, 7]]
-    )
-    times, channels = np.array([0, 0, 1, 1]), np.array([0, 1, 0, 1])
-    # Start partway through the candidates and span time/channel boundaries.
-    values, coordinates, counts = localization._prepare_fit_rois(
-        data, coords, rois[1:], times[1:], channels[1:]
-    )
-    for i, (roi, timepoint, channel) in enumerate(zip(rois[1:], times[1:], channels[1:])):
+    rois = np.array([[0, 2, 0, 3, 0, 4], [2, 7, 4, 9, 6, 11]])
+    values, coordinates, counts = localization.prepare_rois(data[timepoint, channel], coords, rois)
+    for i, roi in enumerate(rois):
         selected = tuple(slice(start, stop) for start, stop in roi.reshape(3, 2))
         expected = data[timepoint, channel][selected].ravel()
         assert counts[i] == len(expected)

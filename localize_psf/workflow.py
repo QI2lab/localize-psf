@@ -374,55 +374,6 @@ def _write_parquet(reader: RecordBatchReader, path: Path) -> None:
     temporary.replace(path)
 
 
-def _prepare_fit_rois(
-    data: np.ndarray | TensorStore,
-    coords: tuple[np.ndarray, ...],
-    rois: np.ndarray,
-    times: np.ndarray,
-    channels: np.ndarray,
-) -> tuple[np.ndarray, tuple[np.ndarray, ...], np.ndarray]:
-    """Pack an ROI batch spanning volumes with production ``prepare_rois``.
-
-    Parameters
-    ----------
-    data : numpy.ndarray or tensorstore.TensorStore
-        TCZYX image. TensorStore remains lazy: only requested ROI samples and
-        their containing storage chunks are read.
-    coords : tuple of numpy.ndarray
-        Sparse ZYX coordinate arrays in micrometers, broadcastable to a volume.
-    rois : numpy.ndarray, shape (nrois, 6)
-        Start-inclusive, stop-exclusive bounds in ZYX order for a nonempty batch.
-    times : numpy.ndarray, shape (nrois,)
-        Source timepoint index for each ROI.
-    channels : numpy.ndarray, shape (nrois,)
-        Source channel index for each ROI.
-
-    Returns
-    -------
-    values : numpy.ndarray, shape (nrois, max_samples)
-        ROI intensities padded with NaN to the largest ROI in the batch.
-    coordinates : tuple of numpy.ndarray
-        Corresponding ZYX coordinate samples in micrometers, with NaN padding.
-    counts : numpy.ndarray, shape (nrois,)
-        Number of valid samples in each ROI.
-    """
-    npoints = int(np.max(np.prod(rois[:, 1::2] - rois[:, ::2], axis=1)))
-    values = np.full((len(rois), npoints), np.nan)
-    coordinates = tuple(np.full_like(values, np.nan) for _ in range(3))
-    counts = np.empty(len(rois), int)
-
-    # Pack each source volume into the shared ROI batch.
-    for key in dict.fromkeys(zip(times, channels, strict=True)):
-        selected = (times == key[0]) & (channels == key[1])
-        packed, packed_coords, sizes = prepare_rois(data[key], coords, rois[selected])
-        values[selected, : packed.shape[1]] = packed
-        counts[selected] = sizes
-        for target, source in zip(coordinates, packed_coords, strict=True):
-            target[selected, : packed.shape[1]] = source
-
-    return values, coordinates, counts
-
-
 def localize_ufish_prior(
     data: np.ndarray | TensorStore | str | PathLike,
     metadata: Mapping | LocalizationConfig | None = None,
@@ -683,9 +634,8 @@ def localize_ufish_prior(
         for start in range(first, last, config.roi_batch_size):
             stop = min(start + config.roi_batch_size, last)
             selected = slice(start, stop)
-            values, coordinates, counts = _prepare_fit_rois(
-                data, coords, rois[selected], times[selected], channels[selected]
-            )
+            # Each inference key owns one source volume; pack its lazy view directly.
+            values, coordinates, counts = prepare_rois(data[key[:2]], coords, rois[selected])
             truncated = np.any(rois[selected, 1::2] - rois[selected, ::2] != roi_size, axis=1)
             batch = fit_packed_rois(
                 values, coordinates, counts, centers[selected], config, truncated, model=model
