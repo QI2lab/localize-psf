@@ -65,24 +65,17 @@ already be initialized; the tested toolset is MSVC 14.38. CI initializes that
 toolset automatically. The Windows SDK bootstrap stays inside the isolated
 build environment and does not install a system CUDA toolkit.
 
-For a separate local integration environment:
+Use the same root project for local GPU integration:
 
 ```powershell
-uv run --locked python scripts/create_local_gpu_profile.py
-uv lock --project build/local-gpu
-uv sync --locked --project build/local-gpu
-uv run --locked --project build/local-gpu --no-sync python -c "import pygpufit.gpufit as gf; print(gf.get_capabilities())"
+uv sync --locked --extra gpu --extra example --group test-cpu
+uv run --locked --no-sync python -c "import pygpufit.gpufit as gf; print(gf.get_capabilities())"
 ```
 
-The generated project and independent lock live under ignored `build/local-gpu`.
-It uses the editable localize-psf checkout and obtains GPUfit through the `gpu`
-extra's fork dependency. Its lock records the resolved upstream commit. The
-generated profile carries the checkout's build dependencies and variables, so
-it uses the same package-managed CUDA toolchain on both platforms.
-
-When upgrading an existing profile, regenerate it and its lock as above, then
-use `uv sync --locked --project build/local-gpu --reinstall-package pygpufit`
-to replace the old native binary. GPUfit's build defaults select cuBLAS and
+The root lock and build settings select the same package-managed CUDA toolchain
+on both platforms. To replace an old native binary, use
+`uv sync --locked --extra gpu --reinstall-package pygpufit`.
+GPUfit's build defaults select cuBLAS and
 float32. Linux source builds, 64 core GPU unit and integration tests (including
 Monte Carlo simulations), and the U-FISH integration test have been validated
 on Ubuntu 26.04 x86_64 with a TITAN RTX, CUDA 12.9 and GCC 13.4.
@@ -207,7 +200,7 @@ cache inside the ignored build directory:
 ```
 
 The runner clears inherited CUDA path variables for the command and restores
-them afterward. It uses the existing locked `build/local-gpu` profile and never
+them afterward. It uses the root project's locked environment and never
 modifies persistent environment variables or installs packages.
 # Localization uncertainty
 

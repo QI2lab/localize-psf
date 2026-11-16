@@ -20,7 +20,7 @@ try {
     }
     $env:CUPY_CACHE_DIR = Join-Path $ProjectRoot 'build\cupy-cache'
     $env:UV_CACHE_DIR = Join-Path $ProjectRoot '.uv-cache'
-    & $UvPath run --project (Join-Path $ProjectRoot 'build\local-gpu') --locked --no-sync @CommandArguments
+    & $UvPath run --project $ProjectRoot --locked --no-sync @CommandArguments
     if ($LASTEXITCODE -ne 0) { throw "GPU command failed with exit code $LASTEXITCODE" }
 } finally {
     foreach ($Name in $CudaVariables) {
