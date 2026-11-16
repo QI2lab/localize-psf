@@ -535,6 +535,9 @@ def localize_ufish_prior(
         blend_3d=representative.blend_3d,
         intensity_threshold=representative.intensity_threshold,
         exclude_edge_centroids=representative.exclude_edge_centroids,
+        edge_margin_px=representative.edge_margin_px
+        if representative.exclude_edge_centroids
+        else 0,
         inference_batch_size=representative.inference_batch_size,
         preprocessing_policy="ufish.predict-default-v1;fit-original-counts",
     )
@@ -559,6 +562,7 @@ def localize_ufish_prior(
             previous = json.loads((saved.schema.metadata or {}).get(b"localize_psf", b"{}"))
             completed = {tuple(key) for key in previous.pop("completed_volumes", [])}
             previous.setdefault("exclude_edge_centroids", False)
+            previous.setdefault("edge_margin_px", 1 if previous["exclude_edge_centroids"] else 0)
             if previous != identity:
                 raise ValueError(
                     "Centroid checkpoint has different input or U-FISH settings; use a different output directory"

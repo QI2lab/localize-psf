@@ -12,7 +12,7 @@ pytestmark = pytest.mark.unit
 
 def test_strict_json_roundtrip(tmp_path):
     config = LocalizationConfig(
-        blend_3d=False, intensity_threshold=0.75, exclude_edge_centroids=True
+        blend_3d=False, intensity_threshold=0.75, exclude_edge_centroids=True, edge_margin_px=3
     )
     path = tmp_path / "settings.json"
     config.save(path)
@@ -22,6 +22,7 @@ def test_strict_json_roundtrip(tmp_path):
     assert "Infinity" not in path.read_text()
     assert not saved["blend_3d"]
     assert saved["exclude_edge_centroids"]
+    assert saved["edge_margin_px"] == 3
 
 
 @pytest.mark.parametrize(
@@ -96,6 +97,11 @@ def test_optical_sigma_interval_cannot_collapse():
         {"blend_3d": 1},
         {"exclude_edge_centroids": "true"},
         {"exclude_edge_centroids": 1},
+        {"edge_margin_px": 0},
+        {"edge_margin_px": -1},
+        {"edge_margin_px": 1.5},
+        {"edge_margin_px": "2"},
+        {"edge_margin_px": True},
         {"intensity_threshold": "0.5"},
         {"preview": {"axes": "zyx", "timepoint": "0"}},
         {"unsupported_preprocessing": "normalize"},

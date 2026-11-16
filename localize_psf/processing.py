@@ -94,8 +94,8 @@ class Detector:
         Return (crop-local ZYX pixel priors, enhancement). Priors have shape
         (N,3), with zero Z in 2D; enhancement is float32 ZYX or YX respectively.
 
-        ``exclude_edge_centroids`` removes the outermost voxel planes after spot
-        calling, using the production range filter. In 2D it applies only to Y/X.
+        ``exclude_edge_centroids`` removes ``edge_margin_px`` voxel planes at each
+        face after spot calling, using the production range filter. In 2D it applies only to Y/X.
         Toggling it reuses enhancement; returned priors also drive batch fitting.
 
         With ``cache=True``, retain the image identity and enhancement so threshold
@@ -151,7 +151,12 @@ class Detector:
             keep = np.ones(len(points), dtype=bool)
             for axis in range(1 if axes == "yx" else 0, 3):
                 keep &= (
-                    range_filter(1, image.shape[axis] - 2, axis, f"{'zyx'[axis]} volume edge")
+                    range_filter(
+                        config.edge_margin_px,
+                        image.shape[axis] - 1 - config.edge_margin_px,
+                        axis,
+                        f"{'zyx'[axis]} volume edge",
+                    )
                     .filter(points)
                     .all(axis=1)
                 )

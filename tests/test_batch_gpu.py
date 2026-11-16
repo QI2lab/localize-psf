@@ -149,6 +149,7 @@ def test_checkpoint_identity_and_fit_only_reuse(localization, scene, tmp_path):
             "fit_roi_size_um": (1.8, 1.4, 1.4),
             "return_covariance": False,
             "tolerance": 2e-6,
+            "edge_margin_px": 3,
         }
     )
     refit = localization.localize_ufish_prior(image, refit_config, tmp_path)
@@ -180,6 +181,7 @@ def test_checkpoint_identity_and_fit_only_reuse(localization, scene, tmp_path):
 
     identity = json.loads(pq.read_schema(checkpoint).metadata[b"localize_psf"])
     assert identity["preprocessing_policy"].endswith("fit-original-counts")
+    assert identity["edge_margin_px"] == 0
 
 
 def test_empty_cancelled_and_infeasible_shared_fits(localization, scene, tmp_path):
@@ -317,10 +319,16 @@ def test_edge_filter_reuses_enhancement_and_streaming_policy(scene):
         assert reused is enhanced and len(filtered)
         dimensions = range(1 if config.fit_model == "2d" else 0, 3)
         for axis in dimensions:
-            assert filtered[:, axis].min() >= 1
-            assert filtered[:, axis].max() <= image.shape[axis] - 2
+            assert filtered[:, axis].min() >= filtered_config.edge_margin_px
+            assert filtered[:, axis].max() <= image.shape[axis] - 1 - filtered_config.edge_margin_px
         if config.fit_model == "2d":
             np.testing.assert_array_equal(filtered[:, 0], 0)
+        wider_config = filtered_config.model_copy(update={"edge_margin_px": 3})
+        wider, reused = detector.detect(image, wider_config)
+        assert reused is enhanced and len(wider)
+        for axis in dimensions:
+            assert wider[:, axis].min() >= 3
+            assert wider[:, axis].max() <= image.shape[axis] - 4
         restored, reused = detector.detect(image, config)
         assert reused is enhanced
         np.testing.assert_array_equal(restored, original)

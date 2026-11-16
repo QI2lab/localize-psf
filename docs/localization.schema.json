@@ -156,9 +156,16 @@
     },
     "exclude_edge_centroids": {
       "default": false,
-      "description": "Exclude centroids on the outermost Z/Y/X voxels (Y/X in 2D).",
+      "description": "Exclude centroids within edge_margin_px of Z/Y/X faces (Y/X in 2D).",
       "title": "Exclude Edge Centroids",
       "type": "boolean"
+    },
+    "edge_margin_px": {
+      "default": 2,
+      "description": "Excluded voxel layers at each face.",
+      "minimum": 1,
+      "title": "Edge Margin Px",
+      "type": "integer"
     },
     "ufish_weights": {
       "default": "finetune_models/v1.0.1-simfish_model.pth",

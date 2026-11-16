@@ -6,6 +6,7 @@
   "blend_3d": true,
   "intensity_threshold": 0.2,
   "exclude_edge_centroids": false,
+  "edge_margin_px": 2,
   "ufish_weights": "finetune_models/v1.0.1-simfish_model.pth",
   "inference_batch_size": 32,
   "fit_roi_size_um": [
