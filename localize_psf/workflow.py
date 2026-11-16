@@ -539,7 +539,8 @@ def localize_ufish_prior(
         if representative.exclude_edge_centroids
         else 0,
         inference_batch_size=representative.inference_batch_size,
-        preprocessing_policy="ufish.predict-default-v1;fit-original-counts",
+        preprocessing_policy="ufish.predict-default-v1;fit-original-counts"
+        + (";edge-projected-footprint-v1" if representative.exclude_edge_centroids else ""),
     )
     inference_keys = (
         tuple((t, c, z) for t, c in keys for z in range(data.shape[2])) if mode == "2d" else keys

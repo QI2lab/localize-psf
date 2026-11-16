@@ -74,7 +74,7 @@ class LocalizationConfig(BaseModel):
     intensity_threshold: float = Field(default=0.2, ge=0)
     exclude_edge_centroids: bool = Field(
         default=False,
-        description="Exclude centroids within edge_margin_px of Z/Y/X faces (Y/X in 2D).",
+        description="Exclude centroids near array faces and zero-padded data-footprint edges (YX in 2D).",
     )
     edge_margin_px: int = Field(default=2, ge=1, description="Excluded voxel layers at each face.")
     ufish_weights: str = "finetune_models/v1.0.1-simfish_model.pth"

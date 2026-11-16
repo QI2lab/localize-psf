@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from concurrent.futures import CancelledError
+from itertools import combinations
 from pathlib import Path
 from threading import Event
 from typing import TYPE_CHECKING, Any
@@ -83,6 +84,7 @@ class Detector:
         self._key: tuple[int, bool, int, str, str] | None = None
         self._image: np.ndarray | None = None
         self._enhanced: NDArray[np.float32] | None = None
+        self._edge_distances: list[np.ndarray] | None = None
 
     def detect(
         self, image: np.ndarray, config: LocalizationConfig, *, cache: bool = True
@@ -94,9 +96,11 @@ class Detector:
         Return (crop-local ZYX pixel priors, enhancement). Priors have shape
         (N,3), with zero Z in 2D; enhancement is float32 ZYX or YX respectively.
 
-        ``exclude_edge_centroids`` removes ``edge_margin_px`` voxel planes at each
-        face after spot calling, using the production range filter. In 2D it applies only to Y/X.
-        Toggling it reuses enhancement; returned priors also drive batch fitting.
+        ``exclude_edge_centroids`` removes a voxel-grid distance band at the
+        array faces and the nonzero data footprint in each axis projection.
+        This follows sloping zero-padded boundaries without treating interior
+        zero counts as holes. 2D uses only YX. Enhancement and footprint distances
+        are reused when changing the margin; the same priors drive batch fitting.
 
         With ``cache=True``, retain the image identity and enhancement so threshold
         changes only recall spots. A new image, weights, dimensional mode, blend
@@ -117,6 +121,7 @@ class Detector:
         )
         if not cache or self._key != key:
             self._enhanced = self._image = self._key = None
+            self._edge_distances = None
             if self._detector is None or self._weights != config.ufish_weights:
                 self._weights = None
                 self._detector = UFish(device="cuda")
@@ -145,21 +150,25 @@ class Detector:
         points = spots[[f"axis-{i}" for i in range(len(axes))]].to_numpy(dtype=float)
         if axes == "yx":
             points = np.column_stack((np.zeros(len(points)), points))
-        if config.exclude_edge_centroids:
-            from .localize import range_filter
+        if config.exclude_edge_centroids and len(points):
+            from scipy.ndimage import binary_fill_holes, distance_transform_edt
 
-            keep = np.ones(len(points), dtype=bool)
-            for axis in range(1 if axes == "yx" else 0, 3):
-                keep &= (
-                    range_filter(
-                        config.edge_margin_px,
-                        image.shape[axis] - 1 - config.edge_margin_px,
-                        axis,
-                        f"{'zyx'[axis]} volume edge",
+            pairs = tuple(combinations(range(1 if axes == "yx" else 0, 3), 2))
+            distances = self._edge_distances if cache else None
+            if distances is None:
+                support = (image[0] if axes == "yx" else image) != 0
+                distances = []
+                for pair in pairs:
+                    projected = support if axes == "yx" else np.any(support, axis=3 - sum(pair))
+                    footprint = binary_fill_holes(projected)
+                    distances.append(
+                        distance_transform_edt(np.pad(footprint, 1))[1:-1, 1:-1].astype(np.float32)
                     )
-                    .filter(points)
-                    .all(axis=1)
-                )
+                if cache:
+                    self._edge_distances = distances
+            keep = np.ones(len(points), dtype=bool)
+            for pair, distance in zip(pairs, distances, strict=True):
+                keep &= distance[tuple(points[:, pair].astype(np.intp).T)] > config.edge_margin_px
             points = points[keep]
         return points, enhanced
 
@@ -167,6 +176,7 @@ class Detector:
         """Release the inference model before GPUfit; retain no stale cache key."""
         loaded = self._detector is not None
         self._detector = self._enhanced = self._key = self._image = None
+        self._edge_distances = None
         self._weights = None
         if loaded:
             import torch

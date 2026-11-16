@@ -156,7 +156,7 @@
     },
     "exclude_edge_centroids": {
       "default": false,
-      "description": "Exclude centroids within edge_margin_px of Z/Y/X faces (Y/X in 2D).",
+      "description": "Exclude centroids near array faces and zero-padded data-footprint edges (YX in 2D).",
       "title": "Exclude Edge Centroids",
       "type": "boolean"
     },

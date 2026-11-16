@@ -183,6 +183,22 @@ def test_checkpoint_identity_and_fit_only_reuse(localization, scene, tmp_path):
     assert identity["preprocessing_policy"].endswith("fit-original-counts")
     assert identity["edge_margin_px"] == 0
 
+    enabled = config.model_copy(update={"exclude_edge_centroids": True})
+    filtered_output = tmp_path / "filtered"
+    localization.localize_ufish_prior(image, enabled, filtered_output)
+    filtered_checkpoint = filtered_output / "centroids.parquet"
+    table = pq.read_table(filtered_checkpoint)
+    previous = json.loads(table.schema.metadata[b"localize_psf"])
+    assert previous["preprocessing_policy"].endswith("edge-projected-footprint-v1")
+    # Simulate a checkpoint produced by the former rectangular-edge policy.
+    previous["preprocessing_policy"] = identity["preprocessing_policy"]
+    pq.write_table(
+        table.replace_schema_metadata({b"localize_psf": json.dumps(previous).encode()}),
+        filtered_checkpoint,
+    )
+    with pytest.raises(ValueError, match="different input or U-FISH settings"):
+        localization.localize_ufish_prior(image, enabled, filtered_output)
+
 
 def test_empty_cancelled_and_infeasible_shared_fits(localization, scene, tmp_path):
     image, config, truth = scene
@@ -357,5 +373,71 @@ def test_streaming_detection_reuses_weights_without_retaining_images(scene):
         following = image.copy()
         points = detector.detect(following, config, cache=False)[0]
         assert len(points) and detector._detector is model
+    finally:
+        detector.release()
+
+
+@pytest.mark.parametrize("mode", ["2d", "3d"])
+def test_zero_padded_sloping_edges_are_excluded_on_every_face(mode):
+    shape = (1, 25, 65) if mode == "2d" else (25, 65, 49)
+    axes = (1, 2) if mode == "2d" else (0, 1)
+    spacing, origin = (0.2, 0.1, 0.11), (-2.0, 3.0, -4.0)
+    grid = np.ogrid[tuple(slice(n) for n in shape)]
+    # Simulate a deskewed acquisition: a 30-pixel slab sheared by one
+    # secondary-axis pixel per primary-axis plane, with zero padding outside.
+    support = (grid[axes[1]] - grid[axes[0]] >= 3) & (grid[axes[1]] - grid[axes[0]] <= 32)
+    center = np.array([0, 12, 29] if mode == "2d" else [12, 29, 24])
+    emitters = [center.copy()]
+    for plane in (1, 23):
+        point = center.copy()
+        point[list(axes)] = (plane, plane + 17)
+        emitters.append(point)
+    for offset in (4, 31):
+        point = center.copy()
+        point[axes[1]] = point[axes[0]] + offset
+        emitters.append(point)
+    if mode == "3d":
+        for x in (1, 47):
+            point = center.copy()
+            point[2] = x
+            emitters.append(point)
+    model = gaussian3d_psf_model()
+    coords = get_coords(shape, spacing, origin=origin)
+    image = np.full(shape, 5, np.float32)
+    for point in emitters:
+        physical = np.asarray(origin) + point * spacing
+        image += model.model(
+            coords, np.array([5000, *physical[::-1], 0.16, 1 if mode == "2d" else 0.35, 0])
+        ).astype(np.float32)
+    image[~np.broadcast_to(support, shape)] = 0
+    # Dark interior pixels are valid data, not an acquisition boundary.
+    hole = (
+        (grid[axes[0]] >= 8) & (grid[axes[0]] < 10) & (grid[axes[1]] >= 27) & (grid[axes[1]] < 29)
+    )
+    image[np.broadcast_to(hole, shape)] = 0
+    config = LocalizationConfig(fit_model=mode, blend_3d=True, edge_margin_px=4)
+    detector = Detector()
+    try:
+        raw, enhanced = detector.detect(image, config)
+        offset = raw[:, axes[1]] - raw[:, axes[0]]
+        # Exercise both sloping faces and both primary-axis faces. A rectangular
+        # array-bound check leaves the sloping-face detections behind.
+        assert np.any(offset < 8) and np.any(offset > 27)
+        assert np.any(raw[:, axes[0]] < 4) and np.any(raw[:, axes[0]] > 20)
+        if mode == "3d":
+            assert np.any(raw[:, 2] < 4) and np.any(raw[:, 2] > 44)
+        enabled = config.model_copy(update={"exclude_edge_centroids": True})
+        filtered, reused = detector.detect(image, enabled)
+        assert reused is enhanced and len(filtered)
+        offset = filtered[:, axes[1]] - filtered[:, axes[0]]
+        assert np.all((offset >= 8) & (offset <= 27))
+        assert np.all((filtered[:, axes[0]] >= 4) & (filtered[:, axes[0]] <= 20))
+        if mode == "3d":
+            assert np.all((filtered[:, 2] >= 4) & (filtered[:, 2] <= 44))
+        else:
+            np.testing.assert_array_equal(filtered[:, 0], 0)
+        assert np.min(np.linalg.norm(filtered - center, axis=1)) <= 1
+        streamed, _ = detector.detect(image, enabled, cache=False)
+        np.testing.assert_array_equal(streamed, filtered)
     finally:
         detector.release()

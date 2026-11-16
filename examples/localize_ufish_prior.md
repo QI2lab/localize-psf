@@ -118,12 +118,16 @@ Routine U-FISH logging is suppressed.
 key in JSON or Python metadata to raise the cutoff. `predict` forwards this
 argument to the spot caller as `intensity_threshold`.
 
-Set `exclude_edge_centroids=true` to discard centroids in an edge band along
-Z, Y and X before fitting. `edge_margin_px` sets the band width at each face
-and defaults to two voxels; for 2D, only Y and X are filtered. Edge exclusion
-defaults to `false`. Interactive callers can change the margin without
-recomputing enhancement. Changing an enabled filter requires a new centroid
-checkpoint; the margin is ignored when exclusion is disabled.
+Set `exclude_edge_centroids=true` to discard centroids near image and data
+boundaries before fitting. `edge_margin_px` sets the distance in voxel-grid
+units and defaults to two. The filter follows nonzero data footprints in the
+ZY, ZX and YX projections, including sloping zero-padded deskew boundaries.
+Enclosed zero-valued holes remain valid data; 2D uses only the YX footprint.
+This policy assumes exterior padding is zero. It is disabled by default.
+Interactive callers can change the margin without recomputing enhancement or
+footprint distances. Changing an enabled filter requires a new centroid
+checkpoint; the margin is ignored when exclusion is disabled. Checkpoints
+created by the older rectangular-boundary filter must also be regenerated.
 
 # Centroid checkpoint
 
