@@ -90,3 +90,50 @@ def test_ome_zarr_highest_resolution_transforms_and_spatial_axis_order(localizat
     )
     assert keys == ((0, 0), (0, 1), (1, 0), (1, 1))
     np.testing.assert_array_equal(np.asarray(data[1, 1]), counts[1, 1].transpose(2, 0, 1))
+
+
+@pytest.mark.parametrize("axes", ["tczyx", "tcyxz"])
+def test_lazy_roi_reads_skip_unselected_chunks(localization, tmp_path, axes):
+    import tensorstore as ts
+    from yaozarrs import DimSpec, open_group, v05
+    from yaozarrs.write.v05 import write_image
+
+    shape = (2, 2, 8, 8, 8)
+    counts = np.arange(np.prod(shape), dtype=np.uint16).reshape(shape)
+    dims = [
+        DimSpec(name=a, size=n, unit="micrometer" if a in "zyx" else None)
+        for a, n in zip(axes, shape, strict=True)
+    ]
+    path = tmp_path / "lazy.ome.zarr"
+    write_image(
+        path,
+        v05.Image(multiscales=[v05.Multiscale.from_dims(dims)]),
+        [counts],
+        writer="tensorstore",
+        chunks=(1, 1, 4, 4, 4),
+    )
+    # A genuine unreadable chunk proves that opening/selecting/packing does not
+    # read the whole image or use an unrelated origin pixel for ROI padding.
+    stored = open_group(str(path))["0"].to_tensorstore()
+    stored.kvstore.write(b"c/1/1/0/0/0", b"invalid chunk").result()
+    data, metadata = localization.open_image(str(path))
+    assert isinstance(data, ts.TensorStore)
+    data, _ = localization._prepare_data(
+        data, dict(metadata, batch_axes=True, psf_diagnostics=False)
+    )
+    assert isinstance(data, ts.TensorStore)
+    rois = np.array([[4, 6, 0, 2, 0, 3], [4, 7, 0, 3, 0, 4], [0, 2, 4, 6, 0, 2]])
+    times, channels = np.array([1, 1, 0]), np.array([1, 1, 1])
+    coords = localization.get_coords(shape[-3:], (0.2, 0.1, 0.15), origin=(-4, 2, -3))
+    values, coordinates, sizes = localization._prepare_fit_rois(data, coords, rois, times, channels)
+    expected = counts.transpose(tuple(axes.index(a) for a in "tczyx"))
+    for i, (roi, t, c) in enumerate(zip(rois, times, channels, strict=True)):
+        region = tuple(slice(int(start), int(stop)) for start, stop in roi.reshape(3, 2))
+        np.testing.assert_array_equal(values[i, : sizes[i]], expected[t, c][region].ravel())
+        assert np.isnan(values[i, sizes[i] :]).all()
+        for actual, vector in zip(coordinates, coords, strict=True):
+            np.testing.assert_array_equal(
+                actual[i, : sizes[i]], np.broadcast_to(vector, shape[-3:])[region].ravel()
+            )
+    with pytest.raises(ValueError, match="Invalid blosc-compressed data"):
+        np.asarray(data[1, 1])

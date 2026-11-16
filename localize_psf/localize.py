@@ -5,7 +5,7 @@ The fitting code can be run on a CPU using multiprocessing with joblib, or on a 
 to GPUfit which can be found at https://github.com/QI2lab/Gpufit. To use the GPU code, you must download and
 compile this repository and install the python bindings.
 """
-from typing import Union, Optional
+from typing import TYPE_CHECKING, Union, Optional
 from collections.abc import Sequence, Callable
 from pathlib import Path
 from importlib.util import find_spec
@@ -23,6 +23,9 @@ from localize_psf.fit import fit_model
 import localize_psf.fit_psf as psf
 from localize_psf.batch_fitting import fit_rois, _accumulate_fit_batch, _slice_fit_controls
 from localize_psf.array_backend import get_array_module
+
+if TYPE_CHECKING:
+    from tensorstore import TensorStore
 
 # for filtering on GPU
 try:
@@ -95,7 +98,7 @@ def get_nearest_pixel(centers: np.ndarray[float],
     return xp.rint(centers / drs).astype(int)
 
 
-def prepare_rois(image: np.ndarray,
+def prepare_rois(image: "np.ndarray | cp.ndarray | TensorStore",
                  coords: tuple[np.ndarray, np.ndarray, np.ndarray],
                  rois: np.ndarray) -> tuple:
     """Pack existing ROI sample order on the backend owning the image.
@@ -116,7 +119,7 @@ def prepare_rois(image: np.ndarray,
         input backend. The native GPUfit wrapper later requires a host transfer.
     """
     xp = get_array_module(image)
-    if xp is np:
+    if xp is np and isinstance(image, np.ndarray):
         return _prepare_rois_cpu(image, coords, rois)
     rois = xp.asarray(rois, dtype=int)
     if rois.ndim != 2 or rois.shape[1] != 6:
@@ -128,14 +131,16 @@ def prepare_rois(image: np.ndarray,
     if xp.any(lengths <= 0) or xp.any(rois[:, ::2] < 0) or xp.any(rois[:, 1::2] > xp.asarray(image.shape)):
         raise ValueError("rois must contain positive extents inside the image")
     sizes = xp.prod(lengths, axis=1)
-    # This extends the existing C-order sample packing with GPU index gathering.
+    # C-order gathering supports CUDA and lazy TensorStore views alike.
     sample = xp.arange(int(xp.max(sizes)))[None, :]
     valid = sample < sizes[:, None]
     iz = rois[:, 0, None] + sample // (lengths[:, 1, None] * lengths[:, 2, None])
     iy = rois[:, 2, None] + (sample // lengths[:, 2, None]) % lengths[:, 1, None]
     ix = rois[:, 4, None] + sample % lengths[:, 2, None]
-    indices = tuple(xp.where(valid, index, 0) for index in (iz, iy, ix))
-    packed = xp.where(valid, image[indices], xp.nan)
+    # Padding reuses a valid ROI pixel, avoiding unrelated storage chunks.
+    indices = tuple(xp.where(valid, index, rois[:, 2 * axis, None])
+                    for axis, index in enumerate((iz, iy, ix)))
+    packed = xp.where(valid, xp.asarray(image[indices]), xp.nan)
     vectors = (xp.asarray(coords[0])[:, 0, 0], xp.asarray(coords[1])[0, :, 0],
                xp.asarray(coords[2])[0, 0, :])
     packed_coords = tuple(xp.where(valid, c[index], xp.nan)

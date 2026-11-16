@@ -41,7 +41,7 @@ class FitResults(TypedDict):
 class Volume:
     """Original ZYX counts with spacing and first-voxel origin in micrometers."""
 
-    image: NDArray[np.floating]
+    image: np.ndarray
     spacing: tuple[float, float, float]
     origin: tuple[float, float, float]
 
@@ -101,11 +101,14 @@ class Detector:
 
     def __init__(self) -> None:
         self._detector: UFish | None = None
+        self._weights: str | None = None
         self._key: tuple[int, bool, int, str, str] | None = None
         self._preview: Volume | None = None
         self._enhanced: NDArray[np.float32] | None = None
 
-    def detect(self, preview: Volume, config: LocalizationConfig) -> Detection:
+    def detect(
+        self, preview: Volume, config: LocalizationConfig, *, cache: bool = True
+    ) -> Detection:
         """Run the supplied CUDA U-FISH weights, reusing enhancement when valid."""
         from ufish.api import UFish
 
@@ -117,14 +120,17 @@ class Detector:
             config.ufish_weights,
             axes,
         )
-        if self._key != key:
-            if self._detector is None or self._key is None or self._key[3] != key[3]:
+        if not cache or self._key != key:
+            self._enhanced = self._preview = self._key = None
+            if self._detector is None or self._weights != config.ufish_weights:
+                self._weights = None
                 self._detector = UFish(device="cuda")
                 weights = config.ufish_weights
                 if Path(weights).is_file():
                     self._detector.load_weights(weights_path=weights)
                 else:
                     self._detector.load_weights(weights_file=weights)
+                self._weights = weights
             image = preview.image[0] if axes == "yx" else preview.image
             spots, enhanced = self._detector.predict(
                 image,
@@ -133,23 +139,25 @@ class Detector:
                 batch_size=config.inference_batch_size,
                 intensity_threshold=config.intensity_threshold,
             )
-            self._enhanced = enhanced
-            self._preview, self._key = preview, key
+            if cache:
+                self._enhanced = enhanced
+                self._preview, self._key = preview, key
         else:
             assert self._detector is not None and self._enhanced is not None
+            enhanced = self._enhanced
             spots = self._detector.call_spots(
                 self._enhanced, intensity_threshold=config.intensity_threshold
             )
         points = spots[[f"axis-{i}" for i in range(len(axes))]].to_numpy(dtype=float)
         if axes == "yx":
             points = np.column_stack((np.zeros(len(points)), points))
-        assert self._enhanced is not None
-        return Detection(self._enhanced, points)
+        return Detection(enhanced, points)
 
     def release(self) -> None:
         """Release the inference model before GPUfit; retain no stale cache key."""
         loaded = self._detector is not None
         self._detector = self._enhanced = self._key = self._preview = None
+        self._weights = None
         if loaded:
             import torch
 
@@ -208,6 +216,7 @@ def fit_spots(
             np.empty((0, 3)),
             config,
             np.empty(0, bool),
+            model=model,
         )
     roi_size = np.asarray(get_roi_size(config.fit_roi_size_um, preview.spacing, ensure_odd=True))
     if config.fit_model == "2d":
@@ -238,7 +247,6 @@ def fit_spots(
             )
             complete = _accumulate_fit_batch(complete, batch, start, len(points))
             del values, coordinates, batch
-            cp.get_default_memory_pool().free_all_blocks()
     finally:
         del image, coords
         cp.get_default_memory_pool().free_all_blocks()
@@ -270,8 +278,6 @@ def fit_packed_rois(
     host = np.asarray if xp is np else xp.asnumpy
     model = gaussian3d_psf_model() if model is None else model
     centers = xp.asarray(centers_zyx_um)
-    initial = xp.empty((len(values), model.nparams))
-    lower, upper = initial.copy(), initial.copy()
     fixed = np.zeros(model.nparams, dtype=bool)
     if len(values):
         initial = model.estimate_parameters(values, coordinates, num_preserved_dims=1)
@@ -296,6 +302,8 @@ def fit_packed_rois(
             lower[:, 3] = upper[:, 3] = initial[:, 3]
             lower[:, 5] = upper[:, 5] = 1
             fixed[[3, 5]] = True
+    else:
+        initial = lower = upper = xp.empty((0, model.nparams))
     return cast(
         FitResults,
         fit_rois(

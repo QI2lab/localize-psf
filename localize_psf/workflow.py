@@ -48,6 +48,22 @@ _TRACKPY_SOURCE_COLUMNS = (
     "candidate_channels",
 )
 
+_MICROMETERS_PER_UNIT = {
+    "meter": 1e6,
+    "m": 1e6,
+    "centimeter": 1e4,
+    "cm": 1e4,
+    "millimeter": 1e3,
+    "mm": 1e3,
+    "micrometer": 1,
+    "um": 1,
+    "µm": 1,
+    "nanometer": 1e-3,
+    "nm": 1e-3,
+    "picometer": 1e-6,
+    "pm": 1e-6,
+}
+
 
 @dataclass
 class LocalizationResult:
@@ -78,45 +94,28 @@ def _spatial_metadata(multiscale: Multiscale, calibration: Mapping | None = None
         Stored axis order and ZYX voxel sizes and origins in micrometers, under
         ``axes``, ``voxel_size_zyx_um`` and ``origin_zyx_um``.
     """
-    axes = multiscale.axes
-    names = [axis.name for axis in axes]
-    scale, origin = np.ones(len(axes)), np.zeros(len(axes))
-
-    # Compose the dataset and image coordinate transforms.
-    for transform in multiscale.datasets[0].coordinateTransformations + (
-        multiscale.coordinateTransformations or []
-    ):
-        if transform.type == "scale":
-            scale *= transform.scale
-            origin *= transform.scale
-        else:
-            origin += transform.translation
-
-    # Express the spatial coordinates in micrometres.
-    units = {
-        "meter": 1e6,
-        "centimeter": 1e4,
-        "millimeter": 1e3,
-        "micrometer": 1,
-        "nanometer": 1e-3,
-        "picometer": 1e-6,
-    }
-    units.update(m=1e6, cm=1e4, mm=1e3, um=1, nm=1e-3, pm=1e-6)
-    units["µm"] = 1
+    names = [axis.name for axis in multiscale.axes]
+    if calibration and all(name in calibration for name in ("voxel_size_zyx_um", "origin_zyx_um")):
+        return dict(
+            axes="".join(names),
+            voxel_size_zyx_um=calibration["voxel_size_zyx_um"],
+            origin_zyx_um=calibration["origin_zyx_um"],
+        )
     indices = [names.index(name) if name in names else None for name in "zyx"]
-    if any(axes[i].unit not in units for i in indices if i is not None):
-        if calibration and all(
-            name in calibration for name in ("voxel_size_zyx_um", "origin_zyx_um")
-        ):
-            return dict(
-                axes="".join(names),
-                voxel_size_zyx_um=calibration["voxel_size_zyx_um"],
-                origin_zyx_um=calibration["origin_zyx_um"],
-            )
+    if any(multiscale.axes[i].unit not in _MICROMETERS_PER_UNIT for i in indices if i is not None):
         raise ValueError(
             "Source spatial units require explicit voxel sizes and origins in micrometers"
         )
-    factors = [units[axes[index].unit] if index is not None else 1 for index in indices]
+    from yaozarrs import convert_version
+
+    # yaozarrs folds image-level transforms into its native dataset models.
+    dataset = convert_version(convert_version(multiscale, "0.6"), "0.5").datasets[0]
+    scale = dataset.scale_transform.scale
+    translation = dataset.translation_transform
+    origin = translation.translation if translation is not None else np.zeros(len(names))
+    factors = [
+        _MICROMETERS_PER_UNIT[multiscale.axes[i].unit] if i is not None else 1 for i in indices
+    ]
     return dict(
         axes="".join(names),
         voxel_size_zyx_um=np.array([scale[i] if i is not None else 1 for i in indices]) * factors,
@@ -148,9 +147,7 @@ def open_image(
         multiscale = image.multiscales[0]
         metadata = _spatial_metadata(multiscale, calibration)
         metadata["source_metadata"] = image.model_dump(mode="json", by_alias=True)
-        metadata["channel_names"] = [
-            c.get("label") for c in group.attrs.get("omero", {}).get("channels", [])
-        ]
+        metadata["channel_names"] = [c.label for c in image.omero.channels] if image.omero else []
         for name in ("numerical_aperture", "wavelength_um"):
             if name in group.attrs:
                 metadata[name] = group.attrs[name]
@@ -171,11 +168,10 @@ def open_image(
         pixels = image["Pixels"]
         series = stored.series[0].levels[0]
         axes = series.axes.lower()
-        units = {"m": 1e6, "cm": 1e4, "mm": 1e3, "µm": 1, "um": 1, "nm": 1e-3, "pm": 1e-6}
         spacing = np.array(
             [
                 float(pixels.get("PhysicalSize" + a, 1))
-                * units[pixels.get("PhysicalSize" + a + "Unit", "µm")]
+                * _MICROMETERS_PER_UNIT[pixels.get("PhysicalSize" + a + "Unit", "µm")]
                 for a in "ZYX"
             ]
         )
@@ -185,7 +181,8 @@ def open_image(
             planes = [planes]
         for i, axis in enumerate("ZYX"):
             translations = [
-                float(p["Position" + axis]) * units[p.get("Position" + axis + "Unit", "µm")]
+                float(p["Position" + axis])
+                * _MICROMETERS_PER_UNIT[p.get("Position" + axis + "Unit", "µm")]
                 - (int(p.get("TheZ", 0)) * spacing[0] if axis == "Z" else 0)
                 for p in planes
                 if "Position" + axis in p
@@ -390,7 +387,7 @@ def _prepare_fit_rois(
     # Pack each source volume into the shared ROI batch.
     for key in dict.fromkeys(zip(times, channels, strict=True)):
         selected = (times == key[0]) & (channels == key[1])
-        packed, packed_coords, sizes = prepare_rois(np.asarray(data[key]), coords, rois[selected])
+        packed, packed_coords, sizes = prepare_rois(data[key], coords, rois[selected])
         values[selected, : packed.shape[1]] = packed
         counts[selected] = sizes
         for target, source in zip(coordinates, packed_coords, strict=True):
@@ -546,7 +543,7 @@ def localize_ufish_prior(
     inference_keys = (
         tuple((t, c, z) for t, c in keys for z in range(data.shape[2])) if mode == "2d" else keys
     )
-    checkpoint, completed = None, []
+    checkpoint, completed = None, set()
     if output_dir is not None:
         import pyarrow as pa
         import pyarrow.compute as pc
@@ -562,7 +559,7 @@ def localize_ufish_prior(
         if checkpoint.exists():
             saved = pq.read_table(checkpoint)
             previous = json.loads((saved.schema.metadata or {}).get(b"localize_psf", b"{}"))
-            completed = [tuple(key) for key in previous.pop("completed_volumes", [])]
+            completed = {tuple(key) for key in previous.pop("completed_volumes", [])}
             if previous != identity:
                 raise ValueError(
                     "Centroid checkpoint has different input or U-FISH settings; use a different output directory"
@@ -589,7 +586,8 @@ def localize_ufish_prior(
                     )
                 plane_origin = origin + (np.array([key[2], 0, 0]) * spacing if mode == "2d" else 0)
                 volume = Volume(image, tuple(spacing), tuple(plane_origin))
-                points = detector.detect(volume, configs[c]).points.copy()
+                points = detector.detect(volume, configs[c], cache=False).points
+                del image, volume
                 if mode == "2d":
                     points[:, 0] += key[2]
                 if checkpoint is not None:
@@ -599,8 +597,10 @@ def localize_ufish_prior(
                         **{axis + "_px": points[:, i] for i, axis in enumerate("zyx")},
                     )
                     saved = pa.concat_tables([saved, pa.table(columns, schema=schema)])
-                    completed.append(key)
-                    status = json.dumps(dict(identity, completed_volumes=completed)).encode("utf-8")
+                    completed.add(key)
+                    status = json.dumps(dict(identity, completed_volumes=sorted(completed))).encode(
+                        "utf-8"
+                    )
                     saved = saved.replace_schema_metadata({b"localize_psf": status})
                     _write_parquet(saved.to_reader(), checkpoint)
             candidates.append(points)
@@ -645,6 +645,7 @@ def localize_ufish_prior(
             np.empty((0, 3)),
             representative,
             np.empty(0, bool),
+            model=model,
         )
     volumes = {
         key: dict(
@@ -656,7 +657,7 @@ def localize_ufish_prior(
     }
     result = LocalizationResult(
         metadata=metadata,
-        parameter_names=tuple(gaussian3d_psf_model().parameter_names),
+        parameter_names=tuple(model.parameter_names),
         candidate_centroids_zyx_px=candidates,
         candidate_centroids_zyx_um=centers,
         candidate_timepoints=times,
@@ -838,11 +839,12 @@ def to_trackpy_dataframe(table: Table) -> DataFrame:
 
     # Extract fitted parameters and position errors from the Arrow lists.
     parameters = table["fit_params"].combine_chunks().flatten().to_numpy().reshape(-1, 7)
-    errors = np.full((len(parameters), 3), np.nan)
     if "center_covariance_zyx" in table.column_names:
         covariance = table["center_covariance_zyx"].combine_chunks().flatten().flatten().to_numpy()
         covariance = covariance.reshape(-1, 3, 3)
         errors = np.sqrt(np.diagonal(covariance, axis1=1, axis2=2)[:, ::-1]) / spacing
+    else:
+        errors = np.full((len(parameters), 3), np.nan)
 
     # Build Trackpy positions, signals, widths and position errors.
     columns = dict(

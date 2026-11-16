@@ -286,3 +286,26 @@ def test_cropped_caller_applies_physical_origin_once(scene):
         atol=1e-8,
         equal_nan=True,
     )
+
+
+def test_streaming_detection_reuses_weights_without_retaining_images(scene):
+    import gc
+    import weakref
+
+    volume, config, _ = scene
+    detector = Detector()
+    try:
+        current = Volume(volume.image.copy(), volume.spacing, volume.origin)
+        owner, pixels = weakref.ref(current), weakref.ref(current.image)
+        detected = detector.detect(current, config, cache=False)
+        assert len(detected.points)
+        enhancement = weakref.ref(detected.enhanced)
+        model = detector._detector
+        del current, detected
+        gc.collect()
+        assert owner() is None and pixels() is None and enhancement() is None
+        following = Volume(volume.image.copy(), volume.spacing, volume.origin)
+        detected = detector.detect(following, config, cache=False)
+        assert len(detected.points) and detector._detector is model
+    finally:
+        detector.release()
