@@ -140,6 +140,44 @@ weights use the same ROI packing as the data. Empty outputs retain array shapes
 and candidate IDs. Optimizer failures and acceptance-filter decisions are distinct.
 # GPU model and uncertainty execution
 
+## Batch settings
+
+`localize_psf.config.LocalizationConfig` owns the version 1 JSON contract in
+[localization.schema.json](localization.schema.json). The supplied
+[configuration](../examples/localization.json) uses the same detector and
+parameter-policy adapters as an interactive caller. Version 1 rejects unknown
+settings, unsupported versions, nonfinite numbers and implicit type coercion.
+Legacy optical metadata remains supported by the example and packaged runner.
+
+```bash
+python -m localize_psf.batch INPUT --metadata CONFIG.json --output-dir OUTPUT
+```
+
+Use the existing uv environment with the `gpu` and `example` extras installed.
+The runner requires a real CUDA GPU and uses the package-managed GPUfit toolchain.
+It reads OME-Zarr through yaozarrs/TensorStore and OME-TIFF through tifffile,
+preserves stored axes and transforms, and honors explicitly exported calibration.
+`preview` describes interactive reproduction scope; batch execution reads the
+full spatial image. `batch_axes=true` processes all times and channels; otherwise
+the explicit `timepoint` and `channel` select them. In 2D, each XY plane is
+processed separately, using the production 3D Gaussian with fixed physical Z
+and `sz=1 µm`.
+
+Centers use µm offsets from each prior. Explicit bounds intersect the ROI;
+null starts retain production estimates, and infeasible starts are rejected
+without clipping. All candidate rows and fitting/uncertainty evidence are kept.
+Centroid checkpoints include source geometry, weights, dimensional mode, blend,
+threshold, inference batch size and preprocessing policy. Changing detection
+settings requires another output directory; fit-only changes reuse centroids.
+
+`LocalizationConfig.save_batch_file` saves current JSON and a quoted `.sh` or
+`.ps1` file using the caller's interpreter. It returns the filename and terminal
+command, and never launches a process. The example script retains its CLI and
+exports through the packaged workflow. Upstream tests call the production
+adapters directly; plugin UI tests stay in the plugin repository.
+
+## Model execution
+
 With `use_gpu_filter=True`, the high-level path keeps images, detected peaks,
 duplicate filtering, coordinate conversion, ROI gathering, variance/weight maps,
 and initial Gaussian parameter estimates on CUDA. `prepare_rois` selects its

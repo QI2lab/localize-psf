@@ -12,6 +12,12 @@ resolution. TensorStore slices remain lazy until a ZYX volume is needed.
 
 # Installation
 
+This script is a compatibility caller of `localize_psf.workflow`. The same
+workflow is installed as `python -m localize_psf.batch`. Both accept legacy
+metadata below and strict version 1 configurations exported by an interactive
+caller. Version 1 settings, including explicit fitting policies, are documented
+in [batch settings](../docs/development.md#batch-settings).
+
 On Linux x86_64, run this directly from the checkout. On Windows, initialize
 the x64 MSVC compiler environment first:
 

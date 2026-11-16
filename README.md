@@ -29,6 +29,16 @@ Both platforms always use the package-managed SDK. Add `--extra example` for CUD
 and the U-FISH example dependencies. GPU execution requires a working NVIDIA
 driver.
 
+Run an exported localization configuration in the installed GPU environment:
+
+```bash
+python -m localize_psf.batch INPUT --metadata CONFIG.json --output-dir OUTPUT
+```
+
+The runner reads a single OME-Zarr image group with yaozarrs or an OME-TIFF
+with tifffile. Batch execution processes the full spatial dataset; exported
+preview crops do not restrict it. See [batch settings](docs/development.md#batch-settings).
+
 # Examples
 Scripts illustrating example usage of localize-psf are available in [examples](examples).
 Associated data necessary to run some of these examples can be downloaded from [Zenodo](https://doi.org/10.5281/zenodo.10022862).
