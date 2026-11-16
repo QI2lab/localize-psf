@@ -182,8 +182,7 @@ def add_covariance(
             free_covariance = inverse
         free_covariance = xp.where(solvable[:, None, None], free_covariance, xp.nan)
         host_covariance = to_host(free_covariance)
-        for i in range(stop - start):
-            covariance[start + i][np.ix_(free, free)] = host_covariance[i]
+        covariance[selected, free[:, None], free] = host_covariance
         if cpu_covariance is not None and (
             noise_model == "estimated_gaussian" or calibrated_information
         ):
