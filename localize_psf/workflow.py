@@ -572,7 +572,7 @@ def localize_ufish_prior(
                 )
 
     detector = Detector()
-    candidates, times, channels, offsets = [], [], [], [0]
+    candidates, offsets = [], [0]
     try:
         for key in tqdm(inference_keys, desc="U-FISH inference", unit="volume"):
             t, c = key[:2]
@@ -610,12 +610,11 @@ def localize_ufish_prior(
                     saved = saved.replace_schema_metadata({b"localize_psf": status})
                     _write_parquet(saved.to_reader(), checkpoint)
             candidates.append(points)
-            times.append(np.full(len(points), t, int))
-            channels.append(np.full(len(points), c, int))
             offsets.append(offsets[-1] + len(points))
     finally:
         detector.release()
-    candidates, times, channels = map(np.concatenate, (candidates, times, channels))
+    candidates = np.concatenate(candidates)
+    times, channels = np.repeat(np.asarray(inference_keys)[:, :2].T, np.diff(offsets), axis=1)
     centers = origin + candidates * spacing
     coords = get_coords(data.shape[-3:], spacing, origin=origin)
     roi_size = np.asarray(get_roi_size(representative.fit_roi_size_um, spacing, ensure_odd=True))
@@ -652,13 +651,14 @@ def localize_ufish_prior(
             np.empty(0, bool),
             model=model,
         )
+    volume_offsets = offsets[:: data.shape[2] if mode == "2d" else 1]
     volumes = {
         key: dict(
-            candidate_ids=np.flatnonzero((times == key[0]) & (channels == key[1])),
+            candidate_ids=np.arange(first, last),
             focus=dict(available=False),
             average_psf=None,
         )
-        for key in keys
+        for key, first, last in zip(keys, volume_offsets[:-1], volume_offsets[1:], strict=True)
     }
     result = LocalizationResult(
         metadata=metadata,

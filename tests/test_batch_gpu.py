@@ -112,11 +112,18 @@ def test_full_time_channel_scope_and_separate_xy_planes(localization, scene, all
         }
     )
     result = localization.localize_ufish_prior(counts, config)
+    assert result.candidate_timepoints.flags.c_contiguous
+    assert result.candidate_channels.flags.c_contiguous
     pairs = set(zip(result.candidate_timepoints, result.candidate_channels, strict=True))
     assert pairs == ({(0, 0), (0, 1), (1, 0), (1, 1)} if all_axes else {(1, 1)})
     np.testing.assert_array_equal(
         result.fit_results["candidate_ids"], np.arange(len(result.candidate_channels))
     )
+    for (timepoint, channel), record in result.volume_results.items():
+        expected = np.flatnonzero(
+            (result.candidate_timepoints == timepoint) & (result.candidate_channels == channel)
+        )
+        np.testing.assert_array_equal(record["candidate_ids"], expected)
     if config.fit_model == "2d":
         assert set(result.candidate_centroids_zyx_px[:, 0]) == {0, 1}
         np.testing.assert_allclose(
