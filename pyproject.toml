@@ -17,7 +17,7 @@ classifiers = [
   "Topic :: Scientific/Engineering :: Image Processing",
 ]
 dependencies = [
-  "numpy>=2", "scipy>=1.14", "numba>=0.61", "matplotlib>=3.9", "joblib>=1.4",
+  "numpy>=2", "scipy>=1.14", "numba>=0.61", "matplotlib>=3.9", "joblib>=1.4", "pydantic>=2",
 ]
 
 [project.urls]
@@ -47,7 +47,7 @@ legacy-calibration = ["dask>=2024.10", "zarr>=2.18,<3"]
 dev = ["pytest==9.1.1", "ruff==0.16.6"]
 test-cpu = [
   "yaozarrs[io,write-tensorstore] @ git+https://github.com/imaging-formats/yaozarrs.git@main",
-  "typer>=0.16,<1", "pyarrow>=18", "pandas", "trackpy",
+  "typer>=0.16,<1", "pyarrow>=18", "pandas", "trackpy", "tifffile>=2024.10",
 ]
 docs = ["sphinx>=8,<9", "sphinx-rtd-theme>=3,<4"]
 
@@ -79,7 +79,7 @@ packages = ["localize_psf"]
 allow-direct-references = true
 
 [tool.hatch.build.targets.sdist]
-include = ["localize_psf", "build_support", "tests", "docs", "scripts", "examples/localize_ufish_prior.py", "examples/localize_ufish_prior.md", "examples/localize_ufish_prior.json", "README.md", "LICENSE", "pyproject.toml", "uv.lock", ".python-version"]
+include = ["localize_psf", "build_support", "tests", "docs", "scripts", "examples/localize_ufish_prior.py", "examples/localize_ufish_prior.md", "examples/localize_ufish_prior.json", "examples/localization.json", "README.md", "LICENSE", "pyproject.toml", "uv.lock", ".python-version"]
 exclude = ["docs/_*", "docs/_build", "build_support/**/_build_tools/**"]
 
 [tool.pytest.ini_options]

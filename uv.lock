@@ -1213,6 +1213,7 @@ dependencies = [
     { name = "matplotlib" },
     { name = "numba" },
     { name = "numpy" },
+    { name = "pydantic" },
     { name = "scipy" },
 ]
 
@@ -1252,6 +1253,7 @@ docs = [
 test-cpu = [
     { name = "pandas" },
     { name = "pyarrow" },
+    { name = "tifffile" },
     { name = "trackpy" },
     { name = "typer" },
     { name = "yaozarrs", extra = ["io", "write-tensorstore"] },
@@ -1268,6 +1270,7 @@ requires-dist = [
     { name = "pandas", marker = "extra == 'example'" },
     { name = "psfmodels", marker = "extra == 'psfmodels'", specifier = ">=0.3.3" },
     { name = "pyarrow", marker = "extra == 'example'", specifier = ">=18" },
+    { name = "pydantic", specifier = ">=2" },
     { name = "pygpufit", marker = "extra == 'gpu'", git = "https://github.com/QI2lab/Gpufit.git?rev=opm-ptv" },
     { name = "scipy", specifier = ">=1.14" },
     { name = "tifffile", marker = "extra == 'example'", specifier = ">=2024.10" },
@@ -1294,6 +1297,7 @@ docs = [
 test-cpu = [
     { name = "pandas" },
     { name = "pyarrow", specifier = ">=18" },
+    { name = "tifffile", specifier = ">=2024.10" },
     { name = "trackpy" },
     { name = "typer", specifier = ">=0.16,<1" },
     { name = "yaozarrs", extras = ["io", "write-tensorstore"], git = "https://github.com/imaging-formats/yaozarrs.git?rev=main" },
