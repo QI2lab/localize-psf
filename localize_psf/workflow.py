@@ -87,12 +87,20 @@ def _spatial_metadata(multiscale: Multiscale, calibration: Mapping | None = None
     ----------
     multiscale : yaozarrs.v05.Multiscale
         Image axes and transforms, with the highest-resolution dataset first.
+    calibration : Mapping, optional
+        Explicit ZYX voxel sizes and first-voxel origins in µm. Both values
+        override stored calibration; they are required if source units are absent.
 
     Returns
     -------
     dict
         Stored axis order and ZYX voxel sizes and origins in micrometers, under
         ``axes``, ``voxel_size_zyx_um`` and ``origin_zyx_um``.
+
+    Notes
+    -----
+    yaozarrs normalizes dataset/image transform composition. This adapter only
+    selects spatial axes and converts their units to the fitter's micrometers.
     """
     names = [axis.name for axis in multiscale.axes]
     if calibration and all(name in calibration for name in ("voxel_size_zyx_um", "origin_zyx_um")):
@@ -126,10 +134,28 @@ def _spatial_metadata(multiscale: Multiscale, calibration: Mapping | None = None
 def open_image(
     source: str, calibration: Mapping | None = None
 ) -> tuple[np.ndarray | TensorStore, dict[str, Any]]:
-    """Read one image with yaozarrs/TensorStore or tifffile, at full resolution.
+    """Open the highest-resolution image while preserving its stored axis order.
 
-    Preserve stored axis order and source metadata. Geometry is expressed in µm;
-    the workflow applies any explicitly exported calibration afterward.
+    Parameters
+    ----------
+    source : str
+        Single OME-Zarr image group path/URI or local OME-TIFF filename.
+    calibration : Mapping, optional
+        Explicit ``voxel_size_zyx_um`` and ``origin_zyx_um`` in micrometers.
+
+    Returns
+    -------
+    data : tensorstore.TensorStore or numpy.memmap
+        OME-Zarr remains a lazy yaozarrs/TensorStore view with no pixel reads.
+        tifffile decodes OME-TIFF into a memory map.
+    metadata : dict
+        Axes, ZYX calibration in µm, source metadata and stored channel names.
+
+    Raises
+    ------
+    ValueError
+        If the input is ambiguous, not an OME image, or its calibration cannot
+        be represented by the fitter's axis-aligned coordinate system.
     """
     if not source.lower().endswith((".tif", ".tiff")):
         from yaozarrs import bioformats2raw_series, convert_version, open_group, v05
@@ -360,7 +386,8 @@ def _prepare_fit_rois(
     Parameters
     ----------
     data : numpy.ndarray or tensorstore.TensorStore
-        TCZYX image from which source volumes are read as needed.
+        TCZYX image. TensorStore remains lazy: only requested ROI samples and
+        their containing storage chunks are read.
     coords : tuple of numpy.ndarray
         Sparse ZYX coordinate arrays in micrometers, broadcastable to a volume.
     rois : numpy.ndarray, shape (nrois, 6)
@@ -403,9 +430,37 @@ def localize_ufish_prior(
 ) -> LocalizationResult:
     """Run shared CUDA detection and bounded fits on full spatial input.
 
-    Version 1 settings use the plugin's exact parameter policy. Legacy metadata
-    retains optical width defaults and optional static-bead diagnostics. Preview
-    crops never restrict batch scope. Original source counts are fitted.
+    Parameters
+    ----------
+    data : numpy.ndarray, tensorstore.TensorStore, str or os.PathLike
+        Original counts or a single OME-Zarr image group/OME-TIFF. File readers
+        supply axis order and physical geometry; array input requires calibration.
+    metadata : Mapping or LocalizationConfig, optional
+        Strict version 1 settings or legacy optical metadata. ``batch_axes``
+        selects all T/C indices or explicit selectors. Preview crops do not
+        restrict batch scope; 2D processes each XY plane independently.
+    output_dir : str or os.PathLike, optional
+        Centroid checkpoint directory. Geometry/detector changes invalidate
+        existing checkpoints; fitting-only changes reuse their centroids.
+
+    Returns
+    -------
+    LocalizationResult
+        Every candidate, its T/C identity, ROI bounds and complete native fit
+        evidence. Fitted positions/widths use µm; covariance is optional.
+
+    Raises
+    ------
+    ValueError
+        If settings, geometry, selections, checkpoints or starts are incompatible.
+    RuntimeError
+        If no real CUDA device is available in the installed environment.
+
+    Notes
+    -----
+    yaozarrs supplies OME-Zarr metadata and lazy TensorStore views. Only the
+    current inference volume (3D) or plane (2D) is materialized for U-FISH;
+    subsequent fit batches read ROI samples. Original counts are fitted.
     """
     raw = (
         metadata.model_dump(mode="json")

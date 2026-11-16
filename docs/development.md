@@ -157,6 +157,11 @@ Use the existing uv environment with the `gpu` and `example` extras installed.
 The runner requires a real CUDA GPU and uses the package-managed GPUfit toolchain.
 It reads OME-Zarr through yaozarrs/TensorStore and OME-TIFF through tifffile,
 preserves stored axes and transforms, and honors explicitly exported calibration.
+yaozarrs owns OME-Zarr metadata conversion and transform composition. Opening
+and selecting an image keeps a lazy TensorStore view. Inference reads only the
+current volume or XY plane; fitting gathers ROI samples without rereading a
+whole volume. Batch detection reuses its loaded model without retaining input
+or enhancement images, and fitting reuses CUDA allocations between batches.
 `preview` describes interactive reproduction scope; batch execution reads the
 full spatial image. `batch_axes=true` processes all times and channels; otherwise
 the explicit `timepoint` and `channel` select them. In 2D, each XY plane is

@@ -131,21 +131,56 @@ class LocalizationConfig(BaseModel):
         return self
 
     def save(self, path: str | Path) -> None:
-        """Write strict JSON; optional bounds use null rather than IEEE infinities."""
+        """Write the current version 1 configuration as strict UTF-8 JSON.
+
+        Parameters
+        ----------
+        path : str or pathlib.Path
+            Destination file. Optional bounds are null, never IEEE infinities.
+        """
         Path(path).write_text(self.model_dump_json(indent=2) + "\n", encoding="utf-8")
 
     @classmethod
     def load(cls, path: str | Path) -> Self:
-        """Load an exported configuration without coercing unsupported settings."""
+        """Load strict version 1 JSON without coercing unsupported settings.
+
+        Parameters
+        ----------
+        path : str or pathlib.Path
+            Previously exported UTF-8 configuration.
+
+        Returns
+        -------
+        LocalizationConfig
+        Validated version 1 settings; invalid fields raise pydantic.ValidationError.
+        """
         return cls.model_validate_json(Path(path).read_text(encoding="utf-8"))
 
     def save_batch_file(
         self, path: str | Path, output_dir: str | Path, *, interpreter: str = sys.executable
     ) -> tuple[Path, str]:
-        """Save current JSON and a quoted terminal script; never start a process.
+        """Save current JSON and a runnable terminal file without starting a process.
 
-        The interpreter is the caller's installed uv environment. All local paths
-        are absolute so the script can be run from another working directory.
+        Parameters
+        ----------
+        path : str or pathlib.Path
+            JSON destination; a sibling ``<stem>.batch.sh`` or ``.batch.ps1`` is written.
+        output_dir : str or pathlib.Path
+            Future result directory; it is not created by this method.
+        interpreter : str, optional
+            Python executable from the caller's installed uv CUDA environment.
+
+        Returns
+        -------
+        script : pathlib.Path
+            Absolute batch filename. POSIX scripts are executable by their owner.
+        command : str
+            Shell/PowerShell command with quoted paths, also suitable for a clipboard.
+
+        Notes
+        -----
+        Relative paths resolve against the caller's current working directory.
+        The command uses this configuration's input URI and never manages a subprocess.
         """
         if not self.input_uri:
             raise ValueError("A batch file requires an input URI")

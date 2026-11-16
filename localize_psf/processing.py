@@ -39,7 +39,15 @@ class FitResults(TypedDict):
 
 @dataclass(frozen=True)
 class Volume:
-    """Original ZYX counts with spacing and first-voxel origin in micrometers."""
+    """Original ZYX counts and physical calibration for one volume or XY plane.
+
+    Attributes
+    ----------
+    image : numpy.ndarray
+        Counts shaped (Z,Y,X), without detector enhancement or rescaling.
+    spacing, origin : tuple of float
+        ZYX voxel sizes and first-voxel coordinates in micrometers.
+    """
 
     image: np.ndarray
     spacing: tuple[float, float, float]
@@ -47,10 +55,26 @@ class Volume:
 
 
 def prepare_volume(data: np.ndarray | TensorStore, config: LocalizationConfig) -> Volume:
-    """Read the configured preview crop in ZYX, applying its physical origin once.
+    """Read the configured preview crop and apply its physical origin once.
 
-    Array axes are explicit. Time/channel and XY-plane selection belong to
-    PreviewSettings; batch execution uses its separate full-dataset scope.
+    Parameters
+    ----------
+    data : numpy.ndarray or tensorstore.TensorStore
+        Source counts in ``config.preview.axes`` order. TensorStore slices stay
+        lazy until the selected crop is converted to float32 for inference.
+    config : LocalizationConfig
+        Preview T/C selectors, crop, dimensional mode and source calibration.
+
+    Returns
+    -------
+    Volume
+        ZYX counts, spacing and crop-first-voxel origin in micrometers. 2D
+        selects one XY plane; it never projects a stack.
+
+    Raises
+    ------
+    ValueError
+        If axes, selectors, crop, dimensional mode or counts are invalid.
     """
     settings = config.preview
     if len(settings.axes) != data.ndim:
@@ -90,7 +114,15 @@ def prepare_volume(data: np.ndarray | TensorStore, config: LocalizationConfig) -
 
 @dataclass(frozen=True)
 class Detection:
-    """U-FISH enhancement and candidate coordinates in crop-local ZYX pixels."""
+    """One U-FISH enhancement and its candidate coordinates.
+
+    Attributes
+    ----------
+    enhanced : numpy.ndarray
+        ZYX enhancement for 3D, or YX enhancement for a single 2D plane.
+    points : numpy.ndarray
+        Finite crop-local ZYX pixel coordinates shaped (N,3); 2D Z is zero.
+    """
 
     enhanced: NDArray[np.float32]
     points: NDArray[np.float64]
@@ -109,7 +141,25 @@ class Detector:
     def detect(
         self, preview: Volume, config: LocalizationConfig, *, cache: bool = True
     ) -> Detection:
-        """Run the supplied CUDA U-FISH weights, reusing enhancement when valid."""
+        """Run CUDA U-FISH with the supplied settings and installed weights.
+
+        Parameters
+        ----------
+        preview : Volume
+            Original counts in ZYX order, with a singleton Z for 2D.
+        config : LocalizationConfig
+            Weights, mode, blending, threshold and inference batch size.
+        cache : bool, optional
+            Retain the enhancement/input identity for threshold-only recalls.
+            False streams independent batch volumes without retaining their images;
+            the loaded detector weights are reused in either mode.
+
+        Returns
+        -------
+        Detection
+            Enhancement and crop-local ZYX pixel priors. A new image, weights,
+            dimensional mode, blend or batch size invalidates cached enhancement.
+        """
         from ufish.api import UFish
 
         axes = "yx" if config.fit_model == "2d" else "zyx"
@@ -165,7 +215,19 @@ class Detector:
 
 
 def optical_parameters(config: LocalizationConfig) -> dict[str, tuple[float, float, float]]:
-    """Return upstream nominal/lower/upper width estimates in ZYX µm on CUDA."""
+    """Evaluate the production optical width bounds on CUDA.
+
+    Parameters
+    ----------
+    config : LocalizationConfig
+        Numerical aperture, wavelength, refractive index, sampling and sigma range.
+
+    Returns
+    -------
+    dict of tuple
+        ``nominal_sigma_zyx_um``, ``lower_sigma_zyx_um`` and
+        ``upper_sigma_zyx_um`` as ZYX triples in micrometers.
+    """
     from localize_psf.optical_bounds import gaussian_width_bounds
 
     result = gaussian_width_bounds(
@@ -187,12 +249,39 @@ def fit_spots(
     cancelled: Event | None = None,
     progress: Callable[[str], None] | None = None,
 ) -> FitResults:
-    """Apply parameter policy, then use upstream packed, bounded GPUfit batches.
+    """Fit priors on original counts with the shared native parameter policy.
 
-    Center limits/initial values are offsets from each U-FISH prior in µm,
-    intersected with that candidate's ROI. 2D uses the existing native Gaussian
-    on one plane with cz fixed at its coordinate and sz fixed at 1 µm; its axial
-    factor is exactly one. No alternate Gaussian or optimizer is implemented.
+    Parameters
+    ----------
+    preview : Volume
+        ZYX counts and physical calibration; 2D requires one XY plane.
+    points : numpy.ndarray
+        Finite crop-local ZYX pixel priors shaped (N,3), inside the image.
+    config : LocalizationConfig
+        ROI dimensions, parameter policies, estimator, solver/batch controls
+        and covariance selection. Center policies are µm offsets from each prior.
+    cancelled : threading.Event, optional
+        Cancellation checked between fitting batches.
+    progress : callable, optional
+        Receives a progress string for each batch.
+
+    Returns
+    -------
+    FitResults
+        All candidates in input order with IDs, statuses, active bounds and any
+        requested uncertainty evidence. Physical fit parameters use micrometers.
+
+    Raises
+    ------
+    ValueError
+        If priors, geometry, bounds or starts are invalid. Starts are never clipped.
+    concurrent.futures.CancelledError
+        If cancellation is requested before the next batch.
+
+    Notes
+    -----
+    2D reuses the native 3D Gaussian with cz fixed at the plane's physical Z
+    and sz fixed at 1 µm. CUDA workspaces are reused between bounded batches.
     """
     import cupy as cp
 
@@ -264,11 +353,30 @@ def fit_packed_rois(
     *,
     model: gaussian3d_psf_model | None = None,
 ) -> FitResults:
-    """Apply the shared prior-relative parameter policy to production packed ROIs.
+    """Apply the shared prior-relative policy to production packed ROIs.
 
-    Coordinates and center offsets are micrometers. Bounds intersect the ROI;
-    starts pass unchanged to upstream feasibility validation, never clipping.
-    NumPy and CuPy packing both dispatch to the same native CUDA fitter.
+    Parameters
+    ----------
+    values, coordinates : array and tuple of array
+        Original count samples and physical ZYX coordinates shaped (N,P),
+        NaN padded after valid samples. Arrays share a NumPy or CuPy backend.
+    sizes : array
+        Number of valid samples per ROI, shaped (N,).
+    centers_zyx_um : array
+        Physical prior positions shaped (N,3), in ZYX micrometers.
+    config : LocalizationConfig
+        Parameter policy, native solver controls and covariance selection.
+    truncated : array of bool
+        One flag per ROI indicating clipping at an image boundary.
+    model : gaussian3d_psf_model, optional
+        Reuse the same production model when accumulating multiple batches.
+
+    Returns
+    -------
+    FitResults
+        Native fit evidence for every ROI. Bounds intersect ROI limits; null
+        starts keep production estimates. Infeasible starts raise ValueError
+        through the existing bounds validator, without clipping or repair.
     """
     from localize_psf.array_backend import get_array_module
     from localize_psf.batch_fitting import fit_rois

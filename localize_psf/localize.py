@@ -105,8 +105,9 @@ def prepare_rois(image: "np.ndarray | cp.ndarray | TensorStore",
 
     Parameters
     ----------
-    image : ndarray
-        Host or CUDA ZYX volume.
+    image : numpy.ndarray, cupy.ndarray or tensorstore.TensorStore
+        Host, CUDA or lazy ZYX volume. TensorStore reads only the samples
+        covered by the requested ROIs, through its existing array view.
     coords : tuple of ndarray
         Sparse ZYX physical coordinate vectors broadcastable to the volume.
     rois : ndarray
@@ -116,7 +117,8 @@ def prepare_rois(image: "np.ndarray | cp.ndarray | TensorStore",
     -------
     data, coordinates, sizes : tuple
         NaN-padded ROI samples, physical ZYX samples, and valid counts, on the
-        input backend. The native GPUfit wrapper later requires a host transfer.
+        input backend (NumPy for TensorStore). Only valid samples are read;
+        padding is NaN. The native GPUfit wrapper later requires host arrays.
     """
     xp = get_array_module(image)
     if xp is np and isinstance(image, np.ndarray):
