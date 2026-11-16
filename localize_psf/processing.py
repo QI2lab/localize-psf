@@ -7,7 +7,7 @@ from concurrent.futures import CancelledError
 from dataclasses import dataclass
 from pathlib import Path
 from threading import Event
-from typing import TYPE_CHECKING, NotRequired, TypedDict, cast
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 from numpy.typing import NDArray
@@ -22,19 +22,8 @@ if TYPE_CHECKING:
     from localize_psf.fit_psf import gaussian3d_psf_model
 
 
-class FitResults(TypedDict):
-    """Native fitting evidence shared by preview and batch callers."""
-
-    fit_params: NDArray[np.floating]
-    init_params: NDArray[np.floating]
-    success: NDArray[np.bool_]
-    candidate_ids: NDArray[np.integer]
-    niters: NDArray[np.integer]
-    chi_sqrs: NDArray[np.floating]
-    bounds: tuple[NDArray[np.floating], NDArray[np.floating]]
-    active_bounds: NDArray[np.bool_]
-    covariance_valid: NotRequired[NDArray[np.bool_]]
-    covariance_backend: NotRequired[str]
+# Preserve the caller's public type name for the production fitter's result dictionary.
+type FitResults = dict[str, Any]
 
 
 @dataclass(frozen=True)
@@ -288,7 +277,7 @@ def fit_spots(
         del image, coords
         cp.get_default_memory_pool().free_all_blocks()
     assert complete is not None
-    return cast(FitResults, complete)
+    return complete
 
 
 def fit_packed_rois(
@@ -352,23 +341,20 @@ def fit_packed_rois(
             fixed[[3, 5]] = True
     else:
         initial = lower = upper = np.empty((0, model.nparams))
-    return cast(
-        FitResults,
-        fit_rois(
-            values,
-            coordinates,
-            sizes,
-            initial,
-            model=model,
-            use_gpu=True,
-            bounds=(lower, upper),
-            fixed_params=fixed,
-            estimator=config.estimator,
-            noise_model="poisson" if config.estimator == "MLE" else "estimated_gaussian",
-            max_number_iterations=config.max_number_iterations,
-            tolerance=config.tolerance,
-            return_covariance=config.return_covariance,
-            quality_flags={"truncated": _host_array(truncated)},
-            covariance_batch_size=config.roi_batch_size,
-        ),
+    return fit_rois(
+        values,
+        coordinates,
+        sizes,
+        initial,
+        model=model,
+        use_gpu=True,
+        bounds=(lower, upper),
+        fixed_params=fixed,
+        estimator=config.estimator,
+        noise_model="poisson" if config.estimator == "MLE" else "estimated_gaussian",
+        max_number_iterations=config.max_number_iterations,
+        tolerance=config.tolerance,
+        return_covariance=config.return_covariance,
+        quality_flags={"truncated": _host_array(truncated)},
+        covariance_batch_size=config.roi_batch_size,
     )
