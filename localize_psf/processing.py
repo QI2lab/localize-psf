@@ -41,9 +41,10 @@ def fit_filter_mask(
     ``covariance_valid`` are upstream boolean (N,) flags. All selected conditions
     must pass. Missing covariance raises when either covariance selector is used.
     Empty inputs return an empty mask. Optional ``collapse_distance_zyx_um``
-    applies the shared axis-aligned peak suppression to final fitted centers,
-    after amplitude/status filters. Converged fits have priority, followed by
-    valid covariance, then amplitude; exact ties keep the original candidate.
+    supplies the optical Z limit and radial XY limit to the existing
+    ``filter_nearby_peaks`` keep-one policy, after amplitude/status filters.
+    The Y and X entries are the same lateral limit. Converged fits have priority,
+    followed by valid covariance, then amplitude; exact ties keep the original candidate.
     This function operates on one volume or 2D plane, never mixed T/C groups.
     Distances and fitted centers use µm. No GPU work or refitting is performed.
     """
@@ -84,9 +85,8 @@ def fit_filter_mask(
             ranked = candidates[order]
             _, retained = filter_nearby_peaks(
                 parameters[ranked][:, (3, 2, 1)],
-                0,
-                0,
-                min_distance_zyx=collapse_distance_zyx_um,
+                collapse_distance_zyx_um[1],
+                collapse_distance_zyx_um[0],
             )
             keep[candidates] = False
             keep[ranked[retained]] = True
@@ -169,10 +169,10 @@ class Detector:
         zero counts as holes. 2D uses only YX. Enhancement and footprint distances
         are reused when changing the margin; the same priors drive batch fitting.
 
-        ``collapse_close_priors`` retains the strongest enhancement peak within
-        twice the nominal optical Gaussian FWHM in each Z/Y/X direction (YX in
-        2D), after edge exclusion. Physical distances use stored voxel spacing.
-        Peak suppression uses the shared nearby-peak utility, without chaining.
+        ``collapse_close_priors`` prioritizes the strongest enhancement peak within
+        twice the nominal optical Gaussian FWHM axially and radially in XY
+        (XY only in 2D), after edge exclusion. Physical distances use stored
+        voxel spacing. Suppression uses the existing nearby-peak keep-one policy.
 
         With ``cache=True``, retain the image identity and enhancement so threshold
         changes only recall spots. A new image, weights, dimensional mode, blend
@@ -248,14 +248,13 @@ class Detector:
             distances = optical_parameters(config)["collapse_distance_zyx_um"]
             pixels = points.astype(np.intp)[:, 1:] if axes == "yx" else points.astype(np.intp)
             strengths = enhanced[tuple(pixels.T)]
+            order = np.argsort(-strengths, kind="stable")
             _, indices = filter_nearby_peaks(
-                points * config.voxel_size_zyx_um,
-                0,
-                0,
-                weights=strengths,
-                min_distance_zyx=distances,
+                points[order] * config.voxel_size_zyx_um,
+                distances[1],
+                distances[0],
             )
-            points = points[indices]
+            points = points[np.sort(order[indices])]
         return points, enhanced
 
     def release(self) -> None:
@@ -277,7 +276,8 @@ def optical_parameters(config: LocalizationConfig) -> dict[str, tuple[float, flo
     refractive index, voxel spacing and relative sigma range. Result keys are
     ``nominal_sigma_zyx_um``, ``lower_sigma_zyx_um``, ``upper_sigma_zyx_um`` and
     ``nominal_fwhm_zyx_um``. FWHM is 2*sqrt(2*ln(2)) times the nominal sigma;
-    ``collapse_distance_zyx_um`` is twice that FWHM for both priors and fits.
+    ``collapse_distance_zyx_um`` is twice that FWHM for both priors and fits,
+    interpreted as an axial Z limit and a radial XY limit by filter_nearby_peaks.
     """
     from localize_psf.optical_bounds import gaussian_width_bounds
 

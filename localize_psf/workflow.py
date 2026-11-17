@@ -550,7 +550,7 @@ def localize_ufish_prior(
         else 0,
         inference_batch_size=representative.inference_batch_size,
         preprocessing_policy="ufish.predict-default-v1;fit-original-counts"
-        + (";collapse-optical-fwhm-box-v1" if representative.collapse_close_priors else "")
+        + (";collapse-optical-fwhm-radial-v1" if representative.collapse_close_priors else "")
         + (";edge-projected-footprint-v1" if representative.exclude_edge_centroids else ""),
     )
     inference_keys = (

@@ -245,7 +245,7 @@ def test_checkpoint_identity_and_fit_only_reuse(localization, scene, tmp_path):
     import pyarrow.parquet as pq
 
     identity = json.loads(pq.read_schema(checkpoint).metadata[b"localize_psf"])
-    assert identity["preprocessing_policy"].endswith("collapse-optical-fwhm-box-v1")
+    assert identity["preprocessing_policy"].endswith("collapse-optical-fwhm-radial-v1")
     assert identity["collapse_close_priors"]
     assert identity["prior_merge_optics"]["0"] == [
         config.numerical_aperture,
@@ -253,6 +253,17 @@ def test_checkpoint_identity_and_fit_only_reuse(localization, scene, tmp_path):
         config.refractive_index,
     ]
     assert identity["edge_margin_px"] == 0
+
+    table = pq.read_table(checkpoint)
+    previous = dict(identity)
+    previous["preprocessing_policy"] = identity["preprocessing_policy"].replace(
+        "collapse-optical-fwhm-radial-v1", "collapse-optical-fwhm-box-v1"
+    )
+    pq.write_table(
+        table.replace_schema_metadata({b"localize_psf": json.dumps(previous).encode()}), checkpoint
+    )
+    with pytest.raises(ValueError, match="different input or U-FISH settings"):
+        localization.localize_ufish_prior(image, config, tmp_path)
 
     enabled = config.model_copy(update={"exclude_edge_centroids": True})
     filtered_output = tmp_path / "filtered"
@@ -398,7 +409,7 @@ def test_cropped_caller_applies_physical_origin_once(scene):
 
 def test_final_fit_collapse_across_roi_batches(scene):
     image, config, truth = scene
-    # These distinct priors are outside the initial optical collapse box, but
+    # These distinct priors exceed the initial lateral separation limit, but
     # overlapping ROIs can converge on the same physical emitter.
     center = (truth[[3, 2, 1]] - config.origin_zyx_um) / config.voxel_size_zyx_um
     priors = np.repeat(center[None], 2, axis=0)
@@ -504,18 +515,21 @@ def test_optical_prior_collapse_reuses_enhancement(scene):
         merged, cached = detector.detect(image, config)
         assert cached is enhanced and 0 < len(merged) < len(raw)
         distances = 2 * np.asarray(optical_parameters(config)["nominal_fwhm_zyx_um"])
-        scales = np.asarray(config.voxel_size_zyx_um) / distances
-        assert np.all(pdist(merged * scales, metric="chebyshev") > 1)
-        separation = cdist(raw * scales, merged * scales, metric="chebyshev")
+        centers = merged * config.voxel_size_zyx_um
+        assert np.all(
+            (pdist(centers[:, 1:]) > distances[1]) | (pdist(centers[:, :1]) > distances[0])
+        )
+        raw_centers = raw * config.voxel_size_zyx_um
+        nearby = (cdist(raw_centers[:, 1:], centers[:, 1:]) <= distances[1]) & (
+            cdist(raw_centers[:, :1], centers[:, :1]) <= distances[0]
+        )
         raw_pixels = raw.astype(int)[:, 1:] if config.fit_model == "2d" else raw.astype(int)
         merged_pixels = (
             merged.astype(int)[:, 1:] if config.fit_model == "2d" else merged.astype(int)
         )
         raw_strengths = enhanced[tuple(raw_pixels.T)]
         strengths = enhanced[tuple(merged_pixels.T)]
-        assert np.all(
-            np.any((separation <= 1) & (strengths[None] >= raw_strengths[:, None]), axis=1)
-        )
+        assert np.all(np.any(nearby & (strengths[None] >= raw_strengths[:, None]), axis=1))
         narrower = config.model_copy(update={"wavelength_um": config.wavelength_um / 2})
         narrower_points, cached = detector.detect(image, narrower)
         assert cached is enhanced and len(narrower_points) >= len(merged)
