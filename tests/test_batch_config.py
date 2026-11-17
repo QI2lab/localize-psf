@@ -132,6 +132,7 @@ def test_optical_sigma_interval_cannot_collapse():
         {"exclude_edge_centroids": 1},
         {"collapse_close_priors": "true"},
         {"collapse_close_priors": 1},
+        {"collapse_fwhm_multiplier": 2.0},
         {"edge_margin_px": 0},
         {"edge_margin_px": -1},
         {"edge_margin_px": 1.5},

@@ -210,7 +210,7 @@
     },
     "collapse_close_priors": {
       "default": true,
-      "description": "Collapse both priors and final fitted centers within twice the nominal optical Gaussian FWHM axially and radially in XY, using the existing nearby-peak keep-one policy.",
+      "description": "Collapse both priors and final fitted centers within one nominal optical Gaussian FWHM axially and radially in XY, using the existing nearby-peak keep-one policy.",
       "title": "Collapse Close Priors",
       "type": "boolean"
     },

@@ -97,7 +97,7 @@ class LocalizationConfig(BaseModel):
     intensity_threshold: float = Field(default=0.2, ge=0)
     collapse_close_priors: bool = Field(
         default=True,
-        description="Collapse both priors and final fitted centers within twice the nominal optical Gaussian FWHM axially and radially in XY, using the existing nearby-peak keep-one policy.",
+        description="Collapse both priors and final fitted centers within one nominal optical Gaussian FWHM axially and radially in XY, using the existing nearby-peak keep-one policy.",
     )
     exclude_edge_centroids: bool = Field(
         default=False,

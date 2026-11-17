@@ -117,12 +117,20 @@ def test_fit_filters_preview_batch_and_export(localization, scene, tmp_path):
     config = config.model_copy(update={"fit_filters": filters})
     batch = localization.localize_ufish_prior(image, config)
     fits = batch["fit_results"]
-    expected = (
+    eligible = (
         fits["success"]
         & (fits["fit_params"][:, 0] >= filters.amplitude_min)
         & (fits["fit_params"][:, 0] <= filters.amplitude_max)
     )
+    expected = fit_filter_mask(
+        fits["fit_params"],
+        fits["success"],
+        fits["covariance_valid"],
+        filters,
+        collapse_distance_zyx_um=optical_parameters(config)["collapse_distance_zyx_um"],
+    )
     assert expected.any()
+    assert np.all(eligible[expected])
     np.testing.assert_array_equal(fits["filter_pass"], expected)
     preview = fit_spots(image, batch["candidate_centroids_zyx_px"], config)
     np.testing.assert_array_equal(preview["filter_pass"], expected)
@@ -245,7 +253,7 @@ def test_checkpoint_identity_and_fit_only_reuse(localization, scene, tmp_path):
     import pyarrow.parquet as pq
 
     identity = json.loads(pq.read_schema(checkpoint).metadata[b"localize_psf"])
-    assert identity["preprocessing_policy"].endswith("collapse-optical-fwhm-radial-v1")
+    assert identity["preprocessing_policy"].endswith("collapse-optical-fwhm-radial-v2")
     assert identity["collapse_close_priors"]
     assert identity["prior_merge_optics"]["0"] == [
         config.numerical_aperture,
@@ -255,15 +263,17 @@ def test_checkpoint_identity_and_fit_only_reuse(localization, scene, tmp_path):
     assert identity["edge_margin_px"] == 0
 
     table = pq.read_table(checkpoint)
-    previous = dict(identity)
-    previous["preprocessing_policy"] = identity["preprocessing_policy"].replace(
-        "collapse-optical-fwhm-radial-v1", "collapse-optical-fwhm-box-v1"
-    )
-    pq.write_table(
-        table.replace_schema_metadata({b"localize_psf": json.dumps(previous).encode()}), checkpoint
-    )
-    with pytest.raises(ValueError, match="different input or U-FISH settings"):
-        localization.localize_ufish_prior(image, config, tmp_path)
+    for former_policy in ("collapse-optical-fwhm-box-v1", "collapse-optical-fwhm-radial-v1"):
+        previous = dict(identity)
+        previous["preprocessing_policy"] = identity["preprocessing_policy"].replace(
+            "collapse-optical-fwhm-radial-v2", former_policy
+        )
+        pq.write_table(
+            table.replace_schema_metadata({b"localize_psf": json.dumps(previous).encode()}),
+            checkpoint,
+        )
+        with pytest.raises(ValueError, match="different input or U-FISH settings"):
+            localization.localize_ufish_prior(image, config, tmp_path)
 
     enabled = config.model_copy(update={"exclude_edge_centroids": True})
     filtered_output = tmp_path / "filtered"
@@ -507,14 +517,14 @@ def test_optical_prior_collapse_reuses_enhancement(scene):
         get_coords(image.shape, config.voxel_size_zyx_um, origin=config.origin_zyx_um),
         secondary,
     ).astype(np.float32)
-    config = config.model_copy(update={"wavelength_um": 1.2})
+    config = config.model_copy(update={"wavelength_um": 2.4})
     raw_config = config.model_copy(update={"collapse_close_priors": False})
     detector = Detector()
     try:
         raw, enhanced = detector.detect(image, raw_config)
         merged, cached = detector.detect(image, config)
         assert cached is enhanced and 0 < len(merged) < len(raw)
-        distances = 2 * np.asarray(optical_parameters(config)["nominal_fwhm_zyx_um"])
+        distances = np.asarray(optical_parameters(config)["collapse_distance_zyx_um"])
         centers = merged * config.voxel_size_zyx_um
         assert np.all(
             (pdist(centers[:, 1:]) > distances[1]) | (pdist(centers[:, :1]) > distances[0])
@@ -532,7 +542,7 @@ def test_optical_prior_collapse_reuses_enhancement(scene):
         assert np.all(np.any(nearby & (strengths[None] >= raw_strengths[:, None]), axis=1))
         narrower = config.model_copy(update={"wavelength_um": config.wavelength_um / 2})
         narrower_points, cached = detector.detect(image, narrower)
-        assert cached is enhanced and len(narrower_points) >= len(merged)
+        assert cached is enhanced and len(narrower_points) > len(merged)
         restored, cached = detector.detect(image, raw_config)
         assert cached is enhanced
         np.testing.assert_array_equal(restored, raw)

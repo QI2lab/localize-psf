@@ -90,7 +90,7 @@ Keep the detector alive while tuning thresholds to reuse enhancement, then
 release it before fitting. Spacing comes from `config`; a crop's returned origin
 is passed explicitly. Batch and preview results are ordinary dictionaries.
 
-`collapse_close_priors=true` (default) collapses U-FISH priors within **2 × the
+`collapse_close_priors=true` (default) collapses U-FISH priors within **one
 nominal optical Gaussian FWHM axially and radially in XY**. This reuses
 `filter_nearby_peaks` with its existing `min_z_dist`, `min_xy_dist` and
 `mode="keep-one"` behavior. Both separation conditions must hold to suppress
@@ -103,6 +103,9 @@ distance within each plane, and volumes from
 different timepoints or channels are processed separately. Changing this policy
 or its optical inputs invalidates centroid checkpoints; threshold/optics tuning
 in previews reuses the cached enhancement.
+
+The separation is an internal policy with no user-facing multiplier. Centroid
+checkpoints from the former wider separation require a new output directory.
 
 The same physical-distance check also applies to **final fitted centers** after
 all ROI batches for a volume or 2D plane. Separate priors can otherwise converge

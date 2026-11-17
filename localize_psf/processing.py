@@ -170,7 +170,7 @@ class Detector:
         are reused when changing the margin; the same priors drive batch fitting.
 
         ``collapse_close_priors`` prioritizes the strongest enhancement peak within
-        twice the nominal optical Gaussian FWHM axially and radially in XY
+        one nominal optical Gaussian FWHM axially and radially in XY
         (XY only in 2D), after edge exclusion. Physical distances use stored
         voxel spacing. Suppression uses the existing nearby-peak keep-one policy.
 
@@ -276,7 +276,7 @@ def optical_parameters(config: LocalizationConfig) -> dict[str, tuple[float, flo
     refractive index, voxel spacing and relative sigma range. Result keys are
     ``nominal_sigma_zyx_um``, ``lower_sigma_zyx_um``, ``upper_sigma_zyx_um`` and
     ``nominal_fwhm_zyx_um``. FWHM is 2*sqrt(2*ln(2)) times the nominal sigma;
-    ``collapse_distance_zyx_um`` is twice that FWHM for both priors and fits,
+    ``collapse_distance_zyx_um`` is one nominal FWHM for both priors and fits,
     interpreted as an axial Z limit and a radial XY limit by filter_nearby_peaks.
     """
     from localize_psf.optical_bounds import gaussian_width_bounds
@@ -291,7 +291,7 @@ def optical_parameters(config: LocalizationConfig) -> dict[str, tuple[float, flo
         use_gpu=True,
     )
     result["nominal_fwhm_zyx_um"] = 2 * np.sqrt(2 * np.log(2)) * result["nominal_sigma_zyx_um"]
-    result["collapse_distance_zyx_um"] = 2 * result["nominal_fwhm_zyx_um"]
+    result["collapse_distance_zyx_um"] = result["nominal_fwhm_zyx_um"]
     return {name: tuple(value.get().tolist()) for name, value in result.items()}
 
 
