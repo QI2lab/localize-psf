@@ -851,8 +851,8 @@ def plot_calibration(result: LocalizationResult) -> dict[str, Figure]:
     return figures
 
 
-def to_trackpy_dataframe(table: Table) -> DataFrame:
-    """Convert converged Gaussian fits to a Trackpy-compatible dataframe.
+def to_trackpy_dataframe(table: Table, *, converged_only: bool = True) -> DataFrame:
+    """Convert Gaussian fits to a Trackpy-compatible dataframe.
 
     Parameters
     ----------
@@ -860,6 +860,9 @@ def to_trackpy_dataframe(table: Table) -> DataFrame:
         Localization table containing fit parameters, optional center covariance,
         success and covariance flags, timepoint/channel indices, and the
         ``localize_psf`` schema metadata with image geometry.
+    converged_only : bool, optional
+        Keep converged fits by default. False retains accepted nonconverged
+        records for inspection and includes their ``success`` flags.
 
     Returns
     -------
@@ -872,9 +875,9 @@ def to_trackpy_dataframe(table: Table) -> DataFrame:
     """
     import pandas as pd
 
-    table = table.select(
-        [name for name in _TRACKPY_SOURCE_COLUMNS if name in table.column_names]
-    ).filter(table["success"])
+    table = table.select([name for name in _TRACKPY_SOURCE_COLUMNS if name in table.column_names])
+    if converged_only:
+        table = table.filter(table["success"])
     if "filter_pass" in table.column_names:
         table = table.filter(table["filter_pass"])
     metadata = json.loads(table.schema.metadata[b"localize_psf"])["metadata"]
@@ -899,6 +902,8 @@ def to_trackpy_dataframe(table: Table) -> DataFrame:
         if "covariance_valid" in table.column_names
         else np.zeros(len(parameters), bool),
     )
+    if not converged_only:
+        columns["success"] = np.asarray(table["success"])
     for index, axis in enumerate("xyz"):
         columns[axis] = (parameters[:, index + 1] - origin[index]) / spacing[index]
         columns[axis + "um"] = parameters[:, index + 1]
@@ -906,6 +911,54 @@ def to_trackpy_dataframe(table: Table) -> DataFrame:
         columns["ep_" + axis] = errors[:, index]
 
     return pd.DataFrame(columns)
+
+
+def read_localizations(
+    path: str | PathLike,
+    *,
+    timepoint: int | None = None,
+    channel: int | None = None,
+) -> tuple[DataFrame, dict[str, Any]]:
+    """Read saved batch fits and geometry without loading images or running CUDA.
+
+    ``path`` is a batch output directory or localization Parquet file. Optional
+    zero-based T/C selectors are pushed down to the Parquet reader. Return all
+    accepted records, including nonconverged fits, and their saved metadata.
+    The dataframe uses the existing Trackpy convention: ``frame``/``channel``
+    indices, ``x/y/z`` in full-image pixels, ``xum/yum/zum`` in micrometers,
+    amplitude ``signal`` in original counts, widths/errors in pixels, and
+    ``success``/``covariance_valid`` flags. Empty selections retain the columns.
+    """
+    import pyarrow.parquet as pq
+
+    source = Path(path).expanduser()
+    if source.is_dir():
+        source = source / "localizations.parquet"
+    schema = pq.read_schema(source)
+    required = {"fit_params", "success", "candidate_timepoints", "candidate_channels"}
+    if not required <= set(schema.names) or b"localize_psf" not in (schema.metadata or {}):
+        raise ValueError("Select a localize-psf localizations.parquet file")
+    metadata = json.loads(schema.metadata[b"localize_psf"])["metadata"]
+    # Reuse the production geometry validation before converting stored centers.
+    LocalizationConfig.model_validate_json(
+        json.dumps(
+            {
+                "voxel_size_zyx_um": metadata["voxel_size_zyx_um"],
+                "origin_zyx_um": metadata["origin_zyx_um"],
+            }
+        )
+    )
+    filters = [
+        (name, "=", value)
+        for name, value in (("candidate_timepoints", timepoint), ("candidate_channels", channel))
+        if value is not None
+    ]
+    table = pq.read_table(
+        source,
+        columns=[name for name in _TRACKPY_SOURCE_COLUMNS if name in schema.names],
+        filters=filters or None,
+    )
+    return to_trackpy_dataframe(table, converged_only=False), metadata
 
 
 def save_trackpy(localizations_path: str | PathLike) -> Path:

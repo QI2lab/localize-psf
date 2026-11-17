@@ -37,6 +37,15 @@ def test_trackpy_export(localization, tmp_path):
     ).replace_schema_metadata({b"localize_psf": json.dumps(dict(metadata=metadata)).encode()})
     source = tmp_path / "localizations.parquet"
     localization._write_parquet(table.to_reader(max_chunksize=2), source)
+    loaded, geometry = localization.read_localizations(tmp_path)
+    assert len(loaded) == 4
+    assert loaded["success"].tolist() == [True, False, True, True]
+    assert geometry == metadata
+    selected, _ = localization.read_localizations(source, timepoint=11, channel=0)
+    assert selected["signal"].tolist() == [100, 14]
+    assert selected["success"].tolist() == [False, True]
+    missing, _ = localization.read_localizations(source, channel=42)
+    assert missing.empty and missing.columns.equals(loaded.columns)
     output = localization.save_trackpy(source)
     assert output == tmp_path / "trackpy.parquet" and source.exists()
     features = pd.read_parquet(output)
@@ -71,3 +80,5 @@ def test_trackpy_export(localization, tmp_path):
     assert features["signal"].tolist() == [12, 14, 20]
     assert not features["covariance_valid"].any()
     assert features[["ep_x", "ep_y", "ep_z"]].isna().all().all()
+    loaded, _ = localization.read_localizations(source)
+    assert len(loaded) == 4 and not loaded["covariance_valid"].any()
