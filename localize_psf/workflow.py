@@ -577,6 +577,16 @@ def localize_ufish_prior(
             previous.setdefault("collapse_close_priors", False)
             previous.setdefault("prior_merge_optics", None)
             previous.setdefault("edge_margin_px", 1 if previous["exclude_edge_centroids"] else 0)
+            if (
+                previous["prior_merge_optics"] is not None
+                and identity["prior_merge_optics"] is not None
+            ):
+                # New channels have no saved priors; retain and validate optics of existing ones.
+                identity["prior_merge_optics"] = (
+                    previous["prior_merge_optics"] | identity["prior_merge_optics"]
+                )
+                for channel, optics in identity["prior_merge_optics"].items():
+                    previous["prior_merge_optics"].setdefault(channel, optics)
             if previous != identity:
                 raise ValueError(
                     "Centroid checkpoint has different input or U-FISH settings; use a different output directory"

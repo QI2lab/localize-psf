@@ -126,6 +126,12 @@ def test_localization_and_cli(localization, tmp_path):
         localization.localize_ufish_prior(
             data, dict(settings, intensity_threshold=0.0), output_dir=directory
         )
+    with pytest.raises(ValueError, match="U-FISH settings"):
+        localization.localize_ufish_prior(
+            data,
+            dict(settings, batch_axes=False, channel=1, timepoint=0, wavelength_um=0.7),
+            output_dir=directory,
+        )
 
     localization.save_localizations(result, directory)
     saved = pq.read_table(tmp_path / "localizations/localizations.parquet")
