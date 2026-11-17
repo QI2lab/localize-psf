@@ -4,6 +4,7 @@
   "source_layer": "Example channel",
   "fit_model": "3d",
   "blend_3d": true,
+  "ufish_median_filter": false,
   "intensity_threshold": 0.2,
   "exclude_edge_centroids": false,
   "edge_margin_px": 2,

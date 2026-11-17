@@ -13,6 +13,7 @@ pytestmark = pytest.mark.unit
 def test_strict_json_roundtrip(tmp_path):
     config = LocalizationConfig(
         blend_3d=False,
+        ufish_median_filter=True,
         intensity_threshold=0.75,
         collapse_close_priors=False,
         exclude_edge_centroids=True,
@@ -29,6 +30,10 @@ def test_strict_json_roundtrip(tmp_path):
     assert saved["fit_parameters"]["cx"]["lower"] is None
     assert "Infinity" not in path.read_text()
     assert not saved["blend_3d"]
+    assert saved["ufish_median_filter"]
+    assert not LocalizationConfig().ufish_median_filter
+    saved.pop("ufish_median_filter")
+    assert not LocalizationConfig.model_validate_json(json.dumps(saved)).ufish_median_filter
     assert not saved["collapse_close_priors"]
     assert LocalizationConfig().collapse_close_priors
     assert saved["exclude_edge_centroids"]
@@ -128,6 +133,8 @@ def test_optical_sigma_interval_cannot_collapse():
         {"batch_axes": "true"},
         {"roi_batch_size": 1.5},
         {"blend_3d": 1},
+        {"ufish_median_filter": 1},
+        {"ufish_median_filter": "true"},
         {"exclude_edge_centroids": "true"},
         {"exclude_edge_centroids": 1},
         {"collapse_close_priors": "true"},

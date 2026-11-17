@@ -146,6 +146,12 @@ native workspace batching.
 `tqdm` counts volumes for U-FISH inference and ROI batches for Gaussian fitting.
 Routine U-FISH logging is suppressed.
 
+`ufish_median_filter=true` optionally applies a 3×3×3 GPU median filter before
+U-FISH, with reflected borders. Timepoints and channels are processed independently;
+2D mode uses a 3×3 YX neighborhood. It defaults to false. Fits and edge-footprint
+checks continue to use the original counts. Changing the option requires a fresh
+centroid checkpoint directory.
+
 `intensity_threshold` controls U-FISH's local-maxima spot caller. The default
 `0.0` keeps every positive local maximum of its Laplacian response. Set the same
 key in JSON or Python metadata to raise the cutoff. `predict` forwards this

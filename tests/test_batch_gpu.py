@@ -57,9 +57,60 @@ def scene(request):
     )
 
 
+def test_gpu_median_preprocessing_is_spatial_and_reuses_enhancement(scene):
+    import cupy as cp
+    from cupyx.scipy.ndimage import median_filter
+
+    image, config, _ = scene
+    # Distinct simulated positions across T/C expose accidental cross-volume mixing.
+    data = np.stack(
+        [
+            np.stack([np.roll(image, t * 3, axis=-1), np.roll(image, t * 3 + 2, axis=-2)])
+            for t in range(3)
+        ]
+    )
+    data[:, :, 0, 5, 5] += 20000
+    original = data.copy()
+    detector = Detector()
+    try:
+        for timepoint, channel in ((0, 1), (1, 0)):
+            selected_config = config.model_copy(
+                update={
+                    "ufish_median_filter": True,
+                    "preview": PreviewSettings(
+                        axes="tczyx",
+                        timepoint=timepoint,
+                        channel=channel,
+                        crop_zyx_px=(0, image.shape[0], 0, image.shape[1], 0, image.shape[2]),
+                    ),
+                }
+            )
+            selected, _ = prepare_volume(data, selected_config)
+            reference_config = selected_config.model_copy(update={"ufish_median_filter": False})
+            _, raw = detector.detect(selected, reference_config)
+            points, enhanced = detector.detect(selected, selected_config)
+            assert enhanced is not raw
+            _, cached = detector.detect(
+                selected, selected_config.model_copy(update={"intensity_threshold": 0.8})
+            )
+            assert cached is enhanced
+            # Exercise the real U-FISH path with an independently prefiltered input.
+            filtered = cp.asnumpy(median_filter(cp.asarray(selected), size=3, mode="reflect"))
+            expected_points, expected = detector.detect(filtered, reference_config)
+            np.testing.assert_allclose(enhanced, expected)
+            np.testing.assert_array_equal(points, expected_points)
+            _, streamed = detector.detect(selected, selected_config, cache=False)
+            np.testing.assert_allclose(streamed, expected)
+            _, unfiltered = detector.detect(selected, reference_config)
+            assert unfiltered is not enhanced
+        np.testing.assert_array_equal(data, original)
+    finally:
+        detector.release()
+
+
 def test_preview_batch_parity_and_original_counts(localization, scene):
     image, config, truth = scene
-    config = config.model_copy(update={"exclude_edge_centroids": True})
+    config = config.model_copy(update={"exclude_edge_centroids": True, "ufish_median_filter": True})
     detector = Detector()
     try:
         points, enhanced = detector.detect(image, config)
@@ -230,6 +281,7 @@ def test_checkpoint_identity_and_fit_only_reuse(localization, scene, tmp_path):
     localization.save_localizations(refit, tmp_path, export_trackpy=True)
     for update in (
         {"blend_3d": True},
+        {"ufish_median_filter": True},
         {"intensity_threshold": 0.6},
         {"collapse_close_priors": False},
         {"wavelength_um": 0.7},

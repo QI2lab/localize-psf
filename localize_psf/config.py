@@ -94,6 +94,10 @@ class LocalizationConfig(BaseModel):
     source_layer: str = ""
     fit_model: Literal["2d", "3d"] = "3d"
     blend_3d: bool = True
+    ufish_median_filter: bool = Field(
+        default=False,
+        description="Apply a size-3 spatial GPU median filter before U-FISH (ZYX in 3D, YX in 2D), independently per timepoint/channel. Fits use original counts.",
+    )
     intensity_threshold: float = Field(default=0.2, ge=0)
     collapse_close_priors: bool = Field(
         default=True,

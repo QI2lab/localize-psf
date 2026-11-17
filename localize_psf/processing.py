@@ -148,7 +148,7 @@ class Detector:
     def __init__(self) -> None:
         self._detector: UFish | None = None
         self._weights: str | None = None
-        self._key: tuple[int, bool, int, str, str] | None = None
+        self._key: tuple[int, bool, bool, int, str, str] | None = None
         self._image: np.ndarray | None = None
         self._enhanced: NDArray[np.float32] | None = None
         self._edge_distances: list[np.ndarray] | None = None
@@ -163,6 +163,12 @@ class Detector:
         Return (crop-local ZYX pixel priors, enhancement). Priors have shape
         (N,3), with zero Z in 2D; enhancement is float32 ZYX or YX respectively.
 
+        ``ufish_median_filter`` applies CuPy's size-3 GPU median filter with
+        reflected borders before prediction: 3x3x3 in ZYX or 3x3 in YX for 2D.
+        T/C selection happens before this interface; neither axis is filtered.
+        The original image is never modified and remains the fitting input and
+        edge-footprint reference. There is no CPU preprocessing fallback.
+
         ``exclude_edge_centroids`` removes a voxel-grid distance band at the
         array faces and the nonzero data footprint in each axis projection.
         This follows sloping zero-padded boundaries without treating interior
@@ -175,8 +181,8 @@ class Detector:
         voxel spacing. Suppression uses the existing nearby-peak keep-one policy.
 
         With ``cache=True``, retain the image identity and enhancement so threshold
-        changes only recall spots. A new image, weights, dimensional mode, blend
-        or batch size invalidates enhancement. ``cache=False`` streams batch
+        changes only recall spots. A new image, weights, dimensional mode, blend,
+        median setting or batch size invalidates enhancement. ``cache=False`` streams batch
         volumes without retaining images; loaded weights are reused in both modes.
         """
         from ufish.api import UFish
@@ -187,6 +193,7 @@ class Detector:
         key = (
             id(image),
             config.blend_3d,
+            config.ufish_median_filter,
             config.inference_batch_size,
             config.ufish_weights,
             axes,
@@ -203,8 +210,16 @@ class Detector:
                 else:
                     self._detector.load_weights(weights_file=weights)
                 self._weights = weights
+            inference_image = image[0] if axes == "yx" else image
+            if config.ufish_median_filter:
+                import cupy as cp
+                from cupyx.scipy.ndimage import median_filter
+
+                inference_image = cp.asnumpy(
+                    median_filter(cp.asarray(inference_image), size=3, mode="reflect")
+                )
             spots, enhanced = self._detector.predict(
-                image[0] if axes == "yx" else image,
+                inference_image,
                 axes=axes,
                 blend_3d=config.blend_3d,
                 batch_size=config.inference_batch_size,
