@@ -427,7 +427,7 @@ def localize_ufish_prior(
         metadata = {
             "batch_axes": True,
             "psf_diagnostics": False,
-            "intensity_threshold": 0.0,
+            "intensity_threshold": LocalizationConfig().intensity_threshold,
             "fit_roi_size_um": (1.75, 0.65, 0.65),
             "psf_roi_size_px": (11, 21, 21),
             **raw,

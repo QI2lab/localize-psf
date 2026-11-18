@@ -1,7 +1,7 @@
 # 3D localization with U-FISH priors
 
 [localize_ufish_prior.py](localize_ufish_prior.py) detects candidate coordinates
-with CUDA U-FISH and its simfish checkpoint, then fits the original counts using
+with CUDA U-FISH and its SunTag checkpoint, then fits the original counts using
 `gaussian3d_psf_model` and GPUfit Poisson MLE. Static bead data can also produce
 an average PSF, focus gradient and field curvature.
 
@@ -152,9 +152,9 @@ U-FISH, with reflected borders. Timepoints and channels are processed independen
 checks continue to use the original counts. Changing the option requires a fresh
 centroid checkpoint directory.
 
-`intensity_threshold` controls U-FISH's local-maxima spot caller. The default
-`0.0` keeps every positive local maximum of its Laplacian response. Set the same
-key in JSON or Python metadata to raise the cutoff. `predict` forwards this
+`intensity_threshold` controls U-FISH's local-maxima spot caller and defaults to
+`0.1`. Use `0.0` to keep every positive local maximum of its Laplacian response.
+Set the same key in JSON or Python metadata to change the cutoff. `predict` forwards this
 argument to the spot caller as `intensity_threshold`.
 
 Set `exclude_edge_centroids=true` to discard centroids near image and data

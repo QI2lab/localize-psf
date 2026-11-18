@@ -98,7 +98,7 @@ class LocalizationConfig(BaseModel):
         default=False,
         description="Apply a size-3 spatial GPU median filter before U-FISH (ZYX in 3D, YX in 2D), independently per timepoint/channel. Fits use original counts.",
     )
-    intensity_threshold: float = Field(default=0.2, ge=0)
+    intensity_threshold: float = Field(default=0.1, ge=0)
     collapse_close_priors: bool = Field(
         default=True,
         description="Collapse both priors and final fitted centers within one nominal optical Gaussian FWHM axially and radially in XY, using the existing nearby-peak keep-one policy.",
@@ -108,7 +108,7 @@ class LocalizationConfig(BaseModel):
         description="Exclude centroids near array faces and zero-padded data-footprint edges (YX in 2D).",
     )
     edge_margin_px: int = Field(default=2, ge=1, description="Excluded voxel layers at each face.")
-    ufish_weights: str = "finetune_models/v1.0.1-simfish_model.pth"
+    ufish_weights: str = "finetune_models/v1.0.1-suntag_model.pth"
     inference_batch_size: int = Field(default=32, ge=1)
     fit_roi_size_um: tuple[Positive, Positive, Positive] = (1.75, 0.65, 0.65)
     voxel_size_zyx_um: tuple[Positive, Positive, Positive] = (0.2, 0.1, 0.1)

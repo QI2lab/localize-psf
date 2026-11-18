@@ -11,6 +11,9 @@ pytestmark = pytest.mark.unit
 
 
 def test_strict_json_roundtrip(tmp_path):
+    defaults = LocalizationConfig()
+    assert defaults.ufish_weights == "finetune_models/v1.0.1-suntag_model.pth"
+    assert defaults.intensity_threshold == 0.1
     config = LocalizationConfig(
         blend_3d=False,
         ufish_median_filter=True,
