@@ -146,9 +146,9 @@ native workspace batching.
 `tqdm` counts volumes for U-FISH inference and ROI batches for Gaussian fitting.
 Routine U-FISH logging is suppressed.
 
-`ufish_median_filter=true` optionally applies a 3×3×3 GPU median filter before
+`ufish_median_filter=true` applies a 3×3×3 GPU median filter before
 U-FISH, with reflected borders. Timepoints and channels are processed independently;
-2D mode uses a 3×3 YX neighborhood. It defaults to false. Fits and edge-footprint
+2D mode uses a 3×3 YX neighborhood. It defaults to true. Fits and edge-footprint
 checks continue to use the original counts. Changing the option requires a fresh
 centroid checkpoint directory.
 
@@ -157,9 +157,9 @@ centroid checkpoint directory.
 Set the same key in JSON or Python metadata to change the cutoff. `predict` forwards this
 argument to the spot caller as `intensity_threshold`.
 
-Set `exclude_edge_centroids=true` to discard centroids near image and data
-boundaries before fitting. `edge_margin_px` sets the distance in voxel-grid
-units and defaults to two. The filter follows nonzero data footprints in the
+`exclude_edge_centroids=true` discards centroids near image and data boundaries
+before fitting and is enabled by default. `edge_margin_px` sets the distance in
+voxel-grid units and defaults to one. The filter follows nonzero data footprints in the
 ZY, ZX and YX projections, including sloping zero-padded deskew boundaries.
 Enclosed zero-valued holes remain valid data; 2D uses only the YX footprint.
 This policy assumes exterior padding is zero. It is disabled by default.

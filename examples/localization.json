@@ -4,10 +4,10 @@
   "source_layer": "Example channel",
   "fit_model": "3d",
   "blend_3d": true,
-  "ufish_median_filter": false,
+  "ufish_median_filter": true,
   "intensity_threshold": 0.1,
-  "exclude_edge_centroids": false,
-  "edge_margin_px": 2,
+  "exclude_edge_centroids": true,
+  "edge_margin_px": 1,
   "ufish_weights": "finetune_models/v1.0.1-suntag_model.pth",
   "inference_batch_size": 32,
   "fit_roi_size_um": [

@@ -95,7 +95,7 @@ class LocalizationConfig(BaseModel):
     fit_model: Literal["2d", "3d"] = "3d"
     blend_3d: bool = True
     ufish_median_filter: bool = Field(
-        default=False,
+        default=True,
         description="Apply a size-3 spatial GPU median filter before U-FISH (ZYX in 3D, YX in 2D), independently per timepoint/channel. Fits use original counts.",
     )
     intensity_threshold: float = Field(default=0.1, ge=0)
@@ -104,10 +104,10 @@ class LocalizationConfig(BaseModel):
         description="Collapse both priors and final fitted centers within one nominal optical Gaussian FWHM axially and radially in XY, using the existing nearby-peak keep-one policy.",
     )
     exclude_edge_centroids: bool = Field(
-        default=False,
+        default=True,
         description="Exclude centroids near array faces and zero-padded data-footprint edges (YX in 2D).",
     )
-    edge_margin_px: int = Field(default=2, ge=1, description="Excluded voxel layers at each face.")
+    edge_margin_px: int = Field(default=1, ge=1, description="Excluded voxel layers at each face.")
     ufish_weights: str = "finetune_models/v1.0.1-suntag_model.pth"
     inference_batch_size: int = Field(default=32, ge=1)
     fit_roi_size_um: tuple[Positive, Positive, Positive] = (1.75, 0.65, 0.65)

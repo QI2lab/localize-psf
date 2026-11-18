@@ -39,6 +39,9 @@ def scene(request):
         voxel_size_zyx_um=spacing,
         origin_zyx_um=origin,
         blend_3d=False,
+        ufish_median_filter=False,
+        exclude_edge_centroids=False,
+        edge_margin_px=2,
         return_covariance=True,
         roi_batch_size=1,
         fit_roi_size_um=(1.4, 1.2, 1.2),
@@ -694,7 +697,9 @@ def test_zero_padded_sloping_edges_are_excluded_on_every_face(mode):
         (grid[axes[0]] >= 8) & (grid[axes[0]] < 10) & (grid[axes[1]] >= 27) & (grid[axes[1]] < 29)
     )
     image[np.broadcast_to(hole, shape)] = 0
-    config = LocalizationConfig(fit_model=mode, blend_3d=True, edge_margin_px=4)
+    config = LocalizationConfig(
+        fit_model=mode, blend_3d=True, exclude_edge_centroids=False, edge_margin_px=4
+    )
     detector = Detector()
     try:
         raw, enhanced = detector.detect(image, config)

@@ -14,12 +14,14 @@ def test_strict_json_roundtrip(tmp_path):
     defaults = LocalizationConfig()
     assert defaults.ufish_weights == "finetune_models/v1.0.1-suntag_model.pth"
     assert defaults.intensity_threshold == 0.1
+    assert defaults.ufish_median_filter and defaults.exclude_edge_centroids
+    assert defaults.edge_margin_px == 1
     config = LocalizationConfig(
         blend_3d=False,
-        ufish_median_filter=True,
+        ufish_median_filter=False,
         intensity_threshold=0.75,
         collapse_close_priors=False,
-        exclude_edge_centroids=True,
+        exclude_edge_centroids=False,
         edge_margin_px=3,
         return_covariance=True,
         fit_filters=FitFilters(
@@ -33,13 +35,16 @@ def test_strict_json_roundtrip(tmp_path):
     assert saved["fit_parameters"]["cx"]["lower"] is None
     assert "Infinity" not in path.read_text()
     assert not saved["blend_3d"]
-    assert saved["ufish_median_filter"]
-    assert not LocalizationConfig().ufish_median_filter
-    saved.pop("ufish_median_filter")
-    assert not LocalizationConfig.model_validate_json(json.dumps(saved)).ufish_median_filter
+    assert not saved["ufish_median_filter"]
+    missing_options = dict(saved)
+    for name in ("ufish_median_filter", "exclude_edge_centroids", "edge_margin_px"):
+        missing_options.pop(name)
+    restored = LocalizationConfig.model_validate_json(json.dumps(missing_options))
+    assert restored.ufish_median_filter and restored.exclude_edge_centroids
+    assert restored.edge_margin_px == 1
     assert not saved["collapse_close_priors"]
     assert LocalizationConfig().collapse_close_priors
-    assert saved["exclude_edge_centroids"]
+    assert not saved["exclude_edge_centroids"]
     assert saved["edge_margin_px"] == 3
     assert saved["fit_filters"] == config.fit_filters.model_dump()
 
