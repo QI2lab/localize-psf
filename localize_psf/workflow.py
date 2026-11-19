@@ -19,7 +19,7 @@ import numpy as np
 import typer
 
 from localize_psf.batch_fitting import _accumulate_fit_batch
-from localize_psf.config import LocalizationConfig, Parameter
+from localize_psf.config import DEFAULT_PSF_ROI_SIZE_PX, LocalizationConfig, Parameter
 from localize_psf.fit import fit_model
 from localize_psf.fit_psf import average_exp_psfs, gaussian3d_psf_model, get_psf_coords
 from localize_psf.localize import (
@@ -337,6 +337,48 @@ def _psf_diagnostics(
             volume["average_psf_coords_zyx_um"] = tuple(get_psf_coords(size, spacing))
 
 
+def analyze_psf(
+    image: np.ndarray,
+    fit_results: dict[str, Any],
+    config: LocalizationConfig,
+    *,
+    roi_size_zyx_px: tuple[int, int, int] = DEFAULT_PSF_ROI_SIZE_PX,
+    origin_zyx_um: tuple[float, float, float] | None = None,
+) -> LocalizationResult:
+    """Average PSFs and fit the focus surface of one already-localized 3D volume.
+
+    ``image`` is original ZYX counts. Fit parameters use the Gaussian parameter
+    order and physical µm coordinates; success and optional filter_pass masks
+    select accepted beads. Cropped previews supply their first-voxel origin in
+    µm. ROI sizes use voxels and the existing ROI utility makes them odd.
+    No detection, localization or batch processing runs here. Returned metadata,
+    fit_results and volume_results are compatible with plot_calibration; the
+    sole volume has local key (0, 0). Insufficient focus evidence is reported
+    separately, so a PSF average can still be returned for fewer than three beads.
+    """
+    if config.fit_model != "3d" or image.ndim != 3 or min(image.shape) < 2:
+        raise ValueError("PSF averaging and field curvature require a 3D fit volume")
+    parameters = np.asarray(fit_results["fit_params"])
+    accepted = np.asarray(fit_results["success"]) & fit_results.get("filter_pass", True)
+    if parameters.ndim != 2 or parameters.shape[1] != 7 or accepted.shape != (len(parameters),):
+        raise ValueError("Provide Gaussian (N,7) parameters and matching fit masks")
+    if not np.any(accepted):
+        raise ValueError("No successful fits pass the current fit filters")
+    if not np.isfinite(parameters[accepted]).all():
+        raise ValueError("Accepted fit parameters must be finite")
+    origin = config.origin_zyx_um if origin_zyx_um is None else origin_zyx_um
+    result = dict(
+        metadata=dict(
+            config.model_dump(mode="json"), origin_zyx_um=origin, psf_roi_size_px=roi_size_zyx_px
+        ),
+        fit_results=fit_results,
+        volume_results={(0, 0): dict(candidate_ids=np.arange(len(parameters)), average_psf=None)},
+    )
+    coords = get_coords(image.shape, config.voxel_size_zyx_um, origin=origin)
+    _psf_diagnostics(image[None, None], result, coords)
+    return result
+
+
 def _write_parquet(reader: RecordBatchReader, path: Path) -> None:
     """Write a complete Parquet file before atomically replacing the target.
 
@@ -429,7 +471,7 @@ def localize_ufish_prior(
             "psf_diagnostics": False,
             "intensity_threshold": LocalizationConfig().intensity_threshold,
             "fit_roi_size_um": (1.75, 0.65, 0.65),
-            "psf_roi_size_px": (11, 21, 21),
+            "psf_roi_size_px": DEFAULT_PSF_ROI_SIZE_PX,
             **raw,
         }
     source = None

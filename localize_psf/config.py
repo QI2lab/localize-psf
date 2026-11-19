@@ -7,6 +7,8 @@ from typing import Annotated, Literal, Self
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+DEFAULT_PSF_ROI_SIZE_PX: tuple[int, int, int] = (11, 21, 21)
+
 Positive = Annotated[float, Field(gt=0)]
 
 
