@@ -120,6 +120,31 @@ def _spatial_metadata(multiscale: Multiscale, calibration: Mapping | None = None
     )
 
 
+def ome_zarr_image_paths(source: str) -> list[str]:
+    """Resolve an OME-Zarr root to image groups in stored series order.
+
+    A standalone image returns its own path; a Bio-Formats/qi2lab collection
+    returns its image-group paths, using yaozarrs metadata discovery without
+    requiring OME-XML. Paths are image groups, never resolution arrays: readers
+    select the first (highest-resolution) dataset declared by OME multiscales.
+    Only metadata is read. Local paths and remote URIs retain their source root.
+    """
+    from yaozarrs import bioformats2raw_series, convert_version, open_group, v05
+
+    group = open_group(source)
+    image = group.ome_metadata()
+    if image is not None:
+        image = convert_version(image, "0.5")
+        if isinstance(image, v05.Bf2Raw):
+            return [
+                f"{source.rstrip('/')}/{path}" if "://" in source else str(Path(source) / path)
+                for path in bioformats2raw_series(group)
+            ]
+        if isinstance(image, v05.Image) and len(image.multiscales) == 1:
+            return [source]
+    raise ValueError("Input must identify an OME-Zarr image or bioformats2raw collection")
+
+
 def open_image(
     source: str, calibration: Mapping | None = None
 ) -> tuple[np.ndarray | TensorStore, dict[str, Any]]:
@@ -128,7 +153,9 @@ def open_image(
     Parameters
     ----------
     source : str
-        Single OME-Zarr image group path/URI or local OME-TIFF filename.
+        OME-Zarr store root/image group path or URI, or local OME-TIFF filename.
+        Single-image collections are resolved automatically; resolution paths
+        are selected from OME multiscales metadata.
     calibration : Mapping, optional
         Explicit ``voxel_size_zyx_um`` and ``origin_zyx_um`` in micrometers.
 
@@ -147,16 +174,13 @@ def open_image(
         be represented by the fitter's axis-aligned coordinate system.
     """
     if not source.lower().endswith((".tif", ".tiff")):
-        from yaozarrs import bioformats2raw_series, convert_version, open_group, v05
+        from yaozarrs import convert_version, open_group, v05
 
-        group = open_group(source)
+        paths = ome_zarr_image_paths(source)
+        if len(paths) != 1:
+            raise ValueError(f"Collection has {len(paths)} images; pass an image group path")
+        group = open_group(paths[0])
         image = convert_version(group.ome_metadata(), "0.5")
-        if isinstance(image, v05.Bf2Raw):
-            paths = bioformats2raw_series(group)
-            if len(paths) != 1:
-                raise ValueError(f"Collection has {len(paths)} images; pass an image group path")
-            group = group[paths[0]]
-            image = convert_version(group.ome_metadata(), "0.5")
         if not isinstance(image, v05.Image) or len(image.multiscales) != 1:
             raise ValueError("Input must identify a single OME-Zarr image group")
         multiscale = image.multiscales[0]

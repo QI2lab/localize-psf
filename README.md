@@ -17,11 +17,11 @@ uv pip install ".[gpu,example]"
 
 ## Usage
 
-Run batch localization on an OME-Zarr image group or OME-TIFF using a JSON
-configuration:
+Run batch localization on an OME-Zarr store or OME-TIFF using a JSON
+configuration. The highest resolution is selected automatically:
 
 ```bash
-python -m localize_psf.batch image.ome.zarr/0 --metadata localization.json --output-dir results
+python -m localize_psf.batch image.ome.zarr --metadata localization.json --output-dir results
 ```
 
 Start with [localization.json](examples/localization.json), or configure settings

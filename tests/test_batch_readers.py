@@ -144,3 +144,67 @@ def test_lazy_roi_reads_skip_unselected_chunks(
             )
     with pytest.raises(ValueError, match="Invalid blosc-compressed data"):
         np.asarray(data[1, 1])
+
+
+@pytest.mark.parametrize("explicit_group", [False, True])
+def test_collection_root_selects_highest_resolution_without_xml(
+    localization, tmp_path, explicit_group
+):
+    import tensorstore as ts
+    from yaozarrs import DimSpec, open_group, v05
+    from yaozarrs.write.v05 import write_bioformats2raw
+
+    counts = np.arange(2 * 2 * 7 * 19 * 21, dtype=np.uint16).reshape(2, 2, 7, 19, 21)
+    dims = [
+        DimSpec(name=axis, size=size, scale=scale, unit="micrometer" if axis in "zyx" else None)
+        for axis, size, scale in zip(
+            "tczyx", counts.shape, (0.015, 1, 0.23, 0.11, 0.13), strict=True
+        )
+    ]
+    multiscale = v05.Multiscale.from_dims(dims, n_levels=2)
+    for dataset, name in zip(multiscale.datasets, ("fine", "coarse"), strict=True):
+        dataset.path = name
+        dataset.coordinateTransformations.append(
+            v05.TranslationTransformation(translation=[0, 0, -2, 3, -4])
+        )
+    path = tmp_path / "pyramid.ome.zarr"
+    write_bioformats2raw(
+        path,
+        {"0": (v05.Image(multiscales=[multiscale]), [counts, counts[:, :, ::2, ::2, ::2]])},
+        writer="tensorstore",
+        chunks=(1, 1, 4, 8, 8),
+    )
+    assert not (path / "OME" / "METADATA.ome.xml").exists()
+    # A genuinely unreadable lower-resolution chunk must never affect opening
+    # or reading the selected full-resolution image.
+    coarse = open_group(str(path))["0/coarse"].to_tensorstore()
+    coarse.kvstore.write(b"c/0/0/0/0/0", b"invalid chunk").result()
+    source = str(path / "0" if explicit_group else path)
+    assert localization.ome_zarr_image_paths(source) == [str(path / "0")]
+    data, metadata = localization.open_image(source)
+    assert isinstance(data, ts.TensorStore) and data.shape == counts.shape
+    assert metadata["axes"] == "tczyx"
+    np.testing.assert_allclose(metadata["voxel_size_zyx_um"], (0.23, 0.11, 0.13))
+    np.testing.assert_allclose(metadata["origin_zyx_um"], (-2, 3, -4))
+    np.testing.assert_array_equal(np.asarray(data[1, 1]), counts[1, 1])
+    with pytest.raises(ValueError, match="Invalid blosc-compressed data"):
+        np.asarray(coarse[0, 0])
+
+
+def test_image_groups_remain_distinct_from_pyramid_resolutions(localization, tmp_path):
+    from yaozarrs import DimSpec, v05
+    from yaozarrs.write.v05 import write_bioformats2raw
+
+    counts = np.ones((3, 5, 7), dtype=np.uint16)
+    dims = [
+        DimSpec(name=axis, size=size, unit="micrometer")
+        for axis, size in zip("zyx", counts.shape, strict=True)
+    ]
+    image = v05.Image(multiscales=[v05.Multiscale.from_dims(dims)])
+    path = tmp_path / "positions.ome.zarr"
+    write_bioformats2raw(
+        path, {"1": (image, [counts]), "0": (image, [counts])}, writer="tensorstore"
+    )
+    assert localization.ome_zarr_image_paths(str(path)) == [str(path / "1"), str(path / "0")]
+    with pytest.raises(ValueError, match="Collection has 2 images"):
+        localization.open_image(str(path))
