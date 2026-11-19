@@ -142,6 +142,25 @@ def prepare_volume(
     return image, tuple(origin)
 
 
+def data_footprint(image: np.ndarray) -> NDArray[np.bool_]:
+    """Infer supported ZYX voxels from hole-filled nonzero axis projections.
+
+    Reuse the detector's footprint convention, independently per T/C volume.
+    Intersect YZ, ZX and YX footprints; a single-Z image uses YX only. Enclosed
+    zero-count background is retained. This estimates support from image counts,
+    rather than treating each zero-valued voxel as missing data.
+    """
+    from scipy.ndimage import binary_fill_holes
+
+    support = image != 0
+    footprint = np.ones(image.shape, dtype=bool)
+    for pair in combinations(range(1 if image.shape[0] == 1 else 0, 3), 2):
+        axis = 3 - sum(pair)
+        projected = binary_fill_holes(np.any(support, axis=axis))
+        footprint &= np.expand_dims(projected, axis)
+    return footprint
+
+
 class Detector:
     """Cache one production enhancement so threshold tuning only recalls spots."""
 
@@ -243,13 +262,12 @@ class Detector:
             pairs = tuple(combinations(range(1 if axes == "yx" else 0, 3), 2))
             distances = self._edge_distances if cache else None
             if distances is None:
-                support = (image[0] if axes == "yx" else image) != 0
+                footprint = data_footprint(image)
                 distances = []
                 for pair in pairs:
-                    projected = support if axes == "yx" else np.any(support, axis=3 - sum(pair))
-                    footprint = binary_fill_holes(projected)
+                    projected = binary_fill_holes(np.any(footprint, axis=3 - sum(pair)))
                     distances.append(
-                        distance_transform_edt(np.pad(footprint, 1))[1:-1, 1:-1].astype(np.float32)
+                        distance_transform_edt(np.pad(projected, 1))[1:-1, 1:-1].astype(np.float32)
                     )
                 if cache:
                     self._edge_distances = distances
@@ -327,6 +345,9 @@ def fit_spots(
     and covariance selection. Center policies are µm offsets from each prior,
     intersected with ROI limits; infeasible starts raise ValueError without clipping.
 
+    Fit only samples inside the shared data footprint, retaining supported zero
+    counts. Array clipping or footprint masking marks an ROI truncated.
+
     Return all candidates in input order with IDs, statuses, active bounds and
     requested uncertainty evidence, plus the post-fit ``filter_pass`` mask.
     Final fitted positions are collapsed across all ROI batches when
@@ -376,6 +397,7 @@ def fit_spots(
         if image.shape[0] != 1:
             raise ValueError("2D fitting requires a single XY plane")
         roi_size[0] = 1
+    footprint = cp.asarray(data_footprint(image))
     image = cp.asarray(image)
     coords = get_coords(image.shape, spacing, origin=origin, use_gpu=True)
     centers = cp.asarray(origin) + cp.asarray(points) * cp.asarray(spacing)
@@ -391,17 +413,15 @@ def fit_spots(
             if progress is not None:
                 progress(f"Fitting candidates {start + 1}–{stop} of {len(points)}")
             selected = slice(start, stop)
-            values, coordinates, sizes = prepare_rois(image, coords, rois[selected])
-            truncated = cp.any(
-                rois[selected, 1::2] - rois[selected, ::2] != cp.asarray(roi_size), axis=1
-            )
+            values, coordinates, sizes = prepare_rois(image, coords, rois[selected], mask=footprint)
+            truncated = sizes != np.prod(roi_size)
             batch = fit_packed_rois(
                 values, coordinates, sizes, centers[selected], config, truncated, model=model
             )
             complete = _accumulate_fit_batch(complete, batch, start, len(points))
             del values, coordinates, batch
     finally:
-        del image, coords
+        del image, coords, footprint
         cp.get_default_memory_pool().free_all_blocks()
     assert complete is not None
     distances = (
