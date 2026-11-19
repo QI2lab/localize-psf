@@ -16,6 +16,7 @@ from .config import FitFilters, LocalizationConfig
 
 if TYPE_CHECKING:
     from cupy import ndarray as CudaArray
+    from spotiflow.model import Spotiflow
     from tensorstore import TensorStore
     from ufish.api import UFish
 
@@ -143,12 +144,14 @@ def prepare_volume(
 
 
 class Detector:
-    """Cache one production enhancement so threshold tuning only recalls spots."""
+    """Adapt CUDA U-FISH/Spotiflow to shared ZYX priors and filtering policy."""
 
     def __init__(self) -> None:
-        self._detector: UFish | None = None
+        self._detector: UFish | Spotiflow | None = None
+        self._predictor: str | None = None
+        self._points: NDArray[np.float64] | None = None
         self._weights: str | None = None
-        self._key: tuple[int, bool, bool, int, str, str] | None = None
+        self._key: tuple[object, ...] | None = None
         self._image: np.ndarray | None = None
         self._enhanced: NDArray[np.float32] | None = None
         self._edge_distances: list[np.ndarray] | None = None
@@ -156,10 +159,12 @@ class Detector:
     def detect(
         self, image: np.ndarray, config: LocalizationConfig, *, cache: bool = True
     ) -> tuple[NDArray[np.float64], NDArray[np.float32]]:
-        """Run CUDA U-FISH with the exported weights and inference settings.
+        """Run the selected CUDA predictor with exported model/settings.
 
         ``image`` supplies original ZYX counts (singleton Z in 2D). ``config``
-        supplies weights, dimensional mode, blending, threshold and batch size.
+        supplies the predictor and native options. Spotiflow calls its own
+        predict/NMS/flow implementation; probability changes rerun inference.
+        U-FISH threshold changes recall spots from its cached enhancement.
         Return (crop-local ZYX pixel priors, enhancement). Priors have shape
         (N,3), with zero Z in 2D; enhancement is float32 ZYX or YX respectively.
 
@@ -181,35 +186,48 @@ class Detector:
         voxel spacing. Suppression uses the existing nearby-peak keep-one policy.
 
         With ``cache=True``, retain the image identity and enhancement so threshold
-        changes only recall spots. A new image, weights, dimensional mode, blend,
+        changes only recall U-FISH spots. Spotiflow caches points and heatmap.
+        A new image, weights, dimensional mode, blend,
         median setting or batch size invalidates enhancement. ``cache=False`` streams batch
         volumes without retaining images; loaded weights are reused in both modes.
         """
-        from ufish.api import UFish
-
         axes = "yx" if config.fit_model == "2d" else "zyx"
         if image.ndim != 3 or (axes == "yx" and image.shape[0] != 1):
             raise ValueError("Detection requires ZYX counts, with a single XY plane in 2D")
-        key = (
-            id(image),
-            config.blend_3d,
-            config.ufish_median_filter,
-            config.inference_batch_size,
-            config.ufish_weights,
-            axes,
+        weights = (
+            config.ufish_weights
+            if config.predictor == "ufish"
+            else config.spotiflow.model or ("general" if axes == "yx" else "smfish_3d")
         )
+        options = (
+            (config.blend_3d, config.inference_batch_size)
+            if config.predictor == "ufish"
+            else (config.spotiflow,)
+        )
+        key = (id(image), axes, config.predictor, weights, config.ufish_median_filter, *options)
         if not cache or self._key != key:
             self._enhanced = self._image = self._key = None
             self._edge_distances = None
-            if self._detector is None or self._weights != config.ufish_weights:
-                self._weights = None
-                self._detector = UFish(device="cuda")
-                weights = config.ufish_weights
-                if Path(weights).is_file():
-                    self._detector.load_weights(weights_path=weights)
+            self._points = None
+            if (self._predictor, self._weights) != (config.predictor, weights):
+                self.release()
+                if config.predictor == "ufish":
+                    from ufish.api import UFish
+
+                    self._detector = UFish(device="cuda")
+                    if Path(weights).is_file():
+                        self._detector.load_weights(weights_path=weights)
+                    else:
+                        self._detector.load_weights(weights_file=weights)
                 else:
-                    self._detector.load_weights(weights_file=weights)
-                self._weights = weights
+                    from spotiflow.model import Spotiflow
+
+                    self._detector = (
+                        Spotiflow.from_folder(weights, map_location="cuda")
+                        if Path(weights).is_dir()
+                        else Spotiflow.from_pretrained(weights, map_location="cuda", verbose=False)
+                    )
+                self._predictor, self._weights = config.predictor, weights
             inference_image = image[0] if axes == "yx" else image
             if config.ufish_median_filter:
                 import cupy as cp
@@ -218,23 +236,53 @@ class Detector:
                 inference_image = cp.asnumpy(
                     median_filter(cp.asarray(inference_image), size=3, mode="reflect")
                 )
-            spots, enhanced = self._detector.predict(
-                inference_image,
-                axes=axes,
-                blend_3d=config.blend_3d,
-                batch_size=config.inference_batch_size,
-                intensity_threshold=config.intensity_threshold,
-            )
+            if config.predictor == "ufish":
+                spots, enhanced = self._detector.predict(
+                    inference_image,
+                    axes=axes,
+                    blend_3d=config.blend_3d,
+                    batch_size=config.inference_batch_size,
+                    intensity_threshold=config.intensity_threshold,
+                )
+                points = spots[[f"axis-{i}" for i in range(len(axes))]].to_numpy(dtype=float)
+            else:
+                if self._detector.config.is_3d != (axes == "zyx"):
+                    raise ValueError(
+                        "Spotiflow model dimensions must match the selected 2D/3D mode"
+                    )
+                points, details = self._detector.predict(
+                    inference_image,
+                    **config.spotiflow.model_dump(exclude={"model"}),
+                    device="cuda",
+                    verbose=False,
+                )
+                # Map coarse heatmap grid coordinates onto input voxel centers.
+                from scipy.ndimage import affine_transform
+
+                grid = self._detector.config.grid if axes == "zyx" else (1, 1)
+                enhanced = affine_transform(
+                    details.heatmap,
+                    np.diag(1 / np.asarray(grid, dtype=float)),
+                    output_shape=inference_image.shape,
+                    order=1,
+                    mode="nearest",
+                )
+                points = np.asarray(points, dtype=float)
             if cache:
                 self._enhanced = enhanced
+                self._points = points
                 self._image, self._key = image, key
         else:
             assert self._detector is not None and self._enhanced is not None
             enhanced = self._enhanced
-            spots = self._detector.call_spots(
-                self._enhanced, intensity_threshold=config.intensity_threshold
-            )
-        points = spots[[f"axis-{i}" for i in range(len(axes))]].to_numpy(dtype=float)
+            if config.predictor == "ufish":
+                spots = self._detector.call_spots(
+                    enhanced, intensity_threshold=config.intensity_threshold
+                )
+                points = spots[[f"axis-{i}" for i in range(len(axes))]].to_numpy(dtype=float)
+            else:
+                assert self._points is not None
+                points = self._points
         if axes == "yx":
             points = np.column_stack((np.zeros(len(points)), points))
         if config.exclude_edge_centroids and len(points):
@@ -277,7 +325,7 @@ class Detector:
         loaded = self._detector is not None
         self._detector = self._enhanced = self._key = self._image = None
         self._edge_distances = None
-        self._weights = None
+        self._weights = self._predictor = self._points = None
         if loaded:
             import torch
 

@@ -26,7 +26,7 @@ GCC/G++ 13 inside the isolated build environment; no system CUDA installation
 or compiler selection is needed. Windows builds require an initialized x64
 MSVC environment and provision CUDA 12.8 from the declared build dependencies.
 Both platforms always use the package-managed SDK. Add `--extra example` for CUDA PyTorch
-and the U-FISH example dependencies. GPU execution requires a working NVIDIA
+and the U-FISH/Spotiflow prediction dependencies. GPU execution requires a working NVIDIA
 driver.
 
 Run an exported localization configuration in the installed GPU environment:
@@ -34,6 +34,11 @@ Run an exported localization configuration in the installed GPU environment:
 ```bash
 python -m localize_psf.batch INPUT --metadata CONFIG.json --output-dir OUTPUT
 ```
+
+Set `predictor` to `"ufish"` (default) or `"spotiflow"` in the exported settings.
+The `spotiflow` settings accept `model` (a published name or model folder),
+`prob_thresh`, `min_distance`, `subpix`, and `max_tile_size`; null model/threshold/tile
+size use native defaults. Both predictors share median, edge, and optical prior filters.
 
 The runner reads a single OME-Zarr image group with yaozarrs or an OME-TIFF
 with tifffile. Batch execution processes the full spatial dataset; exported

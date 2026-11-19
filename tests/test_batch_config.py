@@ -5,7 +5,13 @@ import json
 import pytest
 from pydantic import ValidationError
 
-from localize_psf.config import FitFilters, LocalizationConfig, Parameter, PreviewSettings
+from localize_psf.config import (
+    FitFilters,
+    LocalizationConfig,
+    Parameter,
+    PreviewSettings,
+    SpotiflowSettings,
+)
 
 pytestmark = pytest.mark.unit
 
@@ -173,3 +179,30 @@ def test_exported_example_roundtrip(tmp_path):
     destination = tmp_path / "a's current settings.json"
     config.save(destination)
     assert LocalizationConfig.load(destination) == config
+
+
+def test_spotiflow_settings_roundtrip_and_old_json_defaults(tmp_path):
+    settings = SpotiflowSettings(
+        model="general", prob_thresh=0.3, min_distance=2, subpix=False, max_tile_size=128
+    )
+    config = LocalizationConfig(predictor="spotiflow", fit_model="2d", spotiflow=settings)
+    path = tmp_path / "spotiflow.json"
+    config.save(path)
+    assert LocalizationConfig.load(path) == config
+    assert LocalizationConfig.model_validate_json('{"schema_version": 1}').predictor == "ufish"
+
+
+@pytest.mark.parametrize(
+    "values",
+    [
+        {"prob_thresh": -0.1},
+        {"prob_thresh": 1.1},
+        {"min_distance": 0},
+        {"max_tile_size": 8},
+        {"subpix": "true"},
+        {"model": ""},
+    ],
+)
+def test_invalid_spotiflow_settings(values):
+    with pytest.raises(ValidationError):
+        SpotiflowSettings(**values)

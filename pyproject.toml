@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "localize_psf"
-version = "0.3.0"
+version = "0.3.1"
 description = "Localization and PSF fitting for three-dimensional microscopy."
 readme = "README.md"
 requires-python = ">=3.12"
@@ -31,6 +31,8 @@ gpu = [
 ]
 example = [
   "yaozarrs[io,write-tensorstore] @ git+https://github.com/imaging-formats/yaozarrs.git@main",
+  "torchvision==0.24.0",
+  "spotiflow>=0.6.5; python_version < '3.15'",
   "ufish @ git+https://github.com/QI2lab/U-FISH.git@12081e34dbcb782d92a49dec20820acc8cabd73f",
   "torch==2.9.0; sys_platform == 'win32'",
   "torch; sys_platform != 'win32'",
@@ -51,8 +53,16 @@ test-cpu = [
 ]
 docs = ["sphinx>=8,<9", "sphinx-rtd-theme>=3,<4"]
 
+[tool.uv]
+required-environments = [
+  "sys_platform == 'linux' and platform_machine == 'x86_64'",
+  "sys_platform == 'win32' and platform_machine == 'AMD64'",
+]
+
 [tool.uv.sources]
 localize-psf-build-support = {path = "build_support"}
+# Spotiflow uses torchvision transforms; inference stays on CUDA PyTorch.
+torchvision = [{index = "pytorch-cpu", extra = "example", marker = "sys_platform == 'linux' or sys_platform == 'win32'"}]
 torch = [
   {index = "pytorch-cu129", extra = "example", marker = "sys_platform == 'linux' or sys_platform == 'win32'"},
 ]
@@ -66,6 +76,11 @@ pygpufit = {CMAKE_EXECUTABLE = "localize-gpu-cmake", CMAKE_GENERATOR = "Ninja"}
 [[tool.uv.index]]
 name = "pytorch-cu129"
 url = "https://download.pytorch.org/whl/cu129"
+explicit = true
+
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
 explicit = true
 
 [[tool.uv.index]]

@@ -85,6 +85,29 @@ class FitFilters(BaseModel):
         return self
 
 
+# Published Spotiflow 0.6 model names, grouped by native spatial dimensions.
+SPOTIFLOW_MODELS: dict[str, tuple[str, ...]] = {
+    "2d": ("general", "hybiss", "synth_complex", "fluo_live"),
+    "3d": ("smfish_3d", "synth_3d"),
+}
+
+
+class SpotiflowSettings(BaseModel):
+    """Native prediction options; distances/tiles use input pixels.
+
+    A null model selects general (2D) or smfish_3d (3D); custom models are
+    trained model directories. Null probability/tile size use model defaults
+    and automatic tiling. Subpixel offsets use stereographic flow.
+    """
+
+    model_config = ConfigDict(strict=True, extra="forbid", allow_inf_nan=False, frozen=True)
+    model: str | None = Field(default=None, min_length=1)
+    prob_thresh: float | None = Field(default=None, ge=0, le=1)
+    min_distance: int = Field(default=1, ge=1)
+    subpix: bool = True
+    max_tile_size: int | None = Field(default=None, ge=16)
+
+
 class LocalizationConfig(BaseModel):
     """Batch metadata plus explicit detector, fitter, provenance, and preview settings."""
 
@@ -93,10 +116,12 @@ class LocalizationConfig(BaseModel):
     input_uri: str = ""
     source_layer: str = ""
     fit_model: Literal["2d", "3d"] = "3d"
+    predictor: Literal["ufish", "spotiflow"] = "ufish"
+    spotiflow: SpotiflowSettings = Field(default_factory=SpotiflowSettings)
     blend_3d: bool = True
     ufish_median_filter: bool = Field(
         default=True,
-        description="Apply a size-3 spatial GPU median filter before U-FISH (ZYX in 3D, YX in 2D), independently per timepoint/channel. Fits use original counts.",
+        description="Apply a size-3 spatial GPU median filter before prediction (ZYX in 3D, YX in 2D), independently per timepoint/channel. Fits use original counts.",
     )
     intensity_threshold: float = Field(default=0.1, ge=0)
     collapse_close_priors: bool = Field(

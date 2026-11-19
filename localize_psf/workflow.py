@@ -520,7 +520,11 @@ def localize_ufish_prior(
         raise RuntimeError("Localization requires a real CUDA GPU in the installed environment")
     ufish_logger.disable("ufish")
     representative = next(iter(configs.values()))
-    weights = Path(representative.ufish_weights)
+    weights = (
+        Path(representative.ufish_weights)
+        if representative.predictor == "ufish"
+        else Path(representative.spotiflow.model or "") / "best.pt"
+    )
     weights_hash = None
     if weights.is_file():
         with weights.open("rb") as stream:
@@ -554,6 +558,10 @@ def localize_ufish_prior(
         + (";collapse-optical-fwhm-radial-v2" if representative.collapse_close_priors else "")
         + (";edge-projected-footprint-v1" if representative.exclude_edge_centroids else ""),
     )
+    if representative.predictor == "spotiflow":
+        identity.update(
+            predictor="spotiflow", spotiflow=representative.spotiflow.model_dump(mode="json")
+        )
     inference_keys = (
         tuple((t, c, z) for t, c in keys for z in range(data.shape[2])) if mode == "2d" else keys
     )
