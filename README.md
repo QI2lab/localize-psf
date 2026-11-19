@@ -6,23 +6,13 @@ related image analysis. The package provides shared tools for
 
 ## Installation
 
-Requires [uv](https://docs.astral.sh/uv/) and Python ≥3.12. In an active Python
-environment, clone the repository and install:
+In an active Python environment, clone the repository and install:
 
 ```bash
 git clone https://github.com/QI2lab/localize-psf.git
 cd localize-psf
-uv pip install .
-```
-
-For GPU fitting and U-FISH prediction, install the optional dependencies:
-
-```bash
 uv pip install ".[gpu,example]"
 ```
-
-GPU use requires an NVIDIA GPU and driver on Linux x86-64 or Windows x64.
-On Windows, use an x64 Visual Studio Developer terminal for installation.
 
 ## Usage
 

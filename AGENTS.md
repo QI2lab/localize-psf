@@ -1,5 +1,9 @@
 # Repository rules
 
+- Install and select backends automatically based on available hardware; use
+  CUDA acceleration when available and CPU otherwise. Keep backend setup and
+  selection out of user-facing instructions and controls.
+
 - Automated tests are unit tests or integration tests only. Do not add regression,
   smoke, or API test suites.
 - Tests must execute real production code. Do not replace package modules,
