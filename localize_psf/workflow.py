@@ -28,7 +28,13 @@ from localize_psf.localize import (
     prepare_rois,
 )
 from localize_psf.optical_bounds import gaussian_width_bounds
-from localize_psf.processing import Detector, fit_filter_mask, fit_packed_rois, optical_parameters
+from localize_psf.processing import (
+    Detector,
+    data_footprint,
+    fit_filter_mask,
+    fit_packed_rois,
+    optical_parameters,
+)
 from localize_psf.rois import get_centered_rois, get_roi_size
 
 if TYPE_CHECKING:
@@ -716,16 +722,27 @@ def localize_ufish_prior(
         unit="volume",
     ):
         config = configs[key[1]]
+        if first == last:
+            continue
+        # Infer support once per volume/plane, including resumed centroid runs.
+        image = data[key[:2]]
+        footprint = data_footprint(
+            np.asarray(image[key[2] : key[2] + 1] if mode == "2d" else image)
+        )
+        footprint = np.broadcast_to(footprint, image.shape)
         for start in range(first, last, config.roi_batch_size):
             stop = min(start + config.roi_batch_size, last)
             selected = slice(start, stop)
             # Each inference key owns one source volume; pack its lazy view directly.
-            values, coordinates, counts = prepare_rois(data[key[:2]], coords, rois[selected])
-            truncated = np.any(rois[selected, 1::2] - rois[selected, ::2] != roi_size, axis=1)
+            values, coordinates, counts = prepare_rois(
+                image, coords, rois[selected], mask=footprint
+            )
+            truncated = counts != np.prod(roi_size)
             batch = fit_packed_rois(
                 values, coordinates, counts, centers[selected], config, truncated, model=model
             )
             fits = _accumulate_fit_batch(fits, batch, start, len(candidates))
+        del footprint, image
         if fits is not None and last > first:
             # Finish the entire volume/plane before suppressing converged duplicates.
             selected = slice(first, last)

@@ -15,13 +15,21 @@ pytestmark = pytest.mark.integration
 
 
 @pytest.mark.gpu
-def test_existing_roi_packer_accepts_cuda_arrays_and_matches_cpu_reference():
+@pytest.mark.parametrize("masked", [False, True])
+def test_existing_roi_packer_accepts_cuda_arrays_and_matches_cpu_reference(masked):
     cp = pytest.importorskip("cupy")
     image = np.arange(7 * 8 * 9).reshape(7, 8, 9).astype(float)
     coords = get_coords(image.shape, (0.23, 0.12, 0.15), origin=(-1.2, 3.4, -0.8))
     rois = np.array([[0, 3, 1, 5, 2, 7], [2, 7, 0, 2, 1, 4]])
-    reference = prepare_rois(image, coords, rois)
-    actual = prepare_rois(cp.asarray(image), tuple(cp.asarray(c) for c in coords), cp.asarray(rois))
+    z, y, _ = np.indices(image.shape)
+    mask = y >= z - 3 if masked else None
+    reference = prepare_rois(image, coords, rois, mask=mask)
+    actual = prepare_rois(
+        cp.asarray(image),
+        tuple(cp.asarray(c) for c in coords),
+        cp.asarray(rois),
+        mask=None if mask is None else cp.asarray(mask),
+    )
     assert isinstance(actual[0], cp.ndarray)
     assert all(isinstance(c, cp.ndarray) for c in actual[1])
     assert isinstance(actual[2], cp.ndarray)
