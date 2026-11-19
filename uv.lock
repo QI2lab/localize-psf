@@ -1206,7 +1206,7 @@ wheels = [
 
 [[package]]
 name = "localize-psf"
-version = "0.2.12"
+version = "0.3.0"
 source = { editable = "." }
 dependencies = [
     { name = "joblib" },
