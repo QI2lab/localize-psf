@@ -12,7 +12,7 @@ from typing import TYPE_CHECKING, Any
 import numpy as np
 from numpy.typing import NDArray
 
-from .config import FitFilters, LocalizationConfig
+from .config import SPOTIFLOW_MODELS, FitFilters, LocalizationConfig
 
 if TYPE_CHECKING:
     from cupy import ndarray as CudaArray
@@ -197,7 +197,7 @@ class Detector:
         weights = (
             config.ufish_weights
             if config.predictor == "ufish"
-            else config.spotiflow.model or ("general" if axes == "yx" else "smfish_3d")
+            else config.spotiflow.model or SPOTIFLOW_MODELS[config.fit_model][0]
         )
         options = (
             (config.blend_3d, config.inference_batch_size)

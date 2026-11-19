@@ -87,7 +87,7 @@ class FitFilters(BaseModel):
 
 # Published Spotiflow 0.6 model names, grouped by native spatial dimensions.
 SPOTIFLOW_MODELS: dict[str, tuple[str, ...]] = {
-    "2d": ("general", "hybiss", "synth_complex", "fluo_live"),
+    "2d": ("fluo_live", "general", "hybiss", "synth_complex"),
     "3d": ("smfish_3d", "synth_3d"),
 }
 
@@ -95,7 +95,7 @@ SPOTIFLOW_MODELS: dict[str, tuple[str, ...]] = {
 class SpotiflowSettings(BaseModel):
     """Native prediction options; distances/tiles use input pixels.
 
-    A null model selects general (2D) or smfish_3d (3D); custom models are
+    A null model selects fluo_live (2D) or smfish_3d (3D); custom models are
     trained model directories. Null probability/tile size use model defaults
     and automatic tiling. Subpixel offsets use stereographic flow.
     """
