@@ -1,0 +1,112 @@
+{
+  "schema_version": 1,
+  "input_uri": "example.ome.zarr/0",
+  "source_layer": "Example channel",
+  "fit_model": "3d",
+  "blend_3d": true,
+  "ufish_median_filter": true,
+  "intensity_threshold": 0.1,
+  "exclude_edge_centroids": true,
+  "edge_margin_px": 1,
+  "ufish_weights": "finetune_models/v1.0.1-suntag_model.pth",
+  "inference_batch_size": 32,
+  "fit_roi_size_um": [
+    1.75,
+    0.65,
+    0.65
+  ],
+  "voxel_size_zyx_um": [
+    0.2,
+    0.1,
+    0.1
+  ],
+  "origin_zyx_um": [
+    -2.0,
+    3.0,
+    -4.0
+  ],
+  "estimator": "MLE",
+  "max_number_iterations": 200,
+  "tolerance": 1e-6,
+  "roi_batch_size": 32,
+  "return_covariance": false,
+  "numerical_aperture": 1.35,
+  "wavelength_um": 0.515,
+  "refractive_index": 1.4,
+  "relative_sigma_range": [
+    0.5,
+    2.0
+  ],
+  "batch_axes": true,
+  "timepoint": 0,
+  "channel": 0,
+  "preview": {
+    "axes": "zyx",
+    "timepoint": 0,
+    "channel": 0,
+    "z_plane": 0,
+    "crop_zyx_px": [
+      0,
+      25,
+      0,
+      41,
+      0,
+      43
+    ]
+  },
+  "fit_parameters": {
+    "amp": {
+      "lower": 0.0,
+      "upper": null,
+      "initial": null,
+      "fixed": false
+    },
+    "cx": {
+      "lower": null,
+      "upper": null,
+      "initial": null,
+      "fixed": false
+    },
+    "cy": {
+      "lower": null,
+      "upper": null,
+      "initial": null,
+      "fixed": false
+    },
+    "cz": {
+      "lower": null,
+      "upper": null,
+      "initial": null,
+      "fixed": false
+    },
+    "sxy": {
+      "lower": 0.03,
+      "upper": 1.0,
+      "initial": 0.15,
+      "fixed": false
+    },
+    "sz": {
+      "lower": 0.05,
+      "upper": 2.0,
+      "initial": 0.35,
+      "fixed": false
+    },
+    "bg": {
+      "lower": 0.0,
+      "upper": null,
+      "initial": null,
+      "fixed": false
+    }
+  },
+  "provenance": {
+    "napari-localize-psf": "0.1.0",
+    "localize-psf": "0.2.0",
+    "localize-psf_commit": "e3e472f26fb4ae95c53b4feae83c321b85b4a842",
+    "pygpufit": "1.2.0",
+    "pygpufit_commit": "407d9b0552134b618e87fb17668c8a803680d621",
+    "ufish": "0.1.7",
+    "ufish_commit": "12081e34dbcb782d92a49dec20820acc8cabd73f",
+    "torch": "2.9.0+cu129",
+    "cupy-cuda12x": "14.2.0"
+  }
+}

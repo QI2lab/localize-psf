@@ -9,6 +9,8 @@ from typing import Optional
 from collections.abc import Sequence
 import numpy as np
 from scipy.optimize import least_squares
+from localize_psf.array_backend import get_array_module
+from localize_psf.fitting_controls import validate_bounds, validate_fixed
 from localize_psf.rotation import euler_mat_inv, euler_mat_inv_derivatives
 
 
@@ -195,22 +197,11 @@ class coordinate_model:
             sd[sd == 0] = np.nanmean(sd[sd != 0])
             sd[np.isnan(sd)] = np.nanmean(sd[sd != 0])
 
-        # default bounds
-        lbs_default, ubs_default = self.estimate_bounds(coordinates)
-
         if bounds is None:
             if guess_bounds:
-                bounds = (lbs_default, ubs_default)
+                bounds = self.estimate_bounds(tuple(c[to_use] for c in np.broadcast_arrays(*coordinates)))
             else:
                 bounds = ((-np.inf,) * self.nparams, (np.inf,) * self.nparams)
-        else:
-            if guess_bounds:
-                lbs = tuple([b if b is not None else lbs_default[ii] for ii, b in enumerate(bounds[0])])
-                ubs = tuple([b if b is not None else ubs_default[ii] for ii, b in enumerate(bounds[1])])
-            else:
-                lbs = tuple([b if b is not None else -np.inf for ii, b in enumerate(bounds[0])])
-                ubs = tuple([b if b is not None else np.inf for ii, b in enumerate(bounds[1])])
-            bounds = (lbs, ubs)
 
         # ###########################
         # handle complex arguments
@@ -436,6 +427,7 @@ class rotated_model_3d(coordinate_model):
               coordinates: Sequence[np.ndarray],
               parameters: np.ndarray) -> np.ndarray:
         z, y, x = coordinates[-3:]
+        xp = get_array_module(z, y, x)
 
         phi = parameters[-3]
         theta = parameters[-2]
@@ -452,7 +444,7 @@ class rotated_model_3d(coordinate_model):
         zrot = (x - cx) * rot_mat[2, 0] + (y - cy) * rot_mat[2, 1] + (z - cz) * rot_mat[2, 2]
 
         # evaluate base model at rotated coordinates
-        params_base = np.array(parameters[:-3], copy=True)
+        params_base = xp.array(parameters[:-3], copy=True)
         params_base[self.center_inds[2]] = 0
         params_base[self.center_inds[1]] = 0
         params_base[self.center_inds[0]] = 0
@@ -463,6 +455,7 @@ class rotated_model_3d(coordinate_model):
                  coordinates: Sequence[np.ndarray],
                  parameters: np.ndarray) -> list[np.ndarray]:
         z, y, x = coordinates[-3:]
+        xp = get_array_module(z, y, x)
 
         phi = parameters[-3]
         theta = parameters[-2]
@@ -491,7 +484,7 @@ class rotated_model_3d(coordinate_model):
         dzrot_dcz = -rot_mat[2, 2]
 
         # evaluate base model at rotated coordinates
-        params_base = np.array(parameters[:-3], copy=True)
+        params_base = xp.array(parameters[:-3], copy=True)
         params_base[self.center_inds[2]] = 0.
         params_base[self.center_inds[1]] = 0.
         params_base[self.center_inds[0]] = 0.
@@ -500,9 +493,9 @@ class rotated_model_3d(coordinate_model):
         # need to correct jacobian with
         # (1) derivatives of rotated coordinates wrt centers
         # (2) derivatives wrt Euler angles
-        j_cx = np.array(jac_base[self.center_inds[2]], copy=True)
-        j_cy = np.array(jac_base[self.center_inds[1]], copy=True)
-        j_cz = np.array(jac_base[self.center_inds[0]], copy=True)
+        j_cx = xp.array(jac_base[self.center_inds[2]], copy=True)
+        j_cy = xp.array(jac_base[self.center_inds[1]], copy=True)
+        j_cz = xp.array(jac_base[self.center_inds[0]], copy=True)
 
         # need negative sign, because thinking the j_cx and etc. terms as actually taking derivative wrt x, y, z coords
         # since these enter in the same way as cx, cy, cz, but with opposite sign
@@ -1060,11 +1053,12 @@ class gauss3d(coordinate_model):
               params: np.ndarray) -> np.ndarray:
 
         z, y, x, = coordinates[-3:]
+        xp = get_array_module(z, y, x)
         amp, cx, cy, cz, sxy, sz, bg = params
         sxy_min, sz_min = self.minimum_sigmas
 
         # calculate psf at oversampled points
-        val = amp * np.exp(-(x - cx) ** 2 / 2 / (sxy_min ** 2 + sxy ** 2)
+        val = amp * xp.exp(-(x - cx) ** 2 / 2 / (sxy_min ** 2 + sxy ** 2)
                            -(y - cy) ** 2 / 2 / (sxy_min ** 2 + sxy ** 2)
                            -(z - cz) ** 2 / 2 / (sz_min ** 2 + sz ** 2)
                            ) + bg
@@ -1076,12 +1070,13 @@ class gauss3d(coordinate_model):
                  params: np.ndarray) -> list[np.ndarray]:
 
         z, y, x = coordinates[-3:]
+        xp = get_array_module(z, y, x)
         amp, cx, cy, cz, sxy, sz, bg = params
         sxy_min, sz_min = self.minimum_sigmas
         bcast_shape = (x + y + z).shape
 
         # use sxy * |sxy| instead of sxy**2 to enforce sxy > 0
-        v = np.exp(-(x - cx) ** 2 / 2 / (sxy_min ** 2 + sxy ** 2)
+        v = xp.exp(-(x - cx) ** 2 / 2 / (sxy_min ** 2 + sxy ** 2)
                    -(y - cy) ** 2 / 2 / (sxy_min ** 2 + sxy ** 2)
                    -(z - cz) ** 2 / 2 / (sz_min ** 2 + sz ** 2)
                    )
@@ -1093,7 +1088,7 @@ class gauss3d(coordinate_model):
                amp * v * 2 * (z - params[3]) / 2 / (sz_min ** 2 + sz ** 2),
                amp * v * (2 * sxy / (sxy_min ** 2 + sxy ** 2) ** 2) * ((x - cx) ** 2 / 2 + (y - cy) ** 2 / 2),
                amp * v * 2 * sz / (sz_min ** 2 + sz ** 2) ** 2 * (z - cz) ** 2 / 2,
-               np.ones(bcast_shape)]
+               xp.ones(bcast_shape)]
 
         return jac
 
@@ -1102,6 +1097,7 @@ class gauss3d(coordinate_model):
                             coordinates: Sequence[np.ndarray],
                             num_preserved_dims: int = 0):
 
+        xp = get_array_module(data, *coordinates)
         if self.ndim != len(coordinates):
             raise ValueError("len(coords) != model dimensions")
 
@@ -1111,49 +1107,51 @@ class gauss3d(coordinate_model):
         average_axes = tuple(range(num_preserved_dims, data_ndim))
 
         # subtract smallest value so positive
-        img_temp = data - np.nanmin(data, axis=average_axes, keepdims=True)
-        img_temp[img_temp <= 0] = np.nan
+        img_temp = data - xp.nanmin(data, axis=average_axes, keepdims=True)
+        img_temp[img_temp <= 0] = xp.nan
 
         # compute moments
-        isum = np.nansum(img_temp, axis=average_axes)
-        m1x = np.nansum((img_temp * x), axis=average_axes) / isum
-        m2x = np.nansum((img_temp * x ** 2), axis=average_axes) / isum
-        sx = np.sqrt(m2x - m1x ** 2)
-        m1y = np.nansum((img_temp * y), axis=average_axes) / isum
-        m2y = np.nansum((img_temp * y ** 2), axis=average_axes) / isum
-        sy = np.sqrt(m2y - m1y ** 2)
-        m1z = np.nansum((img_temp * z), axis=average_axes) / isum
-        m2z = np.nansum((img_temp * z ** 2), axis=average_axes) / isum
-        sz = np.sqrt(m2z - m1z ** 2)
+        isum = xp.nansum(img_temp, axis=average_axes)
+        m1x = xp.nansum((img_temp * x), axis=average_axes) / isum
+        m2x = xp.nansum((img_temp * x ** 2), axis=average_axes) / isum
+        sx = xp.sqrt(m2x - m1x ** 2)
+        m1y = xp.nansum((img_temp * y), axis=average_axes) / isum
+        m2y = xp.nansum((img_temp * y ** 2), axis=average_axes) / isum
+        sy = xp.sqrt(m2y - m1y ** 2)
+        m1z = xp.nansum((img_temp * z), axis=average_axes) / isum
+        m2z = xp.nansum((img_temp * z ** 2), axis=average_axes) / isum
+        sz = xp.sqrt(m2z - m1z ** 2)
 
         # if e.g. all img_temp values are the same, sigmas can be zero and to machine precision can get NaN. avoid this
-        # if np.isnan(sz):
-        #     sz = 0.5 * (np.max(z, axis=average_axes) - np.min(z, axis=average_axes))
+        # if xp.isnan(sz):
+        #     sz = 0.5 * (xp.max(z, axis=average_axes) - xp.min(z, axis=average_axes))
 
-        # if np.isnan(sxy):
-        #     sxy = 0.5 * (0.5 * (np.max(x, axis=average_axes) - np.min(x, axis=average_axes)) +
-        #                  0.5 * (np.max(y, axis=average_axes) - np.min(y, axis=average_axes))
+        # if xp.isnan(sxy):
+        #     sxy = 0.5 * (0.5 * (xp.max(x, axis=average_axes) - xp.min(x, axis=average_axes)) +
+        #                  0.5 * (xp.max(y, axis=average_axes) - xp.min(y, axis=average_axes))
         #                  )
 
-        guess_params = np.stack((np.nanmax(data, axis=average_axes) - np.nanmin(data, axis=average_axes),
+        guess_params = xp.stack((xp.nanmax(data, axis=average_axes) - xp.nanmin(data, axis=average_axes),
                                  m1x, m1y, m1z, 0.5 * (sx + sy), sz,
-                                 np.nanmean(data, axis=average_axes)), axis=-1)
+                                 xp.nanmean(data, axis=average_axes)), axis=-1)
 
         return self.normalize_parameters(guess_params)
 
     def estimate_bounds(self,
                         coordinates: Sequence[np.ndarray]):
         z, y, x = coordinates[-3:]
+        xp = get_array_module(z, y, x)
 
-        lbs = (-np.inf, x.min(), y.min(), z.min(), 0, 0, -np.inf)
-        ubs = (np.inf, x.max(), y.max(), z.max(), np.inf, np.inf, np.inf)
+        lbs = (-xp.inf, x.min(), y.min(), z.min(), 0, 0, -xp.inf)
+        ubs = (xp.inf, x.max(), y.max(), z.max(), xp.inf, xp.inf, xp.inf)
         return lbs, ubs
 
     def normalize_parameters(self,
                              params: np.ndarray):
-        norm_params = np.array(params, copy=True)
-        norm_params[..., 4] = np.abs(norm_params[..., 4])
-        norm_params[..., 5] = np.abs(norm_params[..., 5])
+        xp = get_array_module(params)
+        norm_params = xp.array(params, copy=True)
+        norm_params[..., 4] = xp.abs(norm_params[..., 4])
+        norm_params[..., 5] = xp.abs(norm_params[..., 5])
 
         return norm_params
 
@@ -1177,6 +1175,7 @@ class gauss3d_asymmetric(coordinate_model):
               params: np.ndarray):
 
         z, y, x, = coords[-3:]
+        xp = get_array_module(z, y, x)
         sx_min, sy_min, sz_min = self.minimum_sigmas
 
         if self.use_sigma_ratio_parameterization:
@@ -1185,7 +1184,7 @@ class gauss3d_asymmetric(coordinate_model):
         else:
             amp, cx, cy, cz, sx, sy, sz, bg = params
 
-        vals = amp * np.exp(- (x - cx) ** 2 / 2 / (sx_min ** 2 + sx ** 2)
+        vals = amp * xp.exp(- (x - cx) ** 2 / 2 / (sx_min ** 2 + sx ** 2)
                             - (y - cy) ** 2 / 2 / (sy_min ** 2 + sy ** 2)
                             - (z - cz) ** 2 / 2 / (sz_min ** 2 + sz ** 2)) + bg
 
@@ -1196,6 +1195,7 @@ class gauss3d_asymmetric(coordinate_model):
                  params: np.ndarray):
 
         z, y, x, = coords[-3:]
+        xp = get_array_module(z, y, x)
         sx_min, sy_min, sz_min = self.minimum_sigmas
         bcast_shape = (x + y + z).shape
 
@@ -1206,7 +1206,7 @@ class gauss3d_asymmetric(coordinate_model):
             amp, cx, cy, cz, sx, sy, sz, bg = params
 
         # calculate psf at oversampled points
-        val0 = np.exp(-(x - cx) ** 2 / 2 / (sx_min ** 2 + sx ** 2)
+        val0 = xp.exp(-(x - cx) ** 2 / 2 / (sx_min ** 2 + sx ** 2)
                       -(y - cy) ** 2 / 2 / (sy_min ** 2 + sy ** 2)
                       -(z - cz) ** 2 / 2 / (sz_min ** 2 + sz ** 2))
 
@@ -1234,7 +1234,7 @@ class gauss3d_asymmetric(coordinate_model):
                amp * dpsf_dsx * val0,  # sx
                amp * dpsf_dsy_like * val0,  # sy/sx or sy
                amp * dpsf_dsz * val0,  # sz
-               np.ones(bcast_shape)  # bg
+               xp.ones(bcast_shape)  # bg
                ]
 
         return jac
@@ -1521,6 +1521,7 @@ def fit_least_squares(model_fn,
                       fixed_params: Optional[list[bool]] = None,
                       bounds: Optional[Sequence[Sequence[float]]] = None,
                       model_jacobian: Optional[callable] = None,
+                      absolute_sigma: bool = False,
                       **kwargs) -> dict:
     """
     Wrapper for non-linear least squares fit function scipy.optimize.least_squares which handles fixing parameters
@@ -1536,6 +1537,8 @@ def fit_least_squares(model_fn,
     :param  bounds: (lbs, ubs). If None, -/+ infinity used for all parameters.
     :param model_jacobian: Jacobian of the model function as a list, [df/dp[0], df/dp[1], ...]. If None,
       no jacobian used.
+    :param absolute_sigma: when True the residual scaling is calibrated, so covariance
+      is not multiplied by the reduced residual variance. False estimates that variance.
     :param kwargs: additional key word arguments will be passed through to scipy.optimize.least_squares()
     :return results: dictionary object. Uncertainty can be obtained from the square roots of the diagonals of the
       covariance matrix, but these will only be meaningful if variances were appropriately provided for
@@ -1546,26 +1549,13 @@ def fit_least_squares(model_fn,
     # check input parameters
     # ###########################
 
-    # get default fixed parameters
-    if fixed_params is None:
-        fixed_params = [False for _ in init_params]
-
-    # default bounds
-    if bounds is None:
-        bounds = (tuple([-np.inf] * len(init_params)), tuple([np.inf] * len(init_params)))
-
-    init_params = np.array(init_params, copy=True)
-    # ensure initial parameters within bounds, if not fixed
-    for ii in range(len(init_params)):
-        if (init_params[ii] < bounds[0][ii] or init_params[ii] > bounds[1][ii]) and not fixed_params[ii]:
-            raise ValueError(f"Initial parameter at index {ii:d} had value {init_params[ii]:0.2g},"
-                             f" which was outside of bounds ({bounds[0][ii]:0.2g}, {bounds[1][ii]:0.2g})")
-
-    if np.any(np.isnan(init_params)):
-        raise ValueError("init_params cannot include nans")
-
-    if np.any(np.isnan(bounds)):
-        raise ValueError("bounds cannot include nans")
+    initial_array = np.asarray(init_params, dtype=float)
+    if initial_array.ndim != 1:
+        raise ValueError("init_params must have shape (nparams,)")
+    fixed_params = validate_fixed(fixed_params, len(initial_array))
+    lower, upper, initial = validate_bounds(bounds, initial_array[None, :], fixed_params)
+    init_params = initial[0]
+    bounds = (lower[0], upper[0])
 
     # ###########################
     # if some parameters are fixed, we need to hide them from the fit function to produce correct covariance, etc.
@@ -1616,16 +1606,22 @@ def fit_least_squares(model_fn,
     # ###########################
     nfree_params = np.sum(np.logical_not(fixed_params))
     # scipy.optimize.least_squares minimizes s = 0.5 * \sum |fn(x_i)|^2, so need a factor of two to correct their cost
-    red_chi_sq = (2 * fit_info["cost"]) / (model_fn(init_params).size - nfree_params)
+    degrees_of_freedom = model_fn(init_params).size - nfree_params
+    red_chi_sq = (2 * fit_info["cost"]) / degrees_of_freedom if degrees_of_freedom > 0 else np.nan
 
     # ###########################
     # calculate covariance matrix
     # ###########################
     try:
         jacobian = fit_info['jac']
-        cov_free = red_chi_sq * np.linalg.inv(jacobian.transpose().dot(jacobian))
+        information = jacobian.transpose().dot(jacobian)
+        covariance_condition = np.linalg.cond(information)
+        cov_free = np.linalg.inv(information)
+        if not absolute_sigma:
+            cov_free *= red_chi_sq
     except np.linalg.LinAlgError:
         cov_free = np.nan * np.zeros((jacobian.shape[1], jacobian.shape[1]))
+        covariance_condition = np.inf
 
     cov = np.nan * np.zeros((len(init_params), len(init_params)))
     ii_free = 0
@@ -1651,6 +1647,7 @@ def fit_least_squares(model_fn,
     result = {'fit_params': pfit,
               'chi_squared': red_chi_sq,
               'covariance': cov,
+              'covariance_condition': covariance_condition,
               'init_params': init_params,
               'fixed_params': fixed_params,
               'bounds': bounds,

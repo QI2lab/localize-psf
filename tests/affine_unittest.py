@@ -2,11 +2,13 @@
 Tests for affine.py
 """
 import unittest
+import pytest
 import numpy as np
 from scipy.fft import fftshift, ifftshift, fftfreq, fft2
 from scipy.signal.windows import hann
-from scipy.optimize import minimize
-from localize_psf import affine, rotation
+from localize_psf import affine, fit, rotation
+
+pytestmark = pytest.mark.unit
 
 
 def get_phase_realspace(img, frq, dxy, phase_guess=0):
@@ -34,14 +36,12 @@ def get_phase_realspace(img, frq, dxy, phase_guess=0):
 
     xx, yy = np.meshgrid(x, y)
 
-    def fn(phi): return -np.cos(2 * np.pi * (frq[0] * xx + frq[1] * yy) + phi)
-    def fn_deriv(phi): return np.sin(2 * np.pi * (frq[0] * xx + frq[1] * yy) + phi)
-    def min_fn(phi): return np.sum(fn(phi) * img)
-    def jac_fn(phi): return np.asarray([np.sum(fn_deriv(phi) * img),])
+    # The sinusoid is simulation input; parameter estimation uses production code.
+    def pattern(phi):
+        return 1 + np.cos(2 * np.pi * (frq[0] * xx + frq[1] * yy) + phi[0])
 
-    # using jacobian makes faster and more robust
-    result = minimize(min_fn, phase_guess, jac=jac_fn)
-    phi_fit = np.mod(result.x, 2 * np.pi)
+    result = fit.fit_model(img, pattern, [phase_guess])
+    phi_fit = np.mod(result["fit_params"], 2 * np.pi)
 
     return phi_fit
 

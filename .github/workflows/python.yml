@@ -1,0 +1,24 @@
+name: CPU references and distributions
+on: [push, pull_request, workflow_dispatch]
+permissions:
+  contents: read
+jobs:
+  cpu:
+    strategy:
+      matrix:
+        os: [windows-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884
+        with:
+          version: '0.11.30'
+          python-version: '3.12.10'
+      - run: uv lock --check
+      - run: uv sync --locked --group test-cpu
+      - run: uv run --locked --group test-cpu pytest -m "(unit or integration) and not gpu"
+      - run: uv build
+      - uses: actions/upload-artifact@v4
+        with:
+          name: localize-psf-${{ matrix.os }}
+          path: dist/*

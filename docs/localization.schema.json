@@ -1,0 +1,423 @@
+{
+  "$defs": {
+    "FitFilters": {
+      "additionalProperties": false,
+      "description": "Post-fit acceptance shared by previews and batch exports.\n\nAmplitude limits are inclusive, in original image counts; null is unbounded.\nStatus selectors accept all fits or require the upstream pass/fail flag.\nCovariance that was not computed is unavailable, rather than a failed check.",
+      "properties": {
+        "amplitude_min": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Amplitude Min"
+        },
+        "amplitude_max": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Amplitude Max"
+        },
+        "covariance": {
+          "default": "all",
+          "enum": [
+            "all",
+            "pass",
+            "fail"
+          ],
+          "title": "Covariance",
+          "type": "string"
+        },
+        "convergence": {
+          "default": "all",
+          "enum": [
+            "all",
+            "pass",
+            "fail"
+          ],
+          "title": "Convergence",
+          "type": "string"
+        }
+      },
+      "title": "FitFilters",
+      "type": "object"
+    },
+    "Parameter": {
+      "additionalProperties": false,
+      "description": "A bound/initial value in \u00b5m or counts; center values are prior-relative offsets.\n\nNone selects the production estimate or ROI limit. A fixed parameter requires\nan explicit initial value. In 2D, cz and sz are fixed by the plane adapter.",
+      "properties": {
+        "lower": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Lower"
+        },
+        "upper": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Upper"
+        },
+        "initial": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Initial"
+        },
+        "fixed": {
+          "default": false,
+          "title": "Fixed",
+          "type": "boolean"
+        }
+      },
+      "title": "Parameter",
+      "type": "object"
+    },
+    "PreviewSettings": {
+      "additionalProperties": false,
+      "description": "Selection in the source layer, distinct from full-dataset batch scope.",
+      "properties": {
+        "axes": {
+          "default": "zyx",
+          "title": "Axes",
+          "type": "string"
+        },
+        "timepoint": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Timepoint",
+          "type": "integer"
+        },
+        "channel": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Channel",
+          "type": "integer"
+        },
+        "z_plane": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Z Plane",
+          "type": "integer"
+        },
+        "crop_zyx_px": {
+          "default": [
+            0,
+            41,
+            0,
+            128,
+            0,
+            128
+          ],
+          "maxItems": 6,
+          "minItems": 6,
+          "prefixItems": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "integer"
+            },
+            {
+              "type": "integer"
+            },
+            {
+              "type": "integer"
+            },
+            {
+              "type": "integer"
+            },
+            {
+              "type": "integer"
+            }
+          ],
+          "title": "Crop Zyx Px",
+          "type": "array"
+        }
+      },
+      "title": "PreviewSettings",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "description": "Batch metadata plus explicit detector, fitter, provenance, and preview settings.",
+  "properties": {
+    "schema_version": {
+      "const": 1,
+      "default": 1,
+      "title": "Schema Version",
+      "type": "integer"
+    },
+    "input_uri": {
+      "default": "",
+      "title": "Input Uri",
+      "type": "string"
+    },
+    "source_layer": {
+      "default": "",
+      "title": "Source Layer",
+      "type": "string"
+    },
+    "fit_model": {
+      "default": "3d",
+      "enum": [
+        "2d",
+        "3d"
+      ],
+      "title": "Fit Model",
+      "type": "string"
+    },
+    "blend_3d": {
+      "default": true,
+      "title": "Blend 3D",
+      "type": "boolean"
+    },
+    "intensity_threshold": {
+      "default": 0.2,
+      "minimum": 0,
+      "title": "Intensity Threshold",
+      "type": "number"
+    },
+    "collapse_close_priors": {
+      "default": true,
+      "description": "Collapse both priors and final fitted centers within one nominal optical Gaussian FWHM axially and radially in XY, using the existing nearby-peak keep-one policy.",
+      "title": "Collapse Close Priors",
+      "type": "boolean"
+    },
+    "exclude_edge_centroids": {
+      "default": false,
+      "description": "Exclude centroids near array faces and zero-padded data-footprint edges (YX in 2D).",
+      "title": "Exclude Edge Centroids",
+      "type": "boolean"
+    },
+    "edge_margin_px": {
+      "default": 2,
+      "description": "Excluded voxel layers at each face.",
+      "minimum": 1,
+      "title": "Edge Margin Px",
+      "type": "integer"
+    },
+    "ufish_weights": {
+      "default": "finetune_models/v1.0.1-simfish_model.pth",
+      "title": "Ufish Weights",
+      "type": "string"
+    },
+    "inference_batch_size": {
+      "default": 32,
+      "minimum": 1,
+      "title": "Inference Batch Size",
+      "type": "integer"
+    },
+    "fit_roi_size_um": {
+      "default": [
+        1.75,
+        0.65,
+        0.65
+      ],
+      "maxItems": 3,
+      "minItems": 3,
+      "prefixItems": [
+        {
+          "exclusiveMinimum": 0,
+          "type": "number"
+        },
+        {
+          "exclusiveMinimum": 0,
+          "type": "number"
+        },
+        {
+          "exclusiveMinimum": 0,
+          "type": "number"
+        }
+      ],
+      "title": "Fit Roi Size Um",
+      "type": "array"
+    },
+    "voxel_size_zyx_um": {
+      "default": [
+        0.2,
+        0.1,
+        0.1
+      ],
+      "maxItems": 3,
+      "minItems": 3,
+      "prefixItems": [
+        {
+          "exclusiveMinimum": 0,
+          "type": "number"
+        },
+        {
+          "exclusiveMinimum": 0,
+          "type": "number"
+        },
+        {
+          "exclusiveMinimum": 0,
+          "type": "number"
+        }
+      ],
+      "title": "Voxel Size Zyx Um",
+      "type": "array"
+    },
+    "origin_zyx_um": {
+      "default": [
+        0,
+        0,
+        0
+      ],
+      "maxItems": 3,
+      "minItems": 3,
+      "prefixItems": [
+        {
+          "type": "number"
+        },
+        {
+          "type": "number"
+        },
+        {
+          "type": "number"
+        }
+      ],
+      "title": "Origin Zyx Um",
+      "type": "array"
+    },
+    "estimator": {
+      "default": "MLE",
+      "enum": [
+        "MLE",
+        "LSE"
+      ],
+      "title": "Estimator",
+      "type": "string"
+    },
+    "max_number_iterations": {
+      "default": 200,
+      "minimum": 1,
+      "title": "Max Number Iterations",
+      "type": "integer"
+    },
+    "tolerance": {
+      "default": 1e-06,
+      "exclusiveMinimum": 0,
+      "title": "Tolerance",
+      "type": "number"
+    },
+    "roi_batch_size": {
+      "default": 32,
+      "minimum": 1,
+      "title": "Roi Batch Size",
+      "type": "integer"
+    },
+    "return_covariance": {
+      "default": false,
+      "title": "Return Covariance",
+      "type": "boolean"
+    },
+    "fit_filters": {
+      "$ref": "#/$defs/FitFilters"
+    },
+    "numerical_aperture": {
+      "default": 1.35,
+      "exclusiveMinimum": 0,
+      "title": "Numerical Aperture",
+      "type": "number"
+    },
+    "wavelength_um": {
+      "default": 0.515,
+      "exclusiveMinimum": 0,
+      "title": "Wavelength Um",
+      "type": "number"
+    },
+    "refractive_index": {
+      "default": 1.4,
+      "exclusiveMinimum": 0,
+      "title": "Refractive Index",
+      "type": "number"
+    },
+    "relative_sigma_range": {
+      "default": [
+        0.5,
+        2
+      ],
+      "maxItems": 2,
+      "minItems": 2,
+      "prefixItems": [
+        {
+          "exclusiveMinimum": 0,
+          "type": "number"
+        },
+        {
+          "exclusiveMinimum": 0,
+          "type": "number"
+        }
+      ],
+      "title": "Relative Sigma Range",
+      "type": "array"
+    },
+    "batch_axes": {
+      "default": true,
+      "title": "Batch Axes",
+      "type": "boolean"
+    },
+    "timepoint": {
+      "default": 0,
+      "minimum": 0,
+      "title": "Timepoint",
+      "type": "integer"
+    },
+    "channel": {
+      "default": 0,
+      "minimum": 0,
+      "title": "Channel",
+      "type": "integer"
+    },
+    "preview": {
+      "$ref": "#/$defs/PreviewSettings"
+    },
+    "fit_parameters": {
+      "additionalProperties": {
+        "$ref": "#/$defs/Parameter"
+      },
+      "title": "Fit Parameters",
+      "type": "object"
+    },
+    "provenance": {
+      "additionalProperties": {
+        "type": "string"
+      },
+      "title": "Provenance",
+      "type": "object"
+    }
+  },
+  "title": "LocalizationConfig",
+  "type": "object"
+}

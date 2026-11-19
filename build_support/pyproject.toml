@@ -1,0 +1,115 @@
+[build-system]
+requires = ["hatchling==1.27.0"]
+build-backend = "hatchling.build"
+
+[project]
+name = "localize-psf-build-support"
+version = "0.1.0"
+description = "Environment-local CUDA toolchain for localize-psf native builds."
+requires-python = ">=3.12"
+dependencies = ["cmake==3.31.10"]
+
+[project.scripts]
+localize-gpu-cmake = "localize_psf_build_support.cmake:main"
+
+[tool.hatch.build]
+exclude = ["**/_build_tools/**"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["localize_psf_build_support"]
+
+[tool.hatch.build.targets.wheel.force-include]
+"pyproject.toml" = "localize_psf_build_support/pyproject.toml"
+
+[tool.uv]
+cache-keys = [
+  {file = "pyproject.toml"},
+  {file = "localize_psf_build_support/*.py"},
+  {file = "localize_psf_build_support/cmake/*.cmake"},
+]
+
+# CUDA and host compiler artifacts installed only inside GPUfit's isolated build.
+[tool.localize-psf-build-support]
+micromamba-url = "https://conda.anaconda.org/conda-forge/linux-64/micromamba-2.3.3-0.tar.bz2"
+micromamba-sha256 = "e7274528ceb9c20d048a428d6c22d7e02e268f8ffb762c4c365422347c8b8ba2"
+# conda-forge: cuda-nvcc/cudart-dev/cudart-static=12.9, libcublas-dev=12.9,
+# gcc_linux-64/gxx_linux-64=13, sysroot_linux-64=2.39; exact transitive closure.
+packages = [
+  "https://conda.anaconda.org/conda-forge/noarch/cuda-version-12.9-h4f385c5_3.conda#5f5f428031933f117ff9f7fcc650e6ea1b3fef5936cf84aa24af79167513b656",
+  "https://conda.anaconda.org/conda-forge/noarch/libstdcxx-devel_linux-64-13.4.0-h6963c3b_120.conda#c322903ff3c6330ad9a9da72b2b86503595fc072a7d90405021491168c21701c",
+  "https://conda.anaconda.org/conda-forge/noarch/libgcc-devel_linux-64-13.4.0-hd1d28cc_120.conda#46f98e05c26957fffbc9224e70fc16218e5bc3d432288b6baf7e89619d517030",
+  "https://conda.anaconda.org/conda-forge/noarch/kernel-headers_linux-64-6.12.0-he073ed8_6.conda#73b11f31db6c9ebe63d900334fa4f46859aa1ddd8f37cfa5f25a043e0a59253c",
+  "https://conda.anaconda.org/conda-forge/noarch/tzdata-2026e-h5d301ff_0.conda#2b7ca858879f183ce2dcc65b300f48a0133d5430550f35b23d80d405a0788dbf",
+  "https://conda.anaconda.org/conda-forge/noarch/cuda-driver-dev_linux-64-12.9.79-h3f2d84a_0.conda#a15574d966e73135a79d5e6570c87e13accdb44bd432449b5deea71644ad442c",
+  "https://conda.anaconda.org/conda-forge/noarch/libnvptxcompiler-dev_linux-64-12.9.86-ha770c72_2.conda#17952c32eac197a59c119fdf3fb6f08c6a29c225a80bae141ac904ad212b87dd",
+  "https://conda.anaconda.org/conda-forge/noarch/cuda-nvvm-dev_linux-64-12.9.86-ha770c72_2.conda#522722dcaffd133e0c7500c69dc70e21ac34d6762dcbaabfe847439f944028f0",
+  "https://conda.anaconda.org/conda-forge/noarch/cuda-crt-dev_linux-64-12.9.86-ha770c72_2.conda#e6257534c4b4b6b8a1192f84191c34906ab9968c92680fa09f639e7846a87304",
+  "https://conda.anaconda.org/conda-forge/noarch/cuda-cccl_linux-64-12.9.27-ha770c72_1.conda#3cd38ff0fe130d10fd8933964a3f1b7f7a7c24aa89390f92fc4ab590d4ea40f7",
+  "https://conda.anaconda.org/conda-forge/noarch/cuda-cudart-static_linux-64-12.9.79-h3f2d84a_0.conda#d435f8a19b59b52ce460ee3a6bfd877288a0d1d645119a6ba60f1c3627dc5032",
+  "https://conda.anaconda.org/conda-forge/noarch/cuda-cudart_linux-64-12.9.79-h3f2d84a_0.conda#6cde0ace2b995b49d0db2eefb7bc30bf00ffc06bb98ef7113632dec8f8907475",
+  "https://conda.anaconda.org/conda-forge/noarch/sysroot_linux-64-2.39-hc4b9eeb_6.conda#7d235e4337f122f3439d0196e1c1c6e715a5b88fcbf24f944510186c84168e45",
+  "https://conda.anaconda.org/conda-forge/noarch/cuda-cudart-dev_linux-64-12.9.79-h3f2d84a_0.conda#ffe86ed0144315b276f18020d836c8ef05bf971054cf7c3eb167af92494080d5",
+  "https://conda.anaconda.org/conda-forge/linux-64/libgomp-16.2.0-he0feb66_7.conda#92a0bb350c7be6a4eedcb4e111c60aefd176018e6b1c009a6e025dbe9bbcd758",
+  "https://conda.anaconda.org/conda-forge/linux-64/libzlib-1.3.2-h25fd6f3_3.conda#eb8a0db0aa570124f7d2a93d7c7f596e3390df5e047818d873baad32985fc736",
+  "https://conda.anaconda.org/conda-forge/linux-64/cuda-crt-tools-12.9.86-ha770c72_2.conda#2da9964591af14ba11b2379bed01d56e7185260ee0998d1a939add7fb752db45",
+  "https://conda.anaconda.org/conda-forge/linux-64/libnvptxcompiler-dev-12.9.86-ha770c72_2.conda#1e7a7b34f8639a5feb75ba864127059e4d83edfe1a516547f0dbb9941e7b8f8b",
+  "https://conda.anaconda.org/conda-forge/linux-64/_openmp_mutex-4.5-20_gnu.conda#1dd3fffd892081df9726d7eb7e0dea6198962ba775bd88842135a4ddb4deb3c9",
+  "https://conda.anaconda.org/conda-forge/linux-64/zstd-1.5.7-hb78ec9c_7.conda#47d682b9f6d6ec9eb1a6e6c3e75ea6273e899e78fb7fc59f81d39745009fbc60",
+  "https://conda.anaconda.org/conda-forge/linux-64/libgcc-16.2.0-ha9f2e26_7.conda#e031634c3a928f9594eba868bc46ef5230d6571a364a0c63215b06c4563bfcea",
+  "https://conda.anaconda.org/conda-forge/linux-64/ld_impl_linux-64-2.46.1-default_hbd61a6d_103.conda#901649b1edbe841fd4ee7e2d491a05184ed540eb01cdae506872f344babc1d28",
+  "https://conda.anaconda.org/conda-forge/linux-64/cuda-nvvm-tools-12.9.86-h4bc722e_2.conda#45f5e881ed0d973132a5475a0b5c066db6e748ef3a831a14dba8374b252e0067",
+  "https://conda.anaconda.org/conda-forge/linux-64/cuda-nvvm-impl-12.9.86-h4bc722e_2.conda#f4d34556174e4faa9d374ba2244707082870e1bbc1bb441ad3d9d2cea37da6af",
+  "https://conda.anaconda.org/conda-forge/linux-64/libstdcxx-16.2.0-h934c35e_7.conda#fa7018298629fc429971fffd6ecba3d27a7b02e4e890d6a93ea01ffebe8cb745",
+  "https://conda.anaconda.org/conda-forge/linux-64/binutils_impl_linux-64-2.46.1-default_hfdba357_103.conda#98f9ddc6dc5d56a824b7eaea5bab6ad4bb47642288fc70d6b1b4024ac39d5595",
+  "https://conda.anaconda.org/conda-forge/linux-64/cuda-nvcc-tools-12.9.86-he02047a_2.conda#0e849be7b5e4832ca218ec2c48a9ba3a15a984f629e2e54f38a53f4f57220341",
+  "https://conda.anaconda.org/conda-forge/linux-64/libsanitizer-13.4.0-hf18ac3d_20.conda#bd710792a12dd3e15e74a331efc385384230b6b60d50ecbd2646fbc0be254658",
+  "https://conda.anaconda.org/conda-forge/linux-64/cuda-nvrtc-12.9.86-hecca717_1.conda#68f81268c25befa9b70dc49af469ab0eb131960e3700b9a4edb46a32da343a28",
+  "https://conda.anaconda.org/conda-forge/linux-64/cuda-cudart-static-12.9.79-h5888daf_0.conda#6261e1d9af80e1ec308e3e5e2ff825d189ef922d24093beaf6efca12e67ce060",
+  "https://conda.anaconda.org/conda-forge/linux-64/cuda-cudart-12.9.79-h5888daf_0.conda#57d1294ecfaf9dc8cdb5fc4be3e63ebc7614538bddb5de53cfd9b1b7de43aed5",
+  "https://conda.anaconda.org/conda-forge/linux-64/binutils_linux-64-2.46.1-default_h4852527_103.conda#606a42c754752fb905fe2012d52ff370d47b5b6adefd5f7befc4ec30ce758f23",
+  "https://conda.anaconda.org/conda-forge/linux-64/gcc_impl_linux-64-13.4.0-h649a46b_20.conda#7f9dbd59dcdf76e9a937b2f926f00627265b3b80c8a40f529f0f78846929d835",
+  "https://conda.anaconda.org/conda-forge/linux-64/libcublas-12.9.2.10-h676940d_0.conda#16666002786d59dd7d62ddbeffe08c4118d882c986c6bf72443c7f983c24fb0a",
+  "https://conda.anaconda.org/conda-forge/linux-64/cuda-cudart-dev-12.9.79-h5888daf_0.conda#04d8235cb3cb3510c0492c3515a9d1a6053b50ef39be42b60cafb05044b5f4c6",
+  "https://conda.anaconda.org/conda-forge/linux-64/gxx_impl_linux-64-13.4.0-h5415f34_20.conda#688ef3ea82110a862b3b6be6175b087c698b54c542944fc8b7b92f2bffb82050",
+  "https://conda.anaconda.org/conda-forge/linux-64/gcc_linux-64-13.4.0-h5174b15_28.conda#4a6e12079dcff41b45b02a8af124afda58822eae9efedd6925080866c87a7d5c",
+  "https://conda.anaconda.org/conda-forge/linux-64/libcublas-dev-12.9.2.10-h676940d_0.conda#3a68ef147c0a7fdd59286e49c4dd1a03be9ea6180b12ee5324ecd555c17419bb",
+  "https://conda.anaconda.org/conda-forge/linux-64/gxx_linux-64-13.4.0-hb11295d_28.conda#ad5bb39b993b36d4bbeed3590b89233bc416b430ba53b92a2b1a24e3ab1bff60",
+  "https://conda.anaconda.org/conda-forge/noarch/cuda-nvcc-dev_linux-64-12.9.86-he91c749_2.conda#a1672a34439a72869de9e011e935d41b62fc8dfb1a2700e85ed8a7a129b79981",
+  "https://conda.anaconda.org/conda-forge/linux-64/cuda-nvcc-impl-12.9.86-h85509e4_2.conda#961cf20d411b7685cd744e6c6ed35efea547d095c62151d6f3053d9931bb994d",
+  "https://conda.anaconda.org/conda-forge/linux-64/cuda-nvcc_linux-64-12.9.86-he0b4e1d_6.conda#c506221dafb7cfd081f7d12d01d8e8ab9b29adfcc7d69d61fedd3232174e4016",
+  "https://conda.anaconda.org/conda-forge/linux-64/cuda-nvcc-12.9.86-hcdd1206_6.conda#f7c5de6b1f0f463f73c78cc73439027cdd5cb94fb4ce099116969812973cabcb",
+]
+
+# Windows SDK uses the tested CUDA 12.8 Update 1 profile with MSVC 14.38.
+[tool.localize-psf-build-support.windows]
+micromamba-url = "https://conda.anaconda.org/conda-forge/win-64/micromamba-2.3.3-0.tar.bz2"
+micromamba-sha256 = "df531329cb3dd59d93f569bb597c715cc8ac239144718b5c530ca325d5d2e42d"
+packages = [
+  "https://conda.anaconda.org/conda-forge/noarch/cuda-version-12.8-h5d125a7_3.conda#6f93ceb66267e69728d83cf98673221f6b1f95a3514b3a97777cfd0ef8e24f3f",
+  "https://conda.anaconda.org/conda-forge/noarch/vswhere-3.1.7-h40126e0_1.conda#b72270395326dc56de9bd6ca82f63791b3c8c9e2b98e25242a9869a4ca821895",
+  "https://conda.anaconda.org/conda-forge/noarch/cuda-cccl_win-64-12.8.90-h57928b3_1.conda#27b0df2ee3def4bee407a1113e48fa3a7b41239e279539f72463cf2a28766d18",
+  "https://conda.anaconda.org/conda-forge/noarch/cuda-nvvm-dev_win-64-12.8.93-h57928b3_3.conda#ee5b8d14da1c610ad28f17f401a37ae68aba9d0c19de64f7cbdfa23f40e15951",
+  "https://conda.anaconda.org/conda-forge/noarch/cuda-crt-dev_win-64-12.8.93-h57928b3_3.conda#0ac48aff3ad36beae4016004f14d347d4c7a04a2173fa20f621238af7face4e2",
+  "https://conda.anaconda.org/conda-forge/noarch/cuda-cudart-static_win-64-12.8.90-he0c23c2_1.conda#465a3648520a1324a23119260fa987dd015c4b22011e1d710919a03d7676dd9a",
+  "https://conda.anaconda.org/conda-forge/noarch/cuda-cudart_win-64-12.8.90-he0c23c2_1.conda#da2356ce91d1105be629eb8b15e7cb8c3ff3f56033c5d9a0ebddc2314d91e71b",
+  "https://conda.anaconda.org/conda-forge/noarch/cuda-nvcc-dev_win-64-12.8.93-h36c15f3_3.conda#d4cc4e3a34dd102ce1b0e51a22b406be184dbd74354c3d0ee9d004cfdbb97c05",
+  "https://conda.anaconda.org/conda-forge/noarch/cuda-cudart-dev_win-64-12.8.90-he0c23c2_1.conda#cc21fd4346edd61b7672bed389180c7d00446c4724fd8c4b6588a44defec9029",
+  "https://conda.anaconda.org/conda-forge/win-64/ucrt-10.0.26100.0-h57928b3_0.conda#3005729dce6f3d3f5ec91dfc49fc75a0095f9cd23bab49efb899657297ac91a5",
+  "https://conda.anaconda.org/conda-forge/win-64/cuda-crt-tools-12.8.93-h57928b3_3.conda#8d27fa76e9660886140d61b3f62924ba95c3512a8171cccc884e654732968bc7",
+  "https://conda.anaconda.org/conda-forge/win-64/vs2019_win-64-19.29.30139-h7c12cb7_44.conda#ddb28dda867d3fd88fa906d4f30b95c2555d5f5854188f5e0e1340686f157736",
+  "https://conda.anaconda.org/conda-forge/win-64/vcomp14-14.51.36247-h1c3f1cb_44.conda#81490037bc6d4843fc83d16019bc113be60c849d21614caa3e2f8ff4389fefca",
+  "https://conda.anaconda.org/conda-forge/win-64/vc14_runtime-14.51.36247-hb06f545_44.conda#8221fe78686f3b11586a7585f902f1403c923fb3a5040cff59a16db27782db8d",
+  "https://conda.anaconda.org/conda-forge/win-64/vc-14.5-hda273ae_44.conda#2db82e4c8848e34728776539e0cd40b1eea12858c6135e92326b8e083f204fe4",
+  "https://conda.anaconda.org/conda-forge/win-64/cuda-nvvm-tools-12.8.93-he0c23c2_3.conda#3961b7e981f89e0f7f698212e4f9b55840ab26797a2a028cb8381bb6a436bc9c",
+  "https://conda.anaconda.org/conda-forge/win-64/cuda-nvvm-impl-12.8.93-he0c23c2_3.conda#ef93b57f20cd07d87a2349fcf5f9b6986433dbcf7064bdac94269677d96956b4",
+  "https://conda.anaconda.org/conda-forge/win-64/cuda-nvrtc-12.8.93-he0c23c2_1.conda#b68487e5e8ef36b51e695ac654a7aa32deaad45a354e98404c52dd61fb740674",
+  "https://conda.anaconda.org/conda-forge/win-64/cuda-cudart-static-12.8.90-he0c23c2_1.conda#fe22eac01fbe7c40f3b565931f14df6db145e293fad737debc7f88ab9b97f0ab",
+  "https://conda.anaconda.org/conda-forge/win-64/cuda-cudart-12.8.90-he0c23c2_1.conda#9ae3f5aa47b6b09fd8991059f63080b2c5759b125609e8b0218f44c1ee540bf6",
+  "https://conda.anaconda.org/conda-forge/win-64/cuda-nvcc-tools-12.8.93-he0c23c2_3.conda#ebc5144b0347f63018117bf344fd247e87cf06768e599be0fa223aecfd142538",
+  "https://conda.anaconda.org/conda-forge/win-64/libcublas-12.8.5.5-hac47afa_0.conda#96cf67798d8e2b2c40f518671e904eb04dbdac6571e0be2a560b61fbebb5dff9",
+  "https://conda.anaconda.org/conda-forge/win-64/cuda-cudart-dev-12.8.90-he0c23c2_1.conda#fc85ef8c643a27f97084ce4c0cba63e39207e07f256abc327af6397bd054ec5e",
+  "https://conda.anaconda.org/conda-forge/win-64/libcublas-dev-12.8.5.5-hac47afa_0.conda#a6919a54a7f2c94c848bf6b74832254ccda7a59d9bbba22d1475e79b46438869",
+  "https://conda.anaconda.org/conda-forge/win-64/cuda-nvcc-impl-12.8.93-h53cbb54_3.conda#3ed42240529083f84d2daf78d9768a0e627a934546dc0e2651623673b1f502e9",
+  "https://conda.anaconda.org/conda-forge/win-64/cuda-nvcc_win-64-12.8.93-hd70436c_2.conda#56bb648d5ce6c9e1801bc296b7c4ce38000003d7eaaa2d34c687fc8a5e581076",
+  "https://conda.anaconda.org/conda-forge/win-64/cuda-nvcc-12.8.93-h8f04d04_2.conda#1e723ba9304179151742e98b0778d3d85c1ce9c7719fe5379c97c3a93e4d1061",
+]

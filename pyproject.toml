@@ -1,0 +1,103 @@
+[build-system]
+requires = ["hatchling==1.27.0"]
+build-backend = "hatchling.build"
+
+[project]
+name = "localize_psf"
+version = "0.2.12"
+description = "Localization and PSF fitting for three-dimensional microscopy."
+readme = "README.md"
+requires-python = ">=3.12"
+license = "GPL-3.0-only"
+license-files = ["LICENSE"]
+authors = [{name = "QI2lab and Peter T. Brown"}]
+classifiers = [
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.12",
+  "Topic :: Scientific/Engineering :: Image Processing",
+]
+dependencies = [
+  "numpy>=2", "scipy>=1.14", "numba>=0.61", "matplotlib>=3.9", "joblib>=1.4", "pydantic>=2",
+]
+
+[project.urls]
+Repository = "https://github.com/QI2lab/localize-psf"
+Documentation = "https://localize-psf.readthedocs.io"
+
+[project.optional-dependencies]
+gpu = [
+  "cupy-cuda12x[ctk]>=14.1.1",
+  "pyGpufit @ git+https://github.com/QI2lab/Gpufit.git@opm-ptv",
+]
+example = [
+  "yaozarrs[io,write-tensorstore] @ git+https://github.com/imaging-formats/yaozarrs.git@main",
+  "ufish @ git+https://github.com/QI2lab/U-FISH.git@12081e34dbcb782d92a49dec20820acc8cabd73f",
+  "torch==2.9.0; sys_platform == 'win32'",
+  "torch; sys_platform != 'win32'",
+  "typer>=0.16,<1",
+  "pyarrow>=18",
+  "pandas",
+  "tifffile>=2024.10",
+  "tqdm",
+]
+psfmodels = ["psfmodels>=0.3.3"]
+legacy-calibration = ["dask>=2024.10", "zarr>=2.18,<3"]
+
+[dependency-groups]
+dev = ["pytest==9.1.1", "ruff==0.16.6"]
+test-cpu = [
+  "yaozarrs[io,write-tensorstore] @ git+https://github.com/imaging-formats/yaozarrs.git@main",
+  "typer>=0.16,<1", "pyarrow>=18", "pandas", "trackpy", "tifffile>=2024.10",
+]
+docs = ["sphinx>=8,<9", "sphinx-rtd-theme>=3,<4"]
+
+[tool.uv.sources]
+localize-psf-build-support = {path = "build_support"}
+torch = [
+  {index = "pytorch-cu129", extra = "example", marker = "sys_platform == 'linux' or sys_platform == 'win32'"},
+]
+
+[tool.uv.extra-build-dependencies]
+pygpufit = ["localize-psf-build-support==0.1.0"]
+
+[tool.uv.extra-build-variables]
+pygpufit = {CMAKE_EXECUTABLE = "localize-gpu-cmake", CMAKE_GENERATOR = "Ninja"}
+
+[[tool.uv.index]]
+name = "pytorch-cu129"
+url = "https://download.pytorch.org/whl/cu129"
+explicit = true
+
+[[tool.uv.index]]
+name = "nvidia"
+url = "https://pypi.nvidia.com"
+
+[tool.hatch.build.targets.wheel]
+packages = ["localize_psf"]
+
+[tool.hatch.metadata]
+allow-direct-references = true
+
+[tool.hatch.build.targets.sdist]
+include = ["localize_psf", "build_support", "tests", "docs", "scripts", "examples/localize_ufish_prior.py", "examples/localize_ufish_prior.md", "examples/localize_ufish_prior.json", "examples/localization.json", "README.md", "LICENSE", "pyproject.toml", "uv.lock", ".python-version"]
+exclude = ["docs/_*", "docs/_build", "build_support/**/_build_tools/**"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["build_support"]
+python_files = ["test_*.py", "*_unittest.py"]
+markers = [
+  "cpu: runs without CUDA",
+  "gpu: requires the tested QI2lab native GPUfit artifact and CUDA device",
+  "unit: exercises a production function in isolation",
+  "integration: exercises production components together",
+  "example: example workflow tests, separate from core wheel checks",
+  "monte_carlo: repeated noisy-image uncertainty validation",
+]
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F", "I", "UP"]

@@ -6,6 +6,7 @@ from collections.abc import Sequence
 import numpy as np
 from warnings import warn
 from numba import njit
+from localize_psf.array_backend import get_array_module
 
 
 def roi2global(coords_roi: Union[Sequence[float], Sequence[int]],
@@ -80,37 +81,7 @@ def get_centered_roi(centers: Union[Sequence[float], Sequence[int], np.ndarray],
 
     warn("get_centered_roi() is deprecated and will be removed soon. Please use get_centered_rois() instead.")
 
-    roi = []
-    # for c, n in zip(centers, sizes):
-    for ii in range(len(centers)):
-        c = centers[ii]
-        n = sizes[ii]
-
-        # get ROI closest to centered
-        end_test = np.round(c + (n - 1) / 2) + 1
-        end_err = np.mod(end_test, 1)
-        start_test = np.round(c - (n - 1) / 2)
-        start_err = np.mod(start_test, 1)
-
-        if end_err > start_err:
-            start = start_test
-            end = start + n
-        else:
-            end = end_test
-            start = end - n
-
-        if min_vals is not None:
-            if start < min_vals[ii]:
-                start = min_vals[ii]
-
-        if max_vals is not None:
-            if end > max_vals[ii]:
-                end = max_vals[ii]
-
-        roi.append(int(start))
-        roi.append(int(end))
-
-    return roi
+    return get_centered_rois(centers, sizes, min_vals, max_vals)[0].tolist()
 
 
 def get_centered_rois(centers: Union[np.ndarray[int], np.ndarray[float], np.ndarray],
@@ -132,45 +103,40 @@ def get_centered_rois(centers: Union[np.ndarray[int], np.ndarray[float], np.ndar
     :return rois: num_rois x 2*ndims
     """
 
-    centers = np.atleast_2d(centers)
-    sizes = np.atleast_2d(sizes)
+    xp = get_array_module(centers)
+    centers = xp.atleast_2d(xp.asarray(centers))
+    sizes = xp.atleast_2d(xp.asarray(sizes))
 
     first_shape = centers.shape[0:-1]
     ndim = centers.shape[-1]
 
     if min_vals is None:
-        if np.issubdtype(centers.dtype, float):
-            min_vals = np.full_like(centers, -np.inf)
-        elif np.issubdtype(centers.dtype, np.integer):
-            min_vals = np.full_like(centers, np.iinfo(centers.dtype).min)
+        if xp.issubdtype(centers.dtype, xp.floating):
+            min_vals = xp.full_like(centers, -xp.inf)
+        elif xp.issubdtype(centers.dtype, xp.integer):
+            min_vals = xp.full_like(centers, xp.iinfo(centers.dtype).min)
         else:
             raise ValueError()
 
     if max_vals is None:
-        if np.issubdtype(centers.dtype, float):
-            max_vals = np.full_like(centers, np.inf)
-        elif np.issubdtype(centers.dtype, np.integer):
-            max_vals = np.full_like(centers, np.iinfo(centers.dtype).max)
+        if xp.issubdtype(centers.dtype, xp.floating):
+            max_vals = xp.full_like(centers, xp.inf)
+        elif xp.issubdtype(centers.dtype, xp.integer):
+            max_vals = xp.full_like(centers, xp.iinfo(centers.dtype).max)
         else:
             raise ValueError()
 
-    min_vals = np.atleast_2d(min_vals)
-    max_vals = np.atleast_2d(max_vals)
+    min_vals = xp.atleast_2d(xp.asarray(min_vals))
+    max_vals = xp.atleast_2d(xp.asarray(max_vals))
 
-    # check which
-    end_test = np.rint(centers + (sizes - 1) / 2) + 1
-    end_err = np.mod(end_test, 1)
-    start_test = np.rint(centers - (sizes - 1) / 2)
-    start_err = np.mod(start_test, 1)
+    # Preserve the existing end-based rounding, including half-pixel ties.
+    end = xp.rint(centers + (sizes - 1) / 2) + 1
+    start = end - sizes
 
-    mask = end_err > start_err
-    start = np.where(mask, start_test, end_test - sizes)
-    end = start + sizes
+    start = xp.maximum(start, min_vals)
+    end = xp.minimum(end, max_vals)
 
-    start = np.maximum(start, min_vals)
-    end = np.minimum(end, max_vals)
-
-    rois = np.stack((start, end), axis=-1).astype(int).reshape(first_shape + (2 * ndim,))
+    rois = xp.stack((start, end), axis=-1).astype(int).reshape(first_shape + (2 * ndim,))
 
     return rois
 

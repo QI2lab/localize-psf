@@ -2,3 +2,11 @@ __pycache__
 *.egg-info
 docs/_*
 examples/data/*
+.venv/
+.uv-cache/
+.pytest_cache/
+.ruff_cache/
+build/
+build_support/**/_build_tools/
+dist/
+pytest-cache-files-*/
