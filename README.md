@@ -1,8 +1,9 @@
 # localize-psf
-
-Tools for localizing fluorescent objects, fitting point-spread functions, and
-related image analysis. The package provides shared tools for
-[mcSIM](https://github.com/QI2lab/mcSIM) and [OPM](https://github.com/QI2lab/OPM).
+This repository contains code for localizing diffraction limited fluorescent objects, fitting spots to various
+different point-spread function (PSF) models, and other related image analysis tasks. The tools
+contained here are general purpose, and they have been split into a separate package
+so that both the [mcSIM code](https://github.com/QI2lab/mcSIM) and the
+[OPM code](https://github.com/QI2lab/OPM) can use them.
 
 ## Installation
 
@@ -27,5 +28,57 @@ Start with [localization.json](examples/localization.json), or configure setting
 interactively with [napari-localize-psf](https://github.com/QI2lab/napari-localize-psf).
 Localizations are saved as Parquet files in the output directory.
 
-Examples of spot localization, fitting, and PSF calibration are available in
-[examples](examples).
+# Examples
+Scripts illustrating example usage of localize-psf are available in [examples](examples).
+Associated data necessary to run some of these examples can be downloaded from [Zenodo](https://doi.org/10.5281/zenodo.10022862).
+These scripts assume this data has been placed in a directory called `examples/data`
+
+## [psf_calibration.py](examples/psf_calibration.py)
+Estimate the 3D PSF of a microscope from an image of many diffraction limited beads on a coverslip
+
+
+# Contents
+
+## [localize.py](localize_psf/localize.py)
+Tools for localizing diffraction limited spots from image data. This is primarily intended as
+support for FISH spot finding and PSF fitting. This code is also the basis of
+FISH spotfinding on the OPM, although the tilted/skewed geometry functions are contained in
+[OPM repository](https://github.com/QI2lab/OPM). The localization routines can be run in parallel, either
+on the CPU using multiprocessing with [dask](https://www.dask.org/) or on the GPU using a modified version of
+[GPUfit](https://github.com/QI2lab/Gpufit)
+
+The module contains a high-level function for localizing diffraction limited objects in a 3D image,
+`localize_beads_generic()`. This function is designed to work with extensible fit `model` and `filter` objects.
+
+It also contains a high-level function for determining an experimental point-spread function and fitting
+an image containing many 3D diffraction limited spots to a PSF model, `autofit_psfs()`.
+
+## [fit_psf.py](localize_psf/fit_psf.py)
+Tools for working with point-spread functions (PSF's), optical transfer functions (OTF's) and etc.
+The most realistic functions rely on the
+[psfmodels](https://pypi.org/project/psfmodels/) package.
+
+## [affine.py](localize_psf/affine.py)
+Tools for working with affine transformations. These include manipulating transformation matrices
+and fitting affine transformations from coordinate data or raw image data). The fitting
+options include a simple implementation of the RANSAC algorithm
+
+## [fit.py](localize_psf/fit.py)
+Tools for non-linear least squares fitting. The most important function is `fit_least_squares()`
+which is a wrapper aroung `scipy.optimize.least_squares()` with extra support for fixing
+parameters. The most commonly used function is `fit_model()` which is used for fitting nD data
+arrays  to various models.
+
+## [camera.py](localize_psf/camera.py)
+Tools for simulating the action of a camera and imaging models more generally. This includes binning, simulating
+shot noise and readout noise, etc.
+
+## [rois.py](localize_psf/rois.py)
+Tools for dealing with regions of interest (ROI's)
+
+# Docs
+Documentation is generated from function docstrings and built with Sphinx. e.g. navigate to `docs` and run
+```
+make html
+```
+Then open `docs/_build/html/index.html` in your browser
