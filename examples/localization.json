@@ -11,9 +11,9 @@
   "ufish_weights": "finetune_models/v1.0.1-suntag_model.pth",
   "inference_batch_size": 32,
   "fit_roi_size_um": [
-    1.75,
-    0.65,
-    0.65
+    3.0,
+    1.5,
+    1.5
   ],
   "voxel_size_zyx_um": [
     0.2,
@@ -80,14 +80,14 @@
       "fixed": false
     },
     "sxy": {
-      "lower": 0.03,
-      "upper": 1.0,
+      "lower": 0.08,
+      "upper": 0.65,
       "initial": 0.15,
       "fixed": false
     },
     "sz": {
-      "lower": 0.05,
-      "upper": 2.0,
+      "lower": 0.12,
+      "upper": 0.65,
       "initial": 0.35,
       "fixed": false
     },

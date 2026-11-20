@@ -197,13 +197,43 @@
       "title": "Fit Model",
       "type": "string"
     },
+    "psf_model": {
+      "default": "gaussian",
+      "enum": [
+        "gaussian",
+        "tilted_gaussian"
+      ],
+      "title": "Psf Model",
+      "type": "string"
+    },
+    "psf_tilt_yz_rad": {
+      "anyOf": [
+        {
+          "maximum": 1.5707963267948966,
+          "minimum": -1.5707963267948966,
+          "type": "number"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Shared YZ PSF tilt in radians. Null automatically calibrates isolated 3D spots; exported previews save the calibrated value for batch reuse.",
+      "title": "Psf Tilt Yz Rad"
+    },
     "blend_3d": {
       "default": true,
       "title": "Blend 3D",
       "type": "boolean"
     },
+    "ufish_median_filter": {
+      "default": true,
+      "description": "Apply a size-3 spatial GPU median filter before U-FISH (ZYX in 3D, YX in 2D), independently per timepoint/channel. Fits use original counts.",
+      "title": "Ufish Median Filter",
+      "type": "boolean"
+    },
     "intensity_threshold": {
-      "default": 0.2,
+      "default": 0.1,
       "minimum": 0,
       "title": "Intensity Threshold",
       "type": "number"
@@ -215,20 +245,20 @@
       "type": "boolean"
     },
     "exclude_edge_centroids": {
-      "default": false,
+      "default": true,
       "description": "Exclude centroids near array faces and zero-padded data-footprint edges (YX in 2D).",
       "title": "Exclude Edge Centroids",
       "type": "boolean"
     },
     "edge_margin_px": {
-      "default": 2,
+      "default": 1,
       "description": "Excluded voxel layers at each face.",
       "minimum": 1,
       "title": "Edge Margin Px",
       "type": "integer"
     },
     "ufish_weights": {
-      "default": "finetune_models/v1.0.1-simfish_model.pth",
+      "default": "finetune_models/v1.0.1-suntag_model.pth",
       "title": "Ufish Weights",
       "type": "string"
     },
@@ -240,9 +270,9 @@
     },
     "fit_roi_size_um": {
       "default": [
-        1.75,
-        0.65,
-        0.65
+        3.0,
+        1.5,
+        1.5
       ],
       "maxItems": 3,
       "minItems": 3,

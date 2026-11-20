@@ -510,7 +510,7 @@ def localize_ufish_prior(
             "batch_axes": True,
             "psf_diagnostics": False,
             "intensity_threshold": LocalizationConfig().intensity_threshold,
-            "fit_roi_size_um": (1.75, 0.65, 0.65),
+            "fit_roi_size_um": LocalizationConfig().fit_roi_size_um,
             "psf_roi_size_px": DEFAULT_PSF_ROI_SIZE_PX,
             **raw,
         }

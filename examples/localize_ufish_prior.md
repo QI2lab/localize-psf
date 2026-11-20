@@ -38,7 +38,7 @@ metadata = {
     "wavelength_um": 0.515,
     "refractive_index": 1.51,
     "relative_sigma_range": (0.5, 2.0),
-    "fit_roi_size_um": (1.75, 0.65, 0.65),
+    "fit_roi_size_um": (3.0, 1.5, 1.5),
 }
 result = localize_ufish_prior("spots.ome.zarr", metadata, output_dir="localizations")
 
@@ -208,7 +208,7 @@ focus = volume["focus"]
 The original algorithm fits a plane, then fits movable-center isotropic curvature
 to the plane residual with `fit_model`. PSF extraction uses `average_exp_psfs`.
 `fit_roi_size_um` is the physical ZYX fitting size; `psf_roi_size_px` is the
-ZYX pixel size for averaging. Their defaults are `(1.75, 0.65, 0.65)` and
+ZYX pixel size for averaging. Their defaults are `(3.0, 1.5, 1.5)` and
 `(11, 21, 21)` respectively. Both use production `get_roi_size` to round up to
 odd pixel dimensions, keeping the center on a voxel. The averaging dimensions
 actually used are returned in metadata.
