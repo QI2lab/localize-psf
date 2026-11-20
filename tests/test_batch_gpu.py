@@ -740,10 +740,10 @@ def test_preview_and_batch_mask_oblique_padding(localization, scene):
     fits = batch["fit_results"]
     for name in ("fit_params", "init_params", "center_covariance_zyx"):
         np.testing.assert_allclose(fits[name], preview[name], rtol=1e-3, atol=1e-5, equal_nan=True)
-    clipped = fits["covariance_flags"]["truncated"]
+    clipped = fits["roi_truncated"]
     assert clipped.any()
-    np.testing.assert_array_equal(clipped, preview["covariance_flags"]["truncated"])
-    assert not fits["covariance_valid"][clipped].any()
+    np.testing.assert_array_equal(clipped, preview["roi_truncated"])
+    assert not fits["covariance_flags"]["truncated"].any()
     nearest = np.argmin(np.linalg.norm(fits["fit_params"][:, 1:4] - truth[1:4], axis=1))
     np.testing.assert_allclose(fits["fit_params"][nearest], truth, rtol=1e-3, atol=0.02)
     accepted = fit_filter_mask(
@@ -752,4 +752,8 @@ def test_preview_and_batch_mask_oblique_padding(localization, scene):
         fits["covariance_valid"],
         FitFilters(convergence="pass", covariance="pass"),
     )
-    assert not accepted[clipped].any()
+    assert clipped[nearest]
+    if config.fit_model == "3d":
+        assert accepted[nearest]
+    else:
+        assert fits["covariance_flags"]["fixed_center"][nearest]

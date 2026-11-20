@@ -422,9 +422,9 @@ def filter_nearby_peaks(centers: array,
     :param mode: "average", "keep-one", or "remove"
     :param weights: only used in "average" mode. If weights are provided, a weighted average between nearby
       points is computed
-    :param nmax: maximum number of centers to be processed at once. If the number of centers exceeds this size,
-      then the problem will be split in half (recursively) and solved on the subregions. Then the overlap zone
-      between these two regions will be checked and the results will be combined
+    :param nmax: maximum number of centers to be processed at once.
+      Larger keep-one inputs are partitioned recursively, then checked across the overlap.
+      Mode "remove" evaluates the original set without partitioning to preserve neighbor chains.
     :return centers_unique: array of unique center coordinates
     :return inds: index into the initial array to produce centers_unique. In mode is "keep-one" or "remove"
       then centers_unique = centers[inds]. If mode is "average", this will not be true as centers_unique will
@@ -460,7 +460,7 @@ def filter_nearby_peaks(centers: array,
             # todo: does this have a problem if min_dists = 0?
             ranges = (clims[:, 1] - clims[:, 0]) / min_dists
 
-        if len(centers_unique) > nmax and not xp.all(ranges <= 2):
+        if mode != "remove" and len(centers_unique) > nmax and not xp.all(ranges <= 2):
             if mode == "average":
                 raise NotImplementedError("mode='average' is not implemented with nmax < xp.inf. Set nmax to xp.inf")
 
@@ -513,6 +513,7 @@ def filter_nearby_peaks(centers: array,
             # todo: is it possible this can fail in "average" mode?
             # todo: looks like this might be easier if use some tools from scipy.spatial, scipy.spatial.cKDTree
             counter = 0
+            rejected = xp.zeros(len(centers_unique), dtype=bool)
             while counter < len(centers_unique):
                 # compute distances to all other beads
                 z_dists = xp.abs(centers_unique[counter][0] - centers_unique[:, 0])
@@ -531,7 +532,14 @@ def filter_nearby_peaks(centers: array,
                     # don't want to remove the point itself
                     combine[counter] = False
                 elif mode == "remove":
-                    pass
+                    # Test the original set, including neighbors already rejected,
+                    # so chains crossing groups cannot become isolated later.
+                    combine[counter] = False
+                    if xp.any(combine):
+                        rejected |= combine
+                        rejected[counter] = True
+                    counter += 1
+                    continue
                 else:
                     raise ValueError("mode must be 'average', 'keep-one', or 'remove' but was '%s'" % mode)
 
@@ -541,6 +549,8 @@ def filter_nearby_peaks(centers: array,
                 weights = weights[xp.logical_not(combine)]
 
                 counter += 1
+            if mode == "remove":
+                centers_unique, inds = centers_unique[~rejected], inds[~rejected]
 
     return centers_unique, inds
 
