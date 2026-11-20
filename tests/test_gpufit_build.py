@@ -3,7 +3,7 @@
 import importlib
 import os
 import sys
-import tomllib
+from importlib.resources import files
 from pathlib import Path
 
 import pytest
@@ -18,11 +18,9 @@ def native_gpufit():
     return pytest.importorskip("pygpufit.gpufit")
 
 
-def test_native_abi_matches_the_locked_build(native_gpufit):
+def test_native_abi_matches_the_pinned_build(native_gpufit):
     capabilities = native_gpufit.get_capabilities()
-    locked = tomllib.loads((Path(__file__).parents[1] / "uv.lock").read_text())
-    dependency = next(p for p in locked["package"] if p["name"] == "pygpufit")
-    revision = dependency["source"]["git"].rsplit("#", 1)[1]
+    revision = files("localize_psf").joinpath("gpufit_revision.txt").read_text().strip()
     assert capabilities["source_revision"] == revision
     assert capabilities["source_dirty"] is False
     assert capabilities["abi_version"] == 3

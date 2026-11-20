@@ -29,16 +29,23 @@ jobs:
       CMAKE_BUILD_PARALLEL_LEVEL: '2'
       CMAKE_GENERATOR: Ninja
       LOCALIZE_PSF_REQUIRE_NATIVE_ABI: '1'
-      GPUFIT_REVISION: 407d9b0552134b618e87fb17668c8a803680d621
     steps:
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
+      - name: Load the pinned GPUfit revision
+        id: gpufit
+        shell: pwsh
+        run: |
+          $revision = (Get-Content -LiteralPath ./localize_psf/gpufit_revision.txt -Raw).Trim()
+          if ($revision -notmatch '^[0-9a-f]{40}$') { throw "Invalid GPUfit revision: $revision" }
+          "revision=$revision" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          "GPUFIT_REVISION=$revision" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
       - name: Check out the locked GPUfit source
         uses: actions/checkout@v4
         with:
           repository: QI2lab/Gpufit
-          ref: ${{ env.GPUFIT_REVISION }}
+          ref: ${{ steps.gpufit.outputs.revision }}
           path: Gpufit-source
           persist-credentials: false
       - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884
