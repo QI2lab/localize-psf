@@ -1,4 +1,4 @@
-name: CUDA builds
+name: CUDA builds and wheels
 
 on:
   push:
@@ -31,6 +31,15 @@ jobs:
       LOCALIZE_PSF_REQUIRE_NATIVE_ABI: '1'
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Check out the locked GPUfit source
+        uses: actions/checkout@v4
+        with:
+          repository: QI2lab/Gpufit
+          ref: 407d9b0552134b618e87fb17668c8a803680d621
+          path: Gpufit-source
+          persist-credentials: false
       - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884
         with:
           version: '0.12.3'
@@ -41,12 +50,59 @@ jobs:
         shell: pwsh
         run: ./.github/scripts/setup_windows_msvc.ps1
       - run: uv lock --check
-      - name: Build GPUfit with the pyproject toolchain
-        run: uv sync --locked --extra gpu
+      - name: Build the universal-Python GPUfit platform wheel
+        shell: pwsh
+        run: |
+          $builder = Join-Path $env:RUNNER_TEMP 'gpufit-wheel-builder'
+          uv venv $builder --python 3.12
+          $python = Join-Path $builder $(if ($IsWindows) { 'Scripts/python.exe' } else { 'bin/python' })
+          uv pip install --python $python build==1.3.0 scikit-build-core==0.11.6 ninja==1.13.0 ./build_support
+          & $python ./scripts/build_gpufit_wheel.py --source ./Gpufit-source --output ./wheelhouse
+      - name: Install the project with the built GPUfit wheel
+        shell: pwsh
+        run: |
+          uv sync --locked --extra gpu --no-install-package pygpufit
+          $wheel = Get-ChildItem -LiteralPath ./wheelhouse -Filter '*.whl' -File -ErrorAction Stop
+          if ($wheel.Count -ne 1) { throw "Expected one wheel, found $($wheel.Count)" }
+          uv pip install --no-deps $wheel.FullName
       - name: Run production build-support and native ABI unit tests
         run: >-
           uv run --locked --extra gpu --no-sync pytest -q
           -m unit tests/test_gpu_build_support.py tests/test_gpufit_build.py
+      - name: Record wheel digest
+        shell: pwsh
+        run: |
+          $wheel = Get-ChildItem -LiteralPath ./wheelhouse -Filter '*.whl' -File -ErrorAction Stop
+          if ($wheel.Count -ne 1) { throw "Expected one wheel, found $($wheel.Count)" }
+          $digest = (Get-FileHash -LiteralPath $wheel.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+          $platform = if ($IsWindows) { 'windows-x64' } else { 'linux-x86_64' }
+          "$digest  $($wheel.Name)" | Out-File -LiteralPath "./wheelhouse/SHA256SUMS-$platform" -Encoding utf8
+      - name: Upload GPUfit wheel
+        uses: actions/upload-artifact@v4
+        with:
+          name: pygpufit-${{ runner.os }}-x64
+          path: wheelhouse/*
+          if-no-files-found: error
+          retention-days: 14
+
+  release-wheels:
+    name: Publish tagged GPUfit wheels
+    if: startsWith(github.ref, 'refs/tags/gpufit-wheels-')
+    needs: cuda-build
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - name: Download GPUfit wheels
+        uses: actions/download-artifact@v4
+        with:
+          pattern: pygpufit-*
+          path: wheelhouse
+          merge-multiple: true
+      - name: Publish versioned release assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" wheelhouse/* --generate-notes --verify-tag
 
   gpu-tests:
     name: CUDA numerical tests

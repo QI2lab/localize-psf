@@ -106,6 +106,16 @@ their native library and both cuBLAS runtime libraries (`.dll` on Windows, `.so`
 on Linux). These hosted jobs test the `gpu` extra. CPU example checks remain part of the existing CPU
 workflow.
 
+The CUDA build job also builds the locked GPUfit source as one `py3-none`
+wheel for each supported platform: Windows x64 and Linux x86-64. It installs
+that wheel into the locked project environment and runs the production native
+ABI unit tests before uploading the wheel and its SHA256 digest as workflow
+artifacts. Pushing a `gpufit-wheels-*` tag publishes both platform wheels and
+digests as versioned GitHub Release assets. Change the `gpu` dependency from
+the source reference to digest-pinned release URLs only after those assets
+exist, so source installations and the lock remain valid while staging a
+release.
+
 To automate numerical CUDA tests, register a Linux x86_64 self-hosted runner
 with the `gpu` label and a working NVIDIA driver. In Actions, select **CUDA
 builds**, choose **Run workflow**, and enable **run_gpu_tests**. That
