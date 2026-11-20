@@ -75,7 +75,7 @@ def test_localization_and_cli(localization, tmp_path):
             assert len(ids) == 0
             continue
         assert len(ids) >= 4
-        interior = ids[~result["fit_results"]["covariance_flags"]["truncated"][ids]]
+        interior = ids[~result["fit_results"]["roi_truncated"][ids]]
         assert result["fit_results"]["covariance_valid"][interior].all()
         assert np.isfinite(result["fit_results"]["chi_sqrs"][ids]).all()
         np.testing.assert_array_equal(result["candidate_timepoints"][ids], key[0])

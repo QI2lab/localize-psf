@@ -12,14 +12,14 @@ from typing import TYPE_CHECKING, Any
 import numpy as np
 from numpy.typing import NDArray
 
-from .config import FitFilters, LocalizationConfig
+from .config import FitFilters, LocalizationConfig, Parameter
 
 if TYPE_CHECKING:
     from cupy import ndarray as CudaArray
     from tensorstore import TensorStore
     from ufish.api import UFish
 
-    from localize_psf.fit_psf import gaussian3d_psf_model
+    from localize_psf.fit_psf import gaussian3d_asymmetric_rotated_pixelated, gaussian3d_psf_model
 
 
 # Preserve the caller's public type name for the production fitter's result dictionary.
@@ -36,7 +36,7 @@ def fit_filter_mask(
 ) -> NDArray[np.bool_]:
     """Return post-fit acceptance without removing candidates or changing evidence.
 
-    ``parameters`` has shape (N,7) in the production Gaussian's parameter order;
+    ``parameters`` has shape (N,7) or (N,11) in the native Gaussian parameter order;
     column zero is amplitude in original image counts. ``success`` and optional
     ``covariance_valid`` are upstream boolean (N,) flags. All selected conditions
     must pass. Missing covariance raises when either covariance selector is used.
@@ -142,6 +142,25 @@ def prepare_volume(
     return image, tuple(origin)
 
 
+def data_footprint(image: np.ndarray) -> NDArray[np.bool_]:
+    """Infer supported ZYX voxels from hole-filled nonzero axis projections.
+
+    Reuse the detector's footprint convention, independently per T/C volume.
+    Intersect YZ, ZX and YX footprints; a single-Z image uses YX only. Enclosed
+    zero-count background is retained. This estimates support from image counts,
+    rather than treating each zero-valued voxel as missing data.
+    """
+    from scipy.ndimage import binary_fill_holes
+
+    support = image != 0
+    footprint = np.ones(image.shape, dtype=bool)
+    for pair in combinations(range(1 if image.shape[0] == 1 else 0, 3), 2):
+        axis = 3 - sum(pair)
+        projected = binary_fill_holes(np.any(support, axis=axis))
+        footprint &= np.expand_dims(projected, axis)
+    return footprint
+
+
 class Detector:
     """Cache one production enhancement so threshold tuning only recalls spots."""
 
@@ -243,13 +262,12 @@ class Detector:
             pairs = tuple(combinations(range(1 if axes == "yx" else 0, 3), 2))
             distances = self._edge_distances if cache else None
             if distances is None:
-                support = (image[0] if axes == "yx" else image) != 0
+                footprint = data_footprint(image)
                 distances = []
                 for pair in pairs:
-                    projected = support if axes == "yx" else np.any(support, axis=3 - sum(pair))
-                    footprint = binary_fill_holes(projected)
+                    projected = binary_fill_holes(np.any(footprint, axis=3 - sum(pair)))
                     distances.append(
-                        distance_transform_edt(np.pad(footprint, 1))[1:-1, 1:-1].astype(np.float32)
+                        distance_transform_edt(np.pad(projected, 1))[1:-1, 1:-1].astype(np.float32)
                     )
                 if cache:
                     self._edge_distances = distances
@@ -310,6 +328,153 @@ def optical_parameters(config: LocalizationConfig) -> dict[str, tuple[float, flo
     return {name: tuple(value.get().tolist()) for name, value in result.items()}
 
 
+def gaussian_model(
+    config: LocalizationConfig,
+) -> gaussian3d_psf_model | gaussian3d_asymmetric_rotated_pixelated:
+    """Select the existing native model; tilted fits use fixed XYZ Euler angles."""
+    from localize_psf.fit_psf import (
+        gaussian3d_asymmetric_rotated_pixelated,
+        gaussian3d_psf_model,
+    )
+
+    return (
+        gaussian3d_asymmetric_rotated_pixelated()
+        if config.psf_model == "tilted_gaussian"
+        else gaussian3d_psf_model()
+    )
+
+
+def calibrate_tilt(
+    image: np.ndarray,
+    points: NDArray[np.float64],
+    config: LocalizationConfig,
+    cancelled: Event | None = None,
+    progress: Callable[[str], None] | None = None,
+    *,
+    origin_zyx_um: tuple[float, float, float] | None = None,
+) -> float | None:
+    """Estimate one YZ tilt from up to 64 isolated, fully observed 3D PSFs.
+
+    Inputs use crop-local ZYX pixels, original counts and physical µm geometry.
+    Reuse Gaussian localization, nearby-peak removal and experimental PSF
+    averaging. Fit the normalized average by native GPUfit LSE with phi=pi/2,
+    psi=-pi/2 and one free theta, trying 0 and +/-30 degrees. No likelihood or
+    uncertainty for raw counts is assigned to the normalized average. Return
+    radians, or None when fewer than three calibration spots or an identifiable
+    average fit are available. A supplied calibration is reused by callers.
+    """
+    from localize_psf.batch_fitting import fit_rois
+    from localize_psf.fit_psf import average_exp_psfs, gaussian3d_psf_model, get_psf_coords
+    from localize_psf.localize import filter_nearby_peaks, get_coords, prepare_rois
+    from localize_psf.rois import get_centered_rois, get_roi_size
+
+    if len(points) < 3:
+        return None
+    reference = config.model_copy(
+        update={
+            "psf_model": "gaussian",
+            "psf_tilt_yz_rad": None,
+            "return_covariance": True,
+            "fit_filters": FitFilters(
+                amplitude_min=config.fit_filters.amplitude_min,
+                amplitude_max=config.fit_filters.amplitude_max,
+            ),
+        }
+    )
+    fits = fit_spots(image, points, reference, cancelled, progress, origin_zyx_um=origin_zyx_um)
+    parameters = fits["fit_params"]
+    centers = parameters[:, (3, 2, 1)]
+    _, isolated = filter_nearby_peaks(
+        centers,
+        max(config.fit_roi_size_um[1:]) / 2,
+        config.fit_roi_size_um[0] / 2,
+        mode="remove",
+    )
+    origin = config.origin_zyx_um if origin_zyx_um is None else origin_zyx_um
+    spacing = config.voxel_size_zyx_um
+    size = get_roi_size(config.fit_roi_size_um, spacing, ensure_odd=True)
+    coords = get_coords(image.shape, spacing, origin=origin)
+    rois = get_centered_rois(
+        np.rint((centers - origin) / spacing).astype(int),
+        size,
+        (0, 0, 0),
+        image.shape,
+    )
+    _, _, counts = prepare_rois(image, coords, rois, mask=data_footprint(image))
+    keep = (
+        fits["success"]
+        & fits["filter_pass"]
+        & (parameters[:, 0] > 0)
+        & ~fits["active_bounds"][:, :4].any(axis=1)
+        & ~fits["covariance_flags"]["invalid_information"]
+        & (counts == np.prod(size))
+    )
+    ids = isolated[keep[isolated]]
+    ids = ids[np.argsort(-parameters[ids, 0], kind="stable")[:64]]
+    if len(ids) < 3:
+        return None
+    if cancelled is not None and cancelled.is_set():
+        raise CancelledError("Tilt calibration cancelled")
+    average = average_exp_psfs(image, coords, centers[ids], size, backgrounds=parameters[ids, 6])
+    psf_coords = tuple(get_psf_coords(size, spacing))
+    values, coordinates, counts = prepare_rois(
+        average,
+        psf_coords,
+        np.array([[0, size[0], 0, size[1], 0, size[2]]]),
+        mask=np.isfinite(average),
+    )
+    model = gaussian_model(config.model_copy(update={"psf_model": "tilted_gaussian"}))
+    lo, hi = (np.asarray(side, dtype=float) for side in model.estimate_bounds(psf_coords))
+    for index, name in ((4, "sxy"), (5, "sxy"), (6, "sz")):
+        policy = config.fit_parameters[name]
+        lo[index] = policy.lower
+        hi[index] = np.inf if policy.upper is None else policy.upper
+    lo[7], hi[7] = -np.inf, np.inf  # Background-subtracted PSF averages can be negative.
+    lo[8:] = (np.pi / 2, -np.pi / 2, -np.pi / 2)
+    hi[8:] = (np.pi / 2, np.pi / 2, -np.pi / 2)
+    fixed = np.zeros(11, dtype=bool)
+    fixed[[8, 10]] = True
+    for index, name in ((4, "sxy"), (5, "sxy"), (6, "sz")):
+        fixed[index] = config.fit_parameters[name].fixed
+    lo[0] = 0
+    seed = gaussian3d_psf_model().estimate_parameters(
+        values[0, : counts[0]], tuple(c[0, : counts[0]] for c in coordinates)
+    )
+    starts = np.r_[seed[:4], seed[4], seed[4], seed[5:], np.zeros(3)]
+    starts[1:4], starts[8], starts[10] = 0, np.pi / 2, -np.pi / 2
+    for index, name in ((4, "sxy"), (5, "sxy"), (6, "sz")):
+        if config.fit_parameters[name].initial is not None:
+            starts[index] = config.fit_parameters[name].initial
+    best = None
+    for angle in (0.0, -np.pi / 6, np.pi / 6):
+        if cancelled is not None and cancelled.is_set():
+            raise CancelledError("Tilt calibration cancelled")
+        starts[9] = angle
+        fitted = fit_rois(
+            values,
+            coordinates,
+            counts,
+            starts[None],
+            model=model,
+            bounds=(lo, hi),
+            fixed_params=fixed,
+            estimator="LSE",
+            use_gpu=True,
+            return_covariance=True,
+            max_number_iterations=config.max_number_iterations,
+            tolerance=config.tolerance,
+        )
+        if fitted["success"][0] and fitted["covariance_valid"][0]:
+            if best is None or fitted["chi_sqrs"][0] < best["chi_sqrs"][0]:
+                best = fitted
+    if best is None:
+        return None
+    angle = float(best["fit_params"][0, 9])
+    if progress is not None:
+        progress(f"Calibrated YZ PSF tilt {np.degrees(angle):.2f} degrees from {len(ids)} spots")
+    return angle
+
+
 def fit_spots(
     image: np.ndarray,
     points: NDArray[np.float64],
@@ -326,6 +491,9 @@ def fit_spots(
     policies, estimator, solver/batch controls
     and covariance selection. Center policies are µm offsets from each prior,
     intersected with ROI limits; infeasible starts raise ValueError without clipping.
+
+    Fit only samples inside the shared data footprint, retaining supported zero
+    counts. Array clipping or footprint masking sets the informational roi_truncated flag.
 
     Return all candidates in input order with IDs, statuses, active bounds and
     requested uncertainty evidence, plus the post-fit ``filter_pass`` mask.
@@ -348,7 +516,6 @@ def fit_spots(
     import cupy as cp
 
     from localize_psf.batch_fitting import _accumulate_fit_batch
-    from localize_psf.fit_psf import gaussian3d_psf_model
     from localize_psf.localize import get_coords, prepare_rois
     from localize_psf.rois import get_centered_rois, get_roi_size
 
@@ -357,7 +524,16 @@ def fit_spots(
         raise ValueError("Candidate coordinates must be finite (N,3) ZYX pixels")
     if np.any(points < 0) or np.any(points >= np.asarray(image.shape)):
         raise ValueError("Candidate coordinates must lie inside the preview")
-    model = gaussian3d_psf_model()
+    if len(points) and config.psf_model == "tilted_gaussian" and config.psf_tilt_yz_rad is None:
+        angle = calibrate_tilt(
+            image, points, config, cancelled, progress, origin_zyx_um=origin_zyx_um
+        )
+        if angle is None:
+            raise ValueError(
+                "Tilt calibration needs at least three isolated, fully supported 3D spots with a regular PSF fit"
+            )
+        config = config.model_copy(update={"psf_tilt_yz_rad": angle})
+    model = gaussian_model(config)
     if not len(points):
         empty = np.empty((0, 0))
         return fit_packed_rois(
@@ -376,6 +552,7 @@ def fit_spots(
         if image.shape[0] != 1:
             raise ValueError("2D fitting requires a single XY plane")
         roi_size[0] = 1
+    footprint = cp.asarray(data_footprint(image))
     image = cp.asarray(image)
     coords = get_coords(image.shape, spacing, origin=origin, use_gpu=True)
     centers = cp.asarray(origin) + cp.asarray(points) * cp.asarray(spacing)
@@ -391,17 +568,15 @@ def fit_spots(
             if progress is not None:
                 progress(f"Fitting candidates {start + 1}–{stop} of {len(points)}")
             selected = slice(start, stop)
-            values, coordinates, sizes = prepare_rois(image, coords, rois[selected])
-            truncated = cp.any(
-                rois[selected, 1::2] - rois[selected, ::2] != cp.asarray(roi_size), axis=1
-            )
+            values, coordinates, sizes = prepare_rois(image, coords, rois[selected], mask=footprint)
+            truncated = sizes != np.prod(roi_size)
             batch = fit_packed_rois(
                 values, coordinates, sizes, centers[selected], config, truncated, model=model
             )
             complete = _accumulate_fit_batch(complete, batch, start, len(points))
             del values, coordinates, batch
     finally:
-        del image, coords
+        del image, coords, footprint
         cp.get_default_memory_pool().free_all_blocks()
     assert complete is not None
     distances = (
@@ -410,6 +585,7 @@ def fit_spots(
         else None
     )
     complete["collapse_distance_zyx_um"] = distances
+    complete["psf_tilt_yz_rad"] = config.psf_tilt_yz_rad
     complete["filter_pass"] = fit_filter_mask(
         complete["fit_params"],
         complete["success"],
@@ -428,7 +604,7 @@ def fit_packed_rois(
     config: LocalizationConfig,
     truncated: np.ndarray | CudaArray,
     *,
-    model: gaussian3d_psf_model | None = None,
+    model: gaussian3d_psf_model | gaussian3d_asymmetric_rotated_pixelated | None = None,
 ) -> FitResults:
     """Apply exported parameter policy and GPUfit to packed original counts.
 
@@ -452,13 +628,24 @@ def fit_packed_rois(
     from localize_psf.batch_fitting import _host_array, fit_rois
     from localize_psf.fit_psf import gaussian3d_psf_model
 
-    model = gaussian3d_psf_model() if model is None else model
+    model = gaussian_model(config) if model is None else model
     centers = _host_array(centers_zyx_um)
     fixed = np.zeros(model.nparams, dtype=bool)
     if len(values):
         initial = _host_array(
-            model.estimate_parameters(values, coordinates, num_preserved_dims=1), dtype=float
+            gaussian3d_psf_model().estimate_parameters(values, coordinates, num_preserved_dims=1),
+            dtype=float,
         )
+        if config.psf_model == "tilted_gaussian":
+            initial = np.column_stack(
+                (
+                    initial[:, :4],
+                    initial[:, 4],
+                    initial[:, 4],
+                    initial[:, 5:],
+                    np.zeros((len(values), 3)),
+                )
+            )
         coordinates = tuple(_host_array(c, dtype=float) for c in coordinates)
         sizes = _host_array(sizes)
         limits = [
@@ -468,7 +655,15 @@ def fit_packed_rois(
         limits = np.asarray(limits)
         lower, upper = limits[:, 0], limits[:, 1]
         for i, name in enumerate(model.parameter_names):
-            policy = config.fit_parameters[name]
+            if name in {"phi", "theta", "psi"}:
+                if config.psf_tilt_yz_rad is None:
+                    raise ValueError("Calibrate the tilted Gaussian before fitting packed ROIs")
+                angle = {"phi": np.pi / 2, "theta": config.psf_tilt_yz_rad, "psi": -np.pi / 2}[name]
+                policy = Parameter(lower=angle, upper=angle, initial=angle, fixed=True)
+            else:
+                policy = config.fit_parameters[
+                    {"A": "amp", "sx": "sxy", "sy": "sxy"}.get(name, name)
+                ]
             base = centers[:, 3 - i] if name in {"cx", "cy", "cz"} else 0
             if policy.lower is not None:
                 lower[:, i] = np.maximum(lower[:, i], base + policy.lower)
@@ -498,9 +693,12 @@ def fit_packed_rois(
         max_number_iterations=config.max_number_iterations,
         tolerance=config.tolerance,
         return_covariance=config.return_covariance,
-        quality_flags={"truncated": _host_array(truncated)},
         covariance_batch_size=config.roi_batch_size,
     )
+    # Missing samples are already excluded by sizes. Coverage is separate from
+    # the numerical covariance validity of this correctly masked likelihood.
+    result["roi_truncated"] = _host_array(truncated)
+    result["parameter_names"] = tuple(model.parameter_names)
     result["filter_pass"] = fit_filter_mask(
         result["fit_params"], result["success"], result.get("covariance_valid"), config.fit_filters
     )

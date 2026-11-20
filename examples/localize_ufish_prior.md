@@ -18,20 +18,11 @@ metadata below and strict version 1 configurations exported by an interactive
 caller. Version 1 settings, including explicit fitting policies, are documented
 in [batch settings](../docs/development.md#batch-settings).
 
-On Linux x86_64, run this directly from the checkout. On Windows, initialize
-the x64 MSVC compiler environment first:
+From the checkout:
 
-```powershell
+```bash
 uv sync --locked --extra gpu --extra example
 ```
-
-The `gpu` extra installs CUDA libraries through `cupy-cuda12x[ctk]` and builds
-QI2lab/Gpufit's `opm-ptv` branch. The `example` extra adds CUDA PyTorch, U-FISH,
-yaozarrs from upstream `main` with TensorStore, Typer, PyArrow and tifffile.
-On Linux, `pyproject.toml` supplies the CUDA SDK and compatible C++ compiler
-automatically as isolated GPUfit build dependencies. A system CUDA installation
-is unnecessary. See the [development instructions](../docs/development.md) for
-details and Windows build prerequisites.
 
 # Python usage
 
@@ -47,7 +38,7 @@ metadata = {
     "wavelength_um": 0.515,
     "refractive_index": 1.51,
     "relative_sigma_range": (0.5, 2.0),
-    "fit_roi_size_um": (1.75, 0.65, 0.65),
+    "fit_roi_size_um": (3.0, 1.5, 1.5),
 }
 result = localize_ufish_prior("spots.ome.zarr", metadata, output_dir="localizations")
 
@@ -62,6 +53,17 @@ width bounds use the production `gaussian_width_bounds` helper with no sampling
 floor. Amplitude/background are nonnegative and centers stay within their ROI.
 All candidates keep their result rows. Convergence, active bounds, truncation
 and Poisson covariance are reported by production `fit_rois`.
+
+For tilted 3D fitting, set `psf_model="tilted_gaussian"`. A null
+`psf_tilt_yz_rad` automatically calibrates isolated, fully supported spots;
+batch calibrates once per channel from the first eligible volume. Previews
+return the calibrated angle for JSON export and batch reuse. Fits use
+the existing rotated Gaussian with that angle fixed, retaining all eleven native
+parameters. The shared `sxy` policy bounds both principal lateral widths.
+
+`roi_truncated` reports partial ROI coverage independently of numerical covariance
+validity. Fits and uncertainty use only supported samples; padding zeros are
+excluded and genuine zero counts inside the footprint are retained.
 
 `fit_filters` applies the same post-fit acceptance in the interactive preview and
 batch export. Its optional `amplitude_min` and `amplitude_max` are inclusive,
@@ -206,7 +208,7 @@ focus = volume["focus"]
 The original algorithm fits a plane, then fits movable-center isotropic curvature
 to the plane residual with `fit_model`. PSF extraction uses `average_exp_psfs`.
 `fit_roi_size_um` is the physical ZYX fitting size; `psf_roi_size_px` is the
-ZYX pixel size for averaging. Their defaults are `(1.75, 0.65, 0.65)` and
+ZYX pixel size for averaging. Their defaults are `(3.0, 1.5, 1.5)` and
 `(11, 21, 21)` respectively. Both use production `get_roi_size` to round up to
 odd pixel dimensions, keeping the center on a voxel. The averaging dimensions
 actually used are returned in metadata.

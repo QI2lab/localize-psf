@@ -100,7 +100,9 @@ def get_nearest_pixel(centers: np.ndarray[float],
 
 def prepare_rois(image: "np.ndarray | cp.ndarray | TensorStore",
                  coords: tuple[np.ndarray, np.ndarray, np.ndarray],
-                 rois: np.ndarray) -> tuple:
+                 rois: np.ndarray,
+                 *,
+                 mask: "np.ndarray | cp.ndarray | None" = None) -> tuple:
     """Pack existing ROI sample order on the backend owning the image.
 
     Parameters
@@ -112,6 +114,10 @@ def prepare_rois(image: "np.ndarray | cp.ndarray | TensorStore",
         Sparse ZYX physical coordinate vectors broadcastable to the volume.
     rois : ndarray
         Start-inclusive, stop-exclusive ZYX bounds shaped (nrois,6).
+    mask : boolean ndarray or None
+        Supported ZYX samples, matching image.shape. Supported samples and their
+        physical coordinates are compacted together in C order; real zero counts
+        inside the mask are retained. Each ROI must contain supported samples.
 
     Returns
     -------
@@ -121,7 +127,7 @@ def prepare_rois(image: "np.ndarray | cp.ndarray | TensorStore",
         padding is NaN. The native GPUfit wrapper later requires host arrays.
     """
     xp = get_array_module(image)
-    if xp is np and isinstance(image, np.ndarray):
+    if mask is None and xp is np and isinstance(image, np.ndarray):
         return _prepare_rois_cpu(image, coords, rois)
     rois = xp.asarray(rois, dtype=int)
     if rois.ndim != 2 or rois.shape[1] != 6:
@@ -142,6 +148,17 @@ def prepare_rois(image: "np.ndarray | cp.ndarray | TensorStore",
     # Padding reuses a valid ROI pixel, avoiding unrelated storage chunks.
     indices = tuple(xp.where(valid, index, rois[:, 2 * axis, None])
                     for axis, index in enumerate((iz, iy, ix)))
+    if mask is not None:
+        mask = xp.asarray(mask)
+        if mask.shape != image.shape or mask.dtype != xp.bool_:
+            raise ValueError("mask must be boolean and match image.shape")
+        valid &= mask[indices]
+        sizes = xp.sum(valid, axis=1)
+        if xp.any(sizes == 0):
+            raise ValueError("Each ROI must contain supported samples")
+        order = xp.argsort(~valid, axis=1, kind="stable")
+        indices = tuple(xp.take_along_axis(index, order, axis=1) for index in indices)
+        valid = sample < sizes[:, None]
     packed = xp.where(valid, xp.asarray(image[indices]), xp.nan)
     vectors = (xp.asarray(coords[0])[:, 0, 0], xp.asarray(coords[1])[0, :, 0],
                xp.asarray(coords[2])[0, 0, :])
@@ -405,9 +422,9 @@ def filter_nearby_peaks(centers: array,
     :param mode: "average", "keep-one", or "remove"
     :param weights: only used in "average" mode. If weights are provided, a weighted average between nearby
       points is computed
-    :param nmax: maximum number of centers to be processed at once. If the number of centers exceeds this size,
-      then the problem will be split in half (recursively) and solved on the subregions. Then the overlap zone
-      between these two regions will be checked and the results will be combined
+    :param nmax: maximum number of centers to be processed at once.
+      Larger keep-one inputs are partitioned recursively, then checked across the overlap.
+      Mode "remove" evaluates the original set without partitioning to preserve neighbor chains.
     :return centers_unique: array of unique center coordinates
     :return inds: index into the initial array to produce centers_unique. In mode is "keep-one" or "remove"
       then centers_unique = centers[inds]. If mode is "average", this will not be true as centers_unique will
@@ -443,7 +460,7 @@ def filter_nearby_peaks(centers: array,
             # todo: does this have a problem if min_dists = 0?
             ranges = (clims[:, 1] - clims[:, 0]) / min_dists
 
-        if len(centers_unique) > nmax and not xp.all(ranges <= 2):
+        if mode != "remove" and len(centers_unique) > nmax and not xp.all(ranges <= 2):
             if mode == "average":
                 raise NotImplementedError("mode='average' is not implemented with nmax < xp.inf. Set nmax to xp.inf")
 
@@ -496,6 +513,7 @@ def filter_nearby_peaks(centers: array,
             # todo: is it possible this can fail in "average" mode?
             # todo: looks like this might be easier if use some tools from scipy.spatial, scipy.spatial.cKDTree
             counter = 0
+            rejected = xp.zeros(len(centers_unique), dtype=bool)
             while counter < len(centers_unique):
                 # compute distances to all other beads
                 z_dists = xp.abs(centers_unique[counter][0] - centers_unique[:, 0])
@@ -514,7 +532,14 @@ def filter_nearby_peaks(centers: array,
                     # don't want to remove the point itself
                     combine[counter] = False
                 elif mode == "remove":
-                    pass
+                    # Test the original set, including neighbors already rejected,
+                    # so chains crossing groups cannot become isolated later.
+                    combine[counter] = False
+                    if xp.any(combine):
+                        rejected |= combine
+                        rejected[counter] = True
+                    counter += 1
+                    continue
                 else:
                     raise ValueError("mode must be 'average', 'keep-one', or 'remove' but was '%s'" % mode)
 
@@ -524,6 +549,8 @@ def filter_nearby_peaks(centers: array,
                 weights = weights[xp.logical_not(combine)]
 
                 counter += 1
+            if mode == "remove":
+                centers_unique, inds = centers_unique[~rejected], inds[~rejected]
 
     return centers_unique, inds
 

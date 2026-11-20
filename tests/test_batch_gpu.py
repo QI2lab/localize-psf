@@ -725,3 +725,35 @@ def test_zero_padded_sloping_edges_are_excluded_on_every_face(mode):
         np.testing.assert_array_equal(streamed, filtered)
     finally:
         detector.release()
+
+
+def test_preview_and_batch_mask_oblique_padding(localization, scene):
+    image, config, truth = scene
+    z, y, x = np.indices(image.shape)
+    support = y >= 11 + (x // 6 if config.fit_model == "2d" else z // 2)
+    image = np.where(support, image, 0).astype(np.float32)
+    config = config.model_copy(update={"exclude_edge_centroids": True})
+    batch = localization.localize_ufish_prior(image, config)
+    points = batch["candidate_centroids_zyx_px"]
+    assert len(points)
+    preview = fit_spots(image, points, config)
+    fits = batch["fit_results"]
+    for name in ("fit_params", "init_params", "center_covariance_zyx"):
+        np.testing.assert_allclose(fits[name], preview[name], rtol=1e-3, atol=1e-5, equal_nan=True)
+    clipped = fits["roi_truncated"]
+    assert clipped.any()
+    np.testing.assert_array_equal(clipped, preview["roi_truncated"])
+    assert not fits["covariance_flags"]["truncated"].any()
+    nearest = np.argmin(np.linalg.norm(fits["fit_params"][:, 1:4] - truth[1:4], axis=1))
+    np.testing.assert_allclose(fits["fit_params"][nearest], truth, rtol=1e-3, atol=0.02)
+    accepted = fit_filter_mask(
+        fits["fit_params"],
+        fits["success"],
+        fits["covariance_valid"],
+        FitFilters(convergence="pass", covariance="pass"),
+    )
+    assert clipped[nearest]
+    if config.fit_model == "3d":
+        assert accepted[nearest]
+    else:
+        assert fits["covariance_flags"]["fixed_center"][nearest]

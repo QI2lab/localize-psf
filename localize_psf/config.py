@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from math import pi
 from pathlib import Path
 from typing import Annotated, Literal, Self
 
@@ -95,6 +96,13 @@ class LocalizationConfig(BaseModel):
     input_uri: str = ""
     source_layer: str = ""
     fit_model: Literal["2d", "3d"] = "3d"
+    psf_model: Literal["gaussian", "tilted_gaussian"] = "gaussian"
+    psf_tilt_yz_rad: float | None = Field(
+        default=None,
+        ge=-pi / 2,
+        le=pi / 2,
+        description="Shared YZ PSF tilt in radians. Null automatically calibrates isolated 3D spots; exported previews save the calibrated value for batch reuse.",
+    )
     blend_3d: bool = True
     ufish_median_filter: bool = Field(
         default=True,
@@ -112,7 +120,7 @@ class LocalizationConfig(BaseModel):
     edge_margin_px: int = Field(default=1, ge=1, description="Excluded voxel layers at each face.")
     ufish_weights: str = "finetune_models/v1.0.1-suntag_model.pth"
     inference_batch_size: int = Field(default=32, ge=1)
-    fit_roi_size_um: tuple[Positive, Positive, Positive] = (1.75, 0.65, 0.65)
+    fit_roi_size_um: tuple[Positive, Positive, Positive] = (3.0, 1.5, 1.5)
     voxel_size_zyx_um: tuple[Positive, Positive, Positive] = (0.2, 0.1, 0.1)
     origin_zyx_um: tuple[float, float, float] = (0, 0, 0)
     estimator: Literal["MLE", "LSE"] = "MLE"
@@ -135,8 +143,8 @@ class LocalizationConfig(BaseModel):
             "cx": Parameter(),
             "cy": Parameter(),
             "cz": Parameter(),
-            "sxy": Parameter(lower=0.03, upper=1, initial=0.15),
-            "sz": Parameter(lower=0.05, upper=2, initial=0.35),
+            "sxy": Parameter(lower=0.08, upper=0.65, initial=0.15),
+            "sz": Parameter(lower=0.12, upper=0.65, initial=0.35),
             "bg": Parameter(lower=0),
         }
     )
@@ -153,6 +161,8 @@ class LocalizationConfig(BaseModel):
     @model_validator(mode="after")
     def validate_parameters(self) -> Self:
         """Keep the native model contract and physical parameter domains explicit."""
+        if self.psf_model == "tilted_gaussian" and self.fit_model != "3d":
+            raise ValueError("Tilted Gaussian fitting requires 3D data")
         if set(self.fit_parameters) != {"amp", "cx", "cy", "cz", "sxy", "sz", "bg"}:
             raise ValueError("Fit parameters must match the upstream Gaussian model")
         for name in ("amp", "bg", "sxy", "sz"):

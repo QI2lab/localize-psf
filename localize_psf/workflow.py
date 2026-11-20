@@ -21,14 +21,23 @@ import typer
 from localize_psf.batch_fitting import _accumulate_fit_batch
 from localize_psf.config import DEFAULT_PSF_ROI_SIZE_PX, LocalizationConfig, Parameter
 from localize_psf.fit import fit_model
-from localize_psf.fit_psf import average_exp_psfs, gaussian3d_psf_model, get_psf_coords
+from localize_psf.fit_psf import average_exp_psfs, get_psf_coords
+from localize_psf.fit_psf import gaussian3d_psf_model as gaussian3d_psf_model
 from localize_psf.localize import (
     get_coords,
     plot_bead_locations,
     prepare_rois,
 )
 from localize_psf.optical_bounds import gaussian_width_bounds
-from localize_psf.processing import Detector, fit_filter_mask, fit_packed_rois, optical_parameters
+from localize_psf.processing import (
+    Detector,
+    calibrate_tilt,
+    data_footprint,
+    fit_filter_mask,
+    fit_packed_rois,
+    gaussian_model,
+    optical_parameters,
+)
 from localize_psf.rois import get_centered_rois, get_roi_size
 
 if TYPE_CHECKING:
@@ -44,6 +53,7 @@ _TRACKPY_SOURCE_COLUMNS = (
     "success",
     "filter_pass",
     "covariance_valid",
+    "roi_truncated",
     "candidate_timepoints",
     "candidate_channels",
 )
@@ -356,7 +366,7 @@ def _psf_diagnostics(
                 coords,
                 centers,
                 size,
-                backgrounds=fits["fit_params"][ids, 6],
+                backgrounds=fits["fit_params"][ids, 6 if fits["fit_params"].shape[1] == 7 else 7],
             )
             volume["average_psf_coords_zyx_um"] = tuple(get_psf_coords(size, spacing))
 
@@ -384,8 +394,14 @@ def analyze_psf(
         raise ValueError("PSF averaging and field curvature require a 3D fit volume")
     parameters = np.asarray(fit_results["fit_params"])
     accepted = np.asarray(fit_results["success"]) & fit_results.get("filter_pass", True)
-    if parameters.ndim != 2 or parameters.shape[1] != 7 or accepted.shape != (len(parameters),):
-        raise ValueError("Provide Gaussian (N,7) parameters and matching fit masks")
+    if (
+        parameters.ndim != 2
+        or parameters.shape[1] not in (7, 11)
+        or accepted.shape != (len(parameters),)
+    ):
+        raise ValueError(
+            "Provide native Gaussian (N,7) or tilted (N,11) parameters and matching fit masks"
+        )
     if not np.any(accepted):
         raise ValueError("No successful fits pass the current fit filters")
     if not np.isfinite(parameters[accepted]).all():
@@ -494,7 +510,7 @@ def localize_ufish_prior(
             "batch_axes": True,
             "psf_diagnostics": False,
             "intensity_threshold": LocalizationConfig().intensity_threshold,
-            "fit_roi_size_um": (1.75, 0.65, 0.65),
+            "fit_roi_size_um": LocalizationConfig().fit_roi_size_um,
             "psf_roi_size_px": DEFAULT_PSF_ROI_SIZE_PX,
             **raw,
         }
@@ -708,7 +724,28 @@ def localize_ufish_prior(
         roi_size[0] = 1
     rois = get_centered_rois(np.rint(candidates).astype(int), roi_size, [0, 0, 0], data.shape[-3:])
     fits = None
-    model = gaussian3d_psf_model()
+    for channel, config in list(configs.items()):
+        if config.psf_model != "tilted_gaussian" or config.psf_tilt_yz_rad is not None:
+            continue
+        for key, first, last in zip(inference_keys, offsets[:-1], offsets[1:], strict=True):
+            if key[1] != channel or last - first < 3:
+                continue
+            angle = calibrate_tilt(np.asarray(data[key[:2]]), candidates[first:last], config)
+            if angle is not None:
+                configs[channel] = config.model_copy(update={"psf_tilt_yz_rad": angle})
+                break
+        else:
+            if np.any(channels == channel):
+                raise ValueError(
+                    "Automatic tilt calibration found no volume with three isolated, fully supported spots; export a calibrated preview"
+                )
+    if representative.psf_model == "tilted_gaussian":
+        metadata["psf_tilt_yz_by_channel_rad"] = {
+            str(c): cfg.psf_tilt_yz_rad for c, cfg in configs.items()
+        }
+        if len(configs) == 1:
+            metadata["psf_tilt_yz_rad"] = next(iter(configs.values())).psf_tilt_yz_rad
+    model = gaussian_model(representative)
     for key, first, last in tqdm(
         zip(inference_keys, offsets[:-1], offsets[1:], strict=True),
         total=len(inference_keys),
@@ -716,16 +753,27 @@ def localize_ufish_prior(
         unit="volume",
     ):
         config = configs[key[1]]
+        if first == last:
+            continue
+        # Infer support once per volume/plane, including resumed centroid runs.
+        image = data[key[:2]]
+        footprint = data_footprint(
+            np.asarray(image[key[2] : key[2] + 1] if mode == "2d" else image)
+        )
+        footprint = np.broadcast_to(footprint, image.shape)
         for start in range(first, last, config.roi_batch_size):
             stop = min(start + config.roi_batch_size, last)
             selected = slice(start, stop)
             # Each inference key owns one source volume; pack its lazy view directly.
-            values, coordinates, counts = prepare_rois(data[key[:2]], coords, rois[selected])
-            truncated = np.any(rois[selected, 1::2] - rois[selected, ::2] != roi_size, axis=1)
+            values, coordinates, counts = prepare_rois(
+                image, coords, rois[selected], mask=footprint
+            )
+            truncated = counts != np.prod(roi_size)
             batch = fit_packed_rois(
                 values, coordinates, counts, centers[selected], config, truncated, model=model
             )
             fits = _accumulate_fit_batch(fits, batch, start, len(candidates))
+        del footprint, image
         if fits is not None and last > first:
             # Finish the entire volume/plane before suppressing converged duplicates.
             selected = slice(first, last)
@@ -952,7 +1000,16 @@ def to_trackpy_dataframe(table: Table, *, converged_only: bool = True) -> DataFr
     origin = np.asarray(metadata["origin_zyx_um"])[::-1]
 
     # Extract fitted parameters and position errors from the Arrow lists.
-    parameters = table["fit_params"].combine_chunks().flatten().to_numpy().reshape(-1, 7)
+    summary = json.loads(table.schema.metadata[b"localize_psf"])
+    names = summary.get("parameter_names", ("amp", "cx", "cy", "cz", "sxy", "sz", "bg"))
+    parameters = table["fit_params"].combine_chunks().flatten().to_numpy().reshape(-1, len(names))
+    if "sxy" in names:
+        widths = parameters[:, [4, 4, 5]]
+    else:
+        from localize_psf.rotation import euler_mat
+
+        rotation = euler_mat(*parameters[:, 8:].T)
+        widths = np.sqrt(np.einsum("ijn,nj->ni", rotation**2, parameters[:, 4:7] ** 2))
     if "center_covariance_zyx" in table.column_names:
         covariance = table["center_covariance_zyx"].combine_chunks().flatten().flatten().to_numpy()
         covariance = covariance.reshape(-1, 3, 3)
@@ -969,12 +1026,14 @@ def to_trackpy_dataframe(table: Table, *, converged_only: bool = True) -> DataFr
         if "covariance_valid" in table.column_names
         else np.zeros(len(parameters), bool),
     )
+    if "roi_truncated" in table.column_names:
+        columns["roi_truncated"] = np.asarray(table["roi_truncated"])
     if not converged_only:
         columns["success"] = np.asarray(table["success"])
     for index, axis in enumerate("xyz"):
         columns[axis] = (parameters[:, index + 1] - origin[index]) / spacing[index]
         columns[axis + "um"] = parameters[:, index + 1]
-        columns["size_" + axis] = parameters[:, 4 if index < 2 else 5] / spacing[index]
+        columns["size_" + axis] = widths[:, index] / spacing[index]
         columns["ep_" + axis] = errors[:, index]
 
     return pd.DataFrame(columns)
