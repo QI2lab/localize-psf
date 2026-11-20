@@ -3,7 +3,7 @@
 import importlib
 import os
 import sys
-from importlib.resources import files
+from importlib.util import find_spec
 from pathlib import Path
 
 import pytest
@@ -20,7 +20,9 @@ def native_gpufit():
 
 def test_native_abi_matches_the_pinned_build(native_gpufit):
     capabilities = native_gpufit.get_capabilities()
-    revision = files("localize_psf").joinpath("gpufit_revision.txt").read_text().strip()
+    package = find_spec("localize_psf")
+    assert package is not None and package.origin is not None
+    revision = (Path(package.origin).parent / "gpufit_revision.txt").read_text().strip()
     assert capabilities["source_revision"] == revision
     assert capabilities["source_dirty"] is False
     assert capabilities["abi_version"] == 3
