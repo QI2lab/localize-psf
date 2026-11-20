@@ -102,7 +102,9 @@ jobs:
       - name: Publish versioned release assets
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create "$GITHUB_REF_NAME" wheelhouse/* --generate-notes --verify-tag
+        run: >-
+          gh release create "$GITHUB_REF_NAME" wheelhouse/*
+          --generate-notes --verify-tag --repo "$GITHUB_REPOSITORY"
 
   gpu-tests:
     name: CUDA numerical tests
