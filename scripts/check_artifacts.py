@@ -31,33 +31,12 @@ def verify(wheel, gpu):
         assert target.is_relative_to(Path(tempfile.gettempdir()).resolve())
         dependencies = [f"localize_psf{'[gpu]' if gpu else ''}=={PROJECT['project']['version']}"]
         sources = f"localize-psf={{path={json.dumps(wheel.as_posix())}}}\n"
-        build_configuration = ""
-        if gpu:
-            sources += (
-                "localize-psf-build-support={path="
-                + json.dumps((ROOT / "build_support").as_posix())
-                + "}\n"
-            )
-            uv = PROJECT["tool"]["uv"]
-            requirements = json.dumps(uv["extra-build-dependencies"]["pygpufit"])
-            variables = ", ".join(
-                f"{name} = {json.dumps(value)}"
-                for name, value in uv["extra-build-variables"]["pygpufit"].items()
-            )
-            build_configuration = (
-                "\n[tool.uv.extra-build-dependencies]\npygpufit="
-                + requirements
-                + "\n[tool.uv.extra-build-variables]\npygpufit={"
-                + variables
-                + "}\n"
-            )
         (target / "pyproject.toml").write_text(
             '[project]\nname="localize-artifact-check"\nversion="0.0.0"\n'
             'requires-python=">=3.12"\ndependencies='
             + json.dumps([*dependencies, "pytest==9.1.1"])
             + "\n[tool.uv.sources]\n"
-            + sources
-            + build_configuration,
+            + sources,
             encoding="utf-8",
         )
         shutil.copytree(

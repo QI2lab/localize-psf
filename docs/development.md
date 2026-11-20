@@ -25,45 +25,27 @@ preserves upstream model IDs 0--14 and moves the microscopy models to 15--18:
 Localization uses these named constants; GPUfit validates its native manifest
 when fitting. ABI 2 installations must be rebuilt and reinstalled.
 
-The `gpu` extra installs `cupy-cuda12x[ctk]` and builds GPUfit directly from
-`QI2lab/Gpufit` on `opm-ptv`. CuPy's `ctk` extra supplies the runtime libraries;
-the CUDA 12 pip compiler component does not contain `nvcc` on Linux.
+The `gpu` extra installs `cupy-cuda12x[ctk]` and the CI-built GPUfit 1.2.0
+wheel selected for Linux x86-64 or Windows x64. Both wheel URLs are pinned to
+their release-asset SHA256 digests. The wheels bundle the native GPUfit and
+cuBLAS libraries, while CuPy's `ctk` extra supplies its CUDA runtime libraries.
 No cuCIM dependency is included.
 
-On Linux x86_64, run the following directly from this checkout. Windows builds
-require an initialized x64 MSVC compiler environment:
+On either supported platform, run the following directly from this checkout:
 
 ```powershell
 uv sync --locked --extra gpu
 ```
 
-Add `--extra example` to install CUDA PyTorch and the U-FISH workflow. Linux
-builds need no system CUDA SDK, Conda installation, GCC version selection or
-manual activation. `tool.uv.extra-build-dependencies` installs the local
-`build_support` package into GPUfit's isolated build environment.
-`tool.uv.extra-build-variables` selects its CMake wrapper. The helper's
-`pyproject.toml` declares exact CUDA 12.9, GCC/G++ 13, binutils and Linux sysroot
-artifacts, including their SHA256 hashes. A pinned, verified micromamba binary
-installs those artifacts inside the build environment without reading existing
-Conda configuration. The wrapper selects only these compilers and SDK for the
-native build, and fixes GPUfit's Linux cuBLAS runtime installation targets.
-The resulting GPUfit wheel includes cuBLAS and cuBLASLt with relative library
-lookup paths.
+Add `--extra example` to install CUDA PyTorch and the U-FISH workflow. Consumer
+installations need no compiler, system CUDA toolkit, Conda installation or
+manual toolchain activation. The NVIDIA driver remains the only host
+prerequisite for GPU execution. Other operating systems and architectures are
+not supported by the declared GPU extra.
 
-The first Linux GPU build downloads approximately 800 MB of build dependencies
-in addition to Python dependencies. Subsequent syncs reuse the native wheel
-cached by uv. CPU-only syncs do not install this build toolchain. The NVIDIA
-driver remains a host prerequisite for GPU execution; compiling and importing
-GPUfit do not require a visible GPU. Other Linux architectures are not yet
-covered by the pinned compiler artifacts.
-
-On Windows x86_64, the build helper always provisions the pinned CUDA 12.8
-Update 1 SDK from the Windows artifact declarations in
-`build_support/pyproject.toml`. Existing CUDA installations and inherited CUDA
-path variables are overridden on both platforms. MSVC must
-already be initialized; the tested toolset is MSVC 14.38. CI initializes that
-toolset automatically. The Windows SDK bootstrap stays inside the isolated
-build environment and does not install a system CUDA toolkit.
+GitHub Actions alone uses `build_support` to create the release wheels from the
+pinned QI2lab/Gpufit revision. Its isolated Linux and Windows toolchains never
+fall back to a system CUDA installation.
 
 Use the same root project for local GPU integration:
 
@@ -72,8 +54,8 @@ uv sync --locked --extra gpu --extra example --group test-cpu
 uv run --locked --no-sync python -c "import pygpufit.gpufit as gf; print(gf.get_capabilities())"
 ```
 
-The root lock and build settings select the same package-managed CUDA toolchain
-on both platforms. To replace an old native binary, use
+The root lock selects the appropriate immutable platform wheel. To replace an
+old native binary, use
 `uv sync --locked --extra gpu --reinstall-package pygpufit`.
 GPUfit's build defaults select cuBLAS and
 float32. Linux source builds, 64 core GPU unit and integration tests (including
@@ -97,7 +79,7 @@ The [CUDA build workflow](../.github/workflows/gpu.yml) also runs on every
 push and pull request with Ubuntu 24.04 and Windows Server 2022, Python 3.12.10
 and uv 0.12.3. Both jobs start with an empty uv cache, run
 `uv sync --locked --extra gpu`, and run production build-support and compiled ABI
-unit tests. The ABI unit tests check the locked native source, precision,
+unit tests. The ABI unit tests check the pinned native source, precision,
 toolchain and required cuBLAS runtime artifacts. They use the `pyproject.toml`
 toolchains without a system CUDA SDK or GPU. Windows uses MSVC 14.38 with the
 pinned CUDA 12.8 SDK; the workflow installs the MSVC component if the runner
@@ -111,10 +93,9 @@ wheel for each supported platform: Windows x64 and Linux x86-64. It installs
 that wheel into the locked project environment and runs the production native
 ABI unit tests before uploading the wheel and its SHA256 digest as workflow
 artifacts. Pushing a `gpufit-wheels-*` tag publishes both platform wheels and
-digests as versioned GitHub Release assets. Change the `gpu` dependency from
-the source reference to digest-pinned release URLs only after those assets
-exist, so source installations and the lock remain valid while staging a
-release.
+digests as versioned GitHub Release assets. The `gpu` dependency uses the
+platform-specific assets from `gpufit-wheels-v1.2.0-r1` and pins their SHA256
+digests.
 
 To automate numerical CUDA tests, register a Linux x86_64 self-hosted runner
 with the `gpu` label and a working NVIDIA driver. In Actions, select **CUDA

@@ -27,7 +27,8 @@ Documentation = "https://localize-psf.readthedocs.io"
 [project.optional-dependencies]
 gpu = [
   "cupy-cuda12x[ctk]>=14.1.1",
-  "pyGpufit @ git+https://github.com/QI2lab/Gpufit.git@opm-ptv",
+  "pyGpufit @ https://github.com/QI2lab/localize-psf/releases/download/gpufit-wheels-v1.2.0-r1/pygpufit-1.2.0-py3-none-linux_x86_64.whl#sha256=b1f8b464f2ddc8fcd3a728544612e026deabdebb273c41ee2ca23f00f29f69b4 ; sys_platform == 'linux' and platform_machine == 'x86_64'",
+  "pyGpufit @ https://github.com/QI2lab/localize-psf/releases/download/gpufit-wheels-v1.2.0-r1/pygpufit-1.2.0-py3-none-win_amd64.whl#sha256=45ceff372f504a023bf730dad06efc83c4981eaa545afd2c8a0d3649e294c706 ; sys_platform == 'win32' and platform_machine == 'AMD64'",
 ]
 example = [
   "yaozarrs[io,write-tensorstore] @ git+https://github.com/imaging-formats/yaozarrs.git@main",
@@ -52,16 +53,9 @@ test-cpu = [
 docs = ["sphinx>=8,<9", "sphinx-rtd-theme>=3,<4"]
 
 [tool.uv.sources]
-localize-psf-build-support = {path = "build_support"}
 torch = [
   {index = "pytorch-cu129", extra = "example", marker = "sys_platform == 'linux' or sys_platform == 'win32'"},
 ]
-
-[tool.uv.extra-build-dependencies]
-pygpufit = ["localize-psf-build-support==0.1.0"]
-
-[tool.uv.extra-build-variables]
-pygpufit = {CMAKE_EXECUTABLE = "localize-gpu-cmake", CMAKE_GENERATOR = "Ninja"}
 
 [[tool.uv.index]]
 name = "pytorch-cu129"

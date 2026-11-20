@@ -8,25 +8,17 @@ import re
 import shutil
 import subprocess
 import sys
-import tomllib
 from pathlib import Path
 
 
-def _locked_revision(lock: Path) -> str:
-    """Return the immutable GPUfit source revision from a uv lock."""
-    packages = tomllib.loads(lock.read_text(encoding="utf-8"))["package"]
-    dependency = next(package for package in packages if package["name"] == "pygpufit")
-    return dependency["source"]["git"].rsplit("#", 1)[1]
-
-
 def main() -> None:
-    """Build one wheel after validating its source and platform-independent tag."""
+    """Build one wheel after validating its pinned source and wheel tag."""
     parser = argparse.ArgumentParser()
     parser.add_argument("--source", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--revision", required=True)
     arguments = parser.parse_args()
 
-    repository = Path(__file__).resolve().parents[1]
     source = arguments.source.resolve(strict=True)
     output = arguments.output.resolve()
     revision = subprocess.run(
@@ -35,9 +27,10 @@ def main() -> None:
         capture_output=True,
         text=True,
     ).stdout.strip()
-    expected_revision = _locked_revision(repository / "uv.lock")
-    if revision != expected_revision:
-        raise RuntimeError(f"GPUfit source {revision} does not match lock {expected_revision}.")
+    if revision != arguments.revision:
+        raise RuntimeError(
+            f"GPUfit source {revision} does not match pin {arguments.revision}."
+        )
     status = subprocess.run(
         ["git", "-C", str(source), "status", "--porcelain"],
         check=True,
